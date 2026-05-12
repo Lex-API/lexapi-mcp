@@ -1,0 +1,47 @@
+{
+  "name": "@lexapi/mcp",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for LexAPI — query EUR-Lex and EU case law from Claude, Cursor, and other MCP-enabled clients.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "lexapi-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "lexapi",
+    "eur-lex",
+    "eu-law",
+    "legal",
+    "claude"
+  ],
+  "author": "LexAPI",
+  "license": "MIT",
+  "homepage": "https://lex-api.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lexapi/lexapi-mcp.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
