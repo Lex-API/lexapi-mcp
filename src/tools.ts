@@ -1,11 +1,25 @@
 import type { LexAPIClient } from './client.js';
 
+interface ToolAnnotations {
+  title: string;
+  readOnlyHint: boolean;
+  openWorldHint: boolean;
+  idempotentHint?: boolean;
+}
+
 interface ToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations: ToolAnnotations;
   handler: (args: Record<string, unknown>, client: LexAPIClient) => Promise<unknown>;
 }
+
+const READ_ONLY: Omit<ToolAnnotations, 'title'> = {
+  readOnlyHint: true,
+  openWorldHint: true,
+  idempotentHint: true,
+};
 
 const LANGUAGES = [
   'en', 'fr', 'de', 'es', 'it', 'pl', 'nl', 'pt', 'ro', 'bg',
@@ -78,6 +92,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Search EUR-Lex', ...READ_ONLY },
     handler: (args, client) => client.search(args as any),
   },
 
@@ -102,6 +117,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Fetch EU document by CELEX', ...READ_ONLY },
     handler: (args, client) => client.getDocument(args as any),
   },
 
@@ -121,6 +137,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Fetch EU document metadata', ...READ_ONLY },
     handler: (args, client) => client.getMetadata(args as any),
   },
 
@@ -141,6 +158,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Fetch EU document by EUR-Lex URL', ...READ_ONLY },
     handler: (args, client) => client.getDocumentByUrl(args as any),
   },
 
@@ -164,6 +182,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'List recent Official Journal documents', ...READ_ONLY, idempotentHint: false },
     handler: (args, client) => client.recentDocuments(args as any),
   },
 
@@ -187,6 +206,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Find documents citing a CELEX', ...READ_ONLY },
     handler: (args, client) => {
       const { celexNumber, ...query } = args as any;
       return client.citedBy(celexNumber, query);
@@ -208,6 +228,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Find documents a CELEX cites', ...READ_ONLY },
     handler: (args, client) => {
       const { celexNumber, ...query } = args as any;
       return client.cites(celexNumber, query);
@@ -226,6 +247,7 @@ export const tools: ToolDef[] = [
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Fetch full citation network for a CELEX', ...READ_ONLY },
     handler: (args, client) =>
       client.citationNetwork((args as any).celexNumber),
   },
@@ -251,11 +273,12 @@ export const tools: ToolDef[] = [
           type: 'object',
           additionalProperties: true,
           description:
-            'Optional upstream filters passed through to the semantic backend.',
+            'Optional filters passed through to the LexAPI semantic backend. See the LexAPI docs at https://lex-api.com/docs for accepted filter keys (e.g. court, dateFrom, dateTo, ecli).',
         },
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Semantic search over EU case law', ...READ_ONLY },
     handler: (args, client) => client.semanticCaseLaw(args as any),
   },
 
@@ -270,10 +293,16 @@ export const tools: ToolDef[] = [
         query: { type: 'string', minLength: 1 },
         limit: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
         min_score: { type: 'number', minimum: 0, maximum: 1 },
-        filters: { type: 'object', additionalProperties: true },
+        filters: {
+          type: 'object',
+          additionalProperties: true,
+          description:
+            'Optional filters passed through to the LexAPI semantic backend. See the LexAPI docs at https://lex-api.com/docs for accepted filter keys (e.g. documentType, author, language, dateFrom, dateTo).',
+        },
       },
       additionalProperties: false,
     },
+    annotations: { title: 'Semantic search over EU legislation', ...READ_ONLY },
     handler: (args, client) => client.semanticLegislation(args as any),
   },
 ];

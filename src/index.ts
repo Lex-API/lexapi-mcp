@@ -10,7 +10,7 @@ import { LexAPIClient, LexAPIError } from './client.js';
 import { tools, toolsByName } from './tools.js';
 
 const PACKAGE_NAME = 'lexapi-mcp';
-const PACKAGE_VERSION = '0.1.0';
+const PACKAGE_VERSION = '0.1.1';
 
 const apiKey = process.env.LEXAPI_API_KEY;
 if (!apiKey) {
@@ -33,10 +33,11 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: tools.map(({ name, description, inputSchema }) => ({
+  tools: tools.map(({ name, description, inputSchema, annotations }) => ({
     name,
     description,
     inputSchema,
+    annotations,
   })),
 }));
 
