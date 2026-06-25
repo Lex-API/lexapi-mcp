@@ -86,12 +86,7 @@ export class LexAPIClient {
       const json = text ? safeJson(text) : {};
 
       if (!res.ok) {
-        const slug = (json as AnyResponse).error
-          ? String((json as AnyResponse).error)
-          : `http_${res.status}`;
-        const message = (json as AnyResponse).message
-          ? String((json as AnyResponse).message)
-          : text || `HTTP ${res.status}`;
+        const { slug, message } = extractError(json, text, res.status);
         throw new LexAPIError(res.status, slug, message);
       }
 
@@ -164,4 +159,35 @@ function safeJson(text: string): unknown {
   } catch {
     return { error: 'invalid_json', message: text.slice(0, 500) };
   }
+}
+
+// Gateway returns either the typed envelope { error: { code, message } } or
+// the legacy flat shape { error: "slug", message: "..." }. Handle both;
+// fall back to HTTP status when neither is present.
+function extractError(
+  json: unknown,
+  text: string,
+  status: number,
+): { slug: string; message: string } {
+  const fallbackMessage = text || `HTTP ${status}`;
+  const fallbackSlug = `http_${status}`;
+  if (!json || typeof json !== 'object') {
+    return { slug: fallbackSlug, message: fallbackMessage };
+  }
+  const j = json as Record<string, unknown>;
+  const e = j.error;
+  if (e && typeof e === 'object') {
+    const eo = e as Record<string, unknown>;
+    const slug = typeof eo.code === 'string' ? eo.code : fallbackSlug;
+    const message =
+      typeof eo.message === 'string'
+        ? eo.message
+        : typeof j.message === 'string'
+          ? j.message
+          : fallbackMessage;
+    return { slug, message };
+  }
+  const slug = typeof e === 'string' ? e : fallbackSlug;
+  const message = typeof j.message === 'string' ? j.message : fallbackMessage;
+  return { slug, message };
 }

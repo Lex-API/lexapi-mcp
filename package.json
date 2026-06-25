@@ -16,7 +16,11 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "prepublishOnly": "npm run build"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "mcp",
@@ -32,7 +36,7 @@
   "homepage": "https://lex-api.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lexapi/lexapi-mcp.git"
+    "url": "git+https://github.com/lexapi/lexapi-mcp.git"
   },
   "engines": {
     "node": ">=20"
@@ -43,5 +47,9 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0"
+  },
+  "overrides": {
+    "hono": "^4.12.27",
+    "qs": "^6.15.3"
   }
 }
