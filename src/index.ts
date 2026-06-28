@@ -10,7 +10,7 @@ import { LexAPIClient, LexAPIError } from './client.js';
 import { tools, toolsByName } from './tools.js';
 
 const PACKAGE_NAME = 'lexapi-mcp';
-const PACKAGE_VERSION = '0.1.1';
+const PACKAGE_VERSION = '0.1.2';
 
 const apiKey = process.env.LEXAPI_API_KEY;
 if (!apiKey) {

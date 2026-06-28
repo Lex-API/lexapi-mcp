@@ -1,6 +1,6 @@
 {
   "name": "@lexapi/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Model Context Protocol server for LexAPI — query EUR-Lex and EU case law from Claude, Cursor, and other MCP-enabled clients.",
   "type": "module",
   "main": "dist/index.js",
@@ -36,7 +36,7 @@
   "homepage": "https://lex-api.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lexapi/lexapi-mcp.git"
+    "url": "git+https://github.com/Lex-API/lexapi-mcp.git"
   },
   "engines": {
     "node": ">=20"

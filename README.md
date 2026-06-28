@@ -73,7 +73,7 @@ Any client that supports stdio MCP servers can run this. The command is `npx -y 
 ## Local development
 
 ```bash
-git clone https://github.com/lexapi/lexapi-mcp.git
+git clone https://github.com/Lex-API/lexapi-mcp.git
 cd lexapi-mcp
 npm install
 npm run build
