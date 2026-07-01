@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Lex-API/lexapi-mcp",
+  "title": "LexAPI",
+  "description": "Query EUR-Lex, EU case law, and the citation graph. Search by CELEX, ECLI, keyword, or embeddings; fetch parsed regulations, directives, and judgments; explore inbound/outbound citations.",
+  "websiteUrl": "https://lex-api.com",
+  "repository": {
+    "url": "https://github.com/Lex-API/lexapi-mcp",
+    "source": "github"
+  },
+  "version": "0.1.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@lexapi/mcp",
+      "version": "0.1.3",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "LEXAPI_API_KEY",
+          "description": "LexAPI API key. Get one at https://lex-api.com/dashboard (FREE tier available; semantic tools require a paid plan).",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "LEXAPI_BASE_URL",
+          "description": "Override the LexAPI base URL. Defaults to https://lex-api.com/api/v1.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
