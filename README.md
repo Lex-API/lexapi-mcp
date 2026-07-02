@@ -6,7 +6,7 @@ Install once, get an API key, and ask your AI assistant: *"summarize Article 17 
 
 ## Install
 
-You'll need a LexAPI API key. Create one for free at [lex-api.com/dashboard](https://lex-api.com/dashboard) (50 calls/day on the FREE tier).
+You'll need a LexAPI API key. Create one for free at [lex-api.com/dashboard](https://lex-api.com/dashboard) (500 credits/month on the FREE tier, no card required).
 
 ### Claude Desktop
 
