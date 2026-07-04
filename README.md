@@ -1,12 +1,12 @@
 # LexAPI MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com) — query EUR-Lex, EU case law, and the citation graph from Claude, Cursor, and other MCP-enabled clients.
+[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — query EUR-Lex, EU case law, and the citation graph from Claude, Cursor, and other MCP-enabled clients.
 
 Install once, get an API key, and ask your AI assistant: *"summarize Article 17 of the GDPR"* or *"which regulations amend Directive 95/46/EC?"* — the model calls LexAPI directly.
 
 ## Install
 
-You'll need a LexAPI API key. Create one for free at [lex-api.com/dashboard](https://lex-api.com/dashboard) (500 credits/month on the FREE tier, no card required).
+You'll need a LexAPI API key. Create one for free at [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp) (500 credits/month on the FREE tier, no card required).
 
 ### Claude Desktop
 
@@ -57,7 +57,7 @@ Any client that supports stdio MCP servers can run this. The command is `npx -y 
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `LEXAPI_API_KEY` | *(required)* | Your API key. Get one at [lex-api.com/dashboard](https://lex-api.com/dashboard). |
+| `LEXAPI_API_KEY` | *(required)* | Your API key. Get one at [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). |
 | `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | Override for self-hosted or staging. |
 
 ## Troubleshooting
