@@ -8,9 +8,9 @@ import {
 
 import { LexAPIClient, LexAPIError } from './client.js';
 import { tools, toolsByName } from './tools.js';
+import { PACKAGE_VERSION } from './version.js';
 
 const PACKAGE_NAME = 'lexapi-mcp';
-const PACKAGE_VERSION = '0.1.3';
 const MCP_PATH = '/v1';
 
 function extractBearer(req: IncomingMessage): string | null {
