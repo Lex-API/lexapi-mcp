@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+node_modules
+dist
+internal-docs
+*.tgz
+*.log
+.env
+.env.local
+.DS_Store
