@@ -8,13 +8,13 @@
     "url": "https://github.com/Lex-API/lexapi-mcp",
     "source": "github"
   },
-  "version": "0.1.3",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@lexapi/mcp",
-      "version": "0.1.3",
+      "version": "0.2.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -31,6 +31,20 @@
           "description": "Override the LexAPI base URL. Defaults to https://lex-api.com/api/v1.",
           "isRequired": false,
           "isSecret": false
+        }
+      ]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.lex-api.com/v1",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <your LexAPI API key>. Get one at https://lex-api.com/dashboard (FREE tier available; semantic tools require a paid plan).",
+          "isRequired": true,
+          "isSecret": true
         }
       ]
     }
