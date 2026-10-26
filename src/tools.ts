@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { webhookUrlProblem } from './webhookUrl.js';
+
 import type { Json, LexAPIClient, LexResponse } from './client.js';
 import {
   compact,
@@ -74,6 +76,12 @@ const celex = (what = 'CELEX number') =>
 const LANG_SET = new Set<string>(LANGUAGES);
 const lang = (d = 'Language: ISO 639-1 code of an official EU language (en, fr, de, …; default en).') =>
   z.string().regex(/^[a-z]{2}$/).refine((v) => LANG_SET.has(v), 'not an official EU language code').describe(d);
+// Webhook targets: https, public host — mirrors the DNS-free part of the API's
+// egress guard (defence in depth; the API is authoritative).
+const webhookUrl = (d: string) => z.string().trim().superRefine((v, ctx) => {
+  const problem = webhookUrlProblem(v);
+  if (problem) ctx.addIssue({ code: 'custom', message: problem });
+}).describe(d);
 const isoDate = (d: string) => z.string().regex(DATE_RE, 'use YYYY-MM-DD').describe(d);
 // One value or a list; the allowed values are listed once, in the description
 // (an enum inside a string|array union would print them twice).
@@ -662,13 +670,17 @@ export const tools: ToolDef[] = [
     name: 'lex_export',
     title: 'Export corpus rows',
     description:
-      'Rows from the LexAPI corpus matching filters — e.g. documents of a type fetched since a date. BUSINESS plans and above (403 otherwise). Cost: metered from the credit pool — see the LexAPI export pricing (https://lex-api.com/docs); keep limit small. Bulk export for ML training needs a separate licence (Terms §6).',
+      'Rows from the LexAPI corpus matching filters — e.g. documents of a type fetched since a date. BUSINESS plans and above (403 otherwise). Cost: metered from the credit pool — see the LexAPI export pricing (https://lex-api.com/docs); keep limit small. No document-date filter (use fetchedSince). Bulk export for ML training needs a separate licence (Terms §6).',
     inputSchema: {
       documentType: z.array(z.string().min(1)).min(1).optional().describe('Stored document-type labels, matched exactly, e.g. ["Regulation","Directive"].'),
       author: z.array(z.string().min(1)).min(1).optional().describe('Stored author labels, matched exactly.'),
       subdomain: z.array(z.enum(['treaties', 'international', 'legislation', 'internal', 'preparatory', 'case-law', 'national-transposition', 'national-case-law', 'questions', 'consolidated'])).min(1).optional(),
       language: lang().optional(),
       fetchedSince: z.string().datetime({ offset: true }).optional().describe('Only rows (re)fetched at or after this ISO timestamp.'),
+      // Declared only so that a model sending them gets an error instead of a
+      // silently unfiltered (and metered) export — the SDK strips unknown keys.
+      dateFrom: z.unknown().optional().describe('Not supported: export has no document-date filter. Use fetchedSince.'),
+      dateTo: z.unknown().optional().describe('Not supported: export has no document-date filter. Use fetchedSince.'),
       includeContent: z.boolean().default(false).describe('Include each row\'s parsed body (bounded by maxChars).'),
       includeStubs: z.boolean().optional().describe('Also rows whose text EUR-Lex does not publish.'),
       limit: z.number().int().min(1).max(200).default(20).describe('Rows (1 credit each).'),
@@ -676,6 +688,9 @@ export const tools: ToolDef[] = [
     },
     annotations: READ,
     handler: async (a, client) => {
+      if (a.dateFrom !== undefined || a.dateTo !== undefined) {
+        throw new Error('lex_export has no document-date filter (dateFrom/dateTo are not supported; nothing was charged). Use fetchedSince to export rows fetched since a time, or lex_search for documents by date.');
+      }
       const res = await client.exportCorpus({
         documentType: a.documentType,
         author: a.author,
@@ -764,7 +779,7 @@ export const tools: ToolDef[] = [
       'Subscribe a URL (must be a public https URL) to (a) new EUR-Lex documents matching searchCriteria and/or (b) changes to watched acts (watchCelex: amendments, corrigenda, repeals, new consolidated versions). Checked hourly; deliveries are free and HMAC-signed. The signing secret is returned ONLY in this response — tell the user to store it. Plan limits apply (FREE has no webhooks). Confirm the URL and criteria with the user first. Free.',
     inputSchema: {
       name: z.string().trim().min(1).max(200).describe('Label.'),
-      url: z.string().trim().url().describe('Must be a public https URL; it receives the POSTs.'),
+      url: webhookUrl('Must be a public https URL (port 443 or 8443, a public domain name or address); it receives the POSTs.'),
       searchCriteria: z.object({
         query: z.string().optional().describe('Words that must all appear in the title (whole words; 4+ characters match word starts; trailing * for prefixes).'),
         documentType: z.union([z.string(), z.array(z.string())]).optional(),
@@ -806,7 +821,7 @@ export const tools: ToolDef[] = [
     inputSchema: {
       id: z.string().trim().min(1).max(64),
       name: z.string().trim().min(1).max(200).optional(),
-      url: z.string().trim().url().optional().describe('Must be a public https URL.'),
+      url: webhookUrl('Must be a public https URL.').optional().describe('Must be a public https URL.'),
       searchCriteria: z.union([z.record(z.string(), z.unknown()), z.null()]).optional().describe('New criteria (same shape as lex_create_webhook), or null to remove.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional(),
       status: z.enum(['ACTIVE', 'PAUSED']).optional(),

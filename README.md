@@ -70,10 +70,10 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_related` | Documents citing the same acts (bibliographic coupling). | 20 |
 | `lex_citation_stats` | Citation graph totals and most-cited documents. | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
-| `lex_export` | Corpus rows by filter (BUSINESS plans and above). | metered — see the [LexAPI docs](https://lex-api.com/docs?ref=npm-mcp) |
+| `lex_export` | Corpus rows by type, author, collection, language or `fetchedSince` (BUSINESS plans and above; no document-date filter). | metered — see the [LexAPI docs](https://lex-api.com/docs?ref=npm-mcp) |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
-| `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and for changes to watched acts (paid plans; the URL must be a public https URL). | free |
+| `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and for changes to watched acts (paid plans). The URL must be a public https URL (port 443/8443, no internal hosts or private addresses) — checked here as well as by the API. | free |
 
 ### How results are shaped for models
 
@@ -90,12 +90,12 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `LEXAPI_API_KEY` | *(required)* | Your API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). |
 | `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | Override for staging or self-hosting. |
 | `LEXAPI_MCP_READ_ONLY` | off | `true` hides (and refuses) every tool that is not read-only: webhook create / update / delete / test, and `lex_extract_citations` (it writes to the shared citation graph and costs credits). |
-| `LEXAPI_TIMEOUT_MS` | 55 000, or 120 000 when the client sends a progress token | Per-request timeout towards LexAPI. |
+| `LEXAPI_TIMEOUT_MS` | `55000` | Deadline for one tool call towards LexAPI, retries included. Raise it only together with your MCP client's own tool timeout. |
 | `LEXAPI_MCP_ALLOWED_ORIGINS` | *(none)* | Hosted HTTP server only: browser `Origin`s allowed to call it (comma-separated, `*` for any). Requests without an `Origin` header (all non-browser clients) are always allowed. |
 
 The key is sent only as the `x-api-key` header to LexAPI; it is never logged or included in tool output. A key containing whitespace or control characters (e.g. a multi-line paste) is rejected at startup.
 
-**Timeouts.** MCP clients give up on a tool call after their own timeout (60 s by default in the official SDK; Claude Code: `MCP_TOOL_TIMEOUT`). A first, live EUR-Lex fetch can take longer. Without a progress token the server stops at 55 s and returns a message the model can act on; when the client sends a progress token, the server sends a progress heartbeat every 10 s (clients that reset their timeout on progress keep waiting) and allows 120 s. Cancelling a call aborts the request to LexAPI.
+**Timeouts.** MCP clients give up on a tool call after their own timeout (60 s by default in the official SDK; Claude Code: `MCP_TOOL_TIMEOUT`). A first, live EUR-Lex fetch can take longer. The server gives each tool call one 55 s deadline — retries and rate-limit waits included — and then returns a message the model can act on, instead of the client's generic timeout error. When the client sends a progress token, the server also sends a progress notification every 10 s; whether that keeps the call alive is up to the client (the official SDK only extends its timeout on progress when the caller opts into `resetTimeoutOnProgress`, and a server cannot detect that), so the deadline stays 55 s. If you raise your client's timeout, raise `LEXAPI_TIMEOUT_MS` to match. Cancelling a call aborts the request to LexAPI.
 
 ## Troubleshooting
 

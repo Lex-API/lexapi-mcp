@@ -40,7 +40,7 @@
         },
         {
           "name": "LEXAPI_TIMEOUT_MS",
-          "description": "Per-request timeout in milliseconds (default 55000; 120000 when the client sends a progress token).",
+          "description": "Deadline per tool call in milliseconds, retries included (default 55000). Raise only together with the MCP client timeout.",
           "isRequired": false,
           "isSecret": false
         }

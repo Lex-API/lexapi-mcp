@@ -8,6 +8,13 @@ import { PACKAGE_VERSION } from './version.js';
 
 const MCP_PATH = '/v1';
 const MAX_BODY_BYTES = 1_000_000;
+/**
+ * An oversized body is still read (and discarded) up to this much / this
+ * long, so the client finishes uploading and actually receives the 413 —
+ * closing the socket mid-upload makes clients report EPIPE / ECONNRESET.
+ */
+const DRAIN_MAX_BYTES = 16_000_000;
+const DRAIN_MAX_MS = 5000;
 
 /**
  * The caller's LexAPI key: `Authorization: Bearer <key>` (what server.json
@@ -16,7 +23,9 @@ const MAX_BODY_BYTES = 1_000_000;
 export function extractApiKey(req: IncomingMessage): string | null {
   const auth = req.headers['authorization'];
   if (typeof auth === 'string') {
-    const m = auth.match(/^Bearer\s+(\S+)\s*$/i);
+    // Everything after "Bearer " is the key; a value with inner whitespace
+    // is returned as-is so it is reported as malformed, not as missing.
+    const m = auth.match(/^Bearer\s+(.+?)\s*$/i);
     if (m) return m[1];
   }
   const x = req.headers['x-api-key'];
@@ -38,18 +47,69 @@ export function originAllowed(origin: string | undefined, env: NodeJS.ProcessEnv
   return list.includes('*') || list.includes(origin);
 }
 
-class BodyTooLargeError extends Error {}
+class BodyTooLargeError extends Error {
+  constructor(public readonly drained: boolean) {
+    super('request body too large');
+  }
+}
+
+/** Discard the rest of an oversized body; resolves true if it ended within the caps. */
+function drain(req: IncomingMessage, alreadyRead: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (req.readableEnded) return resolve(true);
+    let seen = alreadyRead;
+    const done = (ok: boolean) => {
+      clearTimeout(timer);
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.removeListener('error', onEnd);
+      resolve(ok);
+    };
+    const onData = (chunk: Buffer) => {
+      seen += chunk.length;
+      if (seen > DRAIN_MAX_BYTES) done(false);
+    };
+    const onEnd = () => done(true);
+    const timer = setTimeout(() => done(false), DRAIN_MAX_MS);
+    req.on('data', onData);
+    req.once('end', onEnd);
+    req.once('error', onEnd);
+    req.resume();
+  });
+}
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length;
-    // MCP JSON-RPC messages are small; anything larger is abuse.
-    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError('request body too large');
-    chunks.push(chunk as Buffer);
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    throw new BodyTooLargeError(await drain(req, 0));
   }
-  const text = Buffer.concat(chunks).toString('utf8');
+  // Event listeners, not `for await`: leaving a for-await loop early destroys
+  // the stream, and the remaining body must stay readable for drain().
+  const text = await new Promise<string | BodyTooLargeError>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const cleanup = () => {
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.removeListener('error', onError);
+    };
+    const onData = (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        cleanup();
+        req.pause();
+        drain(req, size).then((ok) => resolve(new BodyTooLargeError(ok)));
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = () => { cleanup(); resolve(Buffer.concat(chunks).toString('utf8')); };
+    const onError = (e: Error) => { cleanup(); reject(e); };
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+  });
+  if (text instanceof BodyTooLargeError) throw text;
   if (!text) return undefined;
   return JSON.parse(text);
 }
@@ -76,7 +136,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   }
 
   const apiKey = extractApiKey(req);
-  if (!apiKey || !isWellFormedKey(apiKey)) {
+  if (!apiKey) {
     writeJson(res, 401, {
       error: {
         code: 'unauthorized',
@@ -86,16 +146,24 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
     }, { 'WWW-Authenticate': 'Bearer realm="lexapi"' });
     return;
   }
+  if (!isWellFormedKey(apiKey)) {
+    // Never echo the value.
+    writeJson(res, 401, {
+      error: { code: 'malformed_api_key', message: 'Malformed API key: it contains whitespace or control characters. Send the key exactly as shown in the dashboard, on one line.' },
+    }, { 'WWW-Authenticate': 'Bearer realm="lexapi", error="invalid_token"' });
+    return;
+  }
 
   let body: unknown;
   try {
     body = await readJsonBody(req);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      // The rest of the body is still on the socket: close it, or the next
-      // keep-alive request on this connection would read garbage.
-      res.on('finish', () => req.destroy());
-      jsonRpcError(res, 413, -32600, 'Request body too large', { Connection: 'close' });
+      // The body was drained (up to the caps), so the client receives this
+      // 413. Close the connection anyway: if the drain hit a cap, the rest of
+      // the body is still on the socket and must not be read as a request.
+      res.on('finish', () => { if (!err.drained) req.destroy(); });
+      jsonRpcError(res, 413, -32600, `Request body too large (max ${MAX_BODY_BYTES} bytes)`, { Connection: 'close' });
     }
     else jsonRpcError(res, 400, -32700, 'Parse error: body is not valid JSON');
     return;

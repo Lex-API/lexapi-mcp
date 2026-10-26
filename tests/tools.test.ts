@@ -245,8 +245,16 @@ describe('lex_get_documents_batch / lex_get_metadata / lex_get_document_by_url',
     const { data } = await call('lex_get_documents_batch', { celexNumbers: docs.map((d) => d.celex), include: ['articles'], maxChars: 20_000 }, () => ({
       body: { success: true, documents: docs, errors: [] },
     }));
-    const bodyChars = data.documents.reduce((n: number, d: any) => n + JSON.stringify(d.content ?? {}).length, 0);
-    expect(bodyChars).toBeLessThan(20_000 * 1.6); // JSON overhead aside, no 2,000-char floor × 40
+    // Per-document share is maxChars / n = 500 characters of body items; allow
+    // only the JSON framing of one clipped article on top of that.
+    const per = 20_000 / 40;
+    for (const d of data.documents) {
+      const items = (d.content?.articles ?? []) as unknown[];
+      const itemChars = items.reduce((n: number, it) => n + JSON.stringify(it).length, 0);
+      expect(itemChars).toBeLessThanOrEqual(per + 80);
+    }
+    const total = data.documents.reduce((n: number, d: any) => n + JSON.stringify(d.content?.articles ?? []).length, 0);
+    expect(total).toBeLessThanOrEqual(20_000 + 40 * 80);
   });
 
 
@@ -549,6 +557,34 @@ describe('webhook tools', () => {
   });
 });
 
+describe('review round 2', () => {
+  it('F4: webhook URLs must be public https (mirrors the API egress guard)', () => {
+    const create = z.object(byName.lex_create_webhook.inputSchema);
+    const ok = (url: string) => create.safeParse({ name: 'n', url, watchCelex: ['32006R1907'] }).success;
+    expect(ok('https://hooks.acme.io/lexapi')).toBe(true);
+    expect(ok('https://hooks.acme.io:8443/x')).toBe(true);
+    expect(ok('https://93.184.216.34/x')).toBe(true);
+    for (const bad of [
+      'http://hooks.acme.io/x', 'http://10.0.0.5/x', 'http://localhost:6379/', 'https://localhost/x',
+      'https://10.0.0.5/x', 'https://127.0.0.1/', 'https://169.254.169.254/latest/meta-data', 'https://192.168.1.10/',
+      'https://[::1]/', 'https://[::ffff:127.0.0.1]/', 'https://[fd00::1]/', 'https://[64:ff9b::a00:1]/',
+      'https://redis/', 'https://qdrant:443/', 'https://db.internal/x', 'https://printer.local/',
+      'https://hooks.acme.io:6379/', 'https://user:pw@hooks.acme.io/', 'https://2130706433/', 'not a url',
+    ]) expect(ok(bad), bad).toBe(false);
+    const update = z.object(byName.lex_update_webhook.inputSchema);
+    expect(update.safeParse({ id: 'w1', url: 'http://10.0.0.5/x' }).success).toBe(false);
+    expect(update.safeParse({ id: 'w1', status: 'PAUSED' }).success).toBe(true);
+  });
+
+  it('F5: lex_export refuses dateFrom/dateTo before any call and points to fetchedSince', async () => {
+    const { result, calls } = await call('lex_export', { dateFrom: '2024-01-01' }, () => ({ body: {} }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/fetchedSince/);
+    expect(calls).toHaveLength(0);
+    expect(byName.lex_export.description).toMatch(/No document-date filter \(use fetchedSince\)/);
+  });
+});
+
 describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
   it('N3: cited-by no longer claims completeness; points at relationSync', () => {
     const d = byName.lex_cited_by.description;
@@ -557,11 +593,10 @@ describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
     expect(d).toMatch(/refreshed on read/);
   });
 
-  it('N9: export cost is neutral and the unreliable date filters are gone', () => {
+  it('N9: export cost is neutral; dateFrom/dateTo exist only to be refused (see F5)', () => {
     const t = byName.lex_export;
     expect(t.description).not.toMatch(/per row/);
-    expect(Object.keys(t.inputSchema)).not.toContain('dateFrom');
-    expect(Object.keys(t.inputSchema)).not.toContain('dateTo');
+    expect((t.inputSchema.dateFrom as any).description).toMatch(/Not supported/);
   });
 
   it('webhook URLs must be public https', () => {

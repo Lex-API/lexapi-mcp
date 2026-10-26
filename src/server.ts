@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
-import { DEFAULT_TIMEOUT_MS, LexAPIClient, LONG_TIMEOUT_MS } from './client.js';
+import { DEFAULT_TIMEOUT_MS, LexAPIClient } from './client.js';
 import { describeError } from './errors.js';
 import { selectTools, type ToolDef } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
@@ -71,10 +71,14 @@ export const PROGRESS_INTERVAL_MS = 10_000;
  *
  * - The MCP request's abort signal (client cancellation, closed HTTP
  *   connection) aborts the upstream LexAPI request.
- * - With a progress token, the client can keep the request alive on
- *   progress (TS SDK `resetTimeoutOnProgress`): we send a heartbeat every
- *   10 s and allow the long timeout. Without one, the client's own timeout
- *   (60 s by default) applies, so we stop at 55 s with a useful message.
+ * - Timeout: 55 s by default, under the 60 s default request timeout of MCP
+ *   clients, so the model gets our actionable message rather than the
+ *   client's generic -32001. A progress token does NOT tell us the client
+ *   will extend its timeout on progress (TS SDK `resetTimeoutOnProgress`
+ *   defaults to false), so it does not raise the timeout; LEXAPI_TIMEOUT_MS
+ *   does, for users who also raised their client's timeout.
+ * - With a progress token we still send a heartbeat every 10 s, so clients
+ *   that DO reset on progress — and UIs showing progress — see the call alive.
  */
 export async function runTool(
   tool: ToolDef,
@@ -84,7 +88,7 @@ export async function runTool(
   opts: { timeoutMs?: number; progressIntervalMs?: number } = {},
 ) {
   const token = extra._meta?.progressToken;
-  const timeoutMs = opts.timeoutMs ?? configuredTimeout() ?? (token !== undefined ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+  const timeoutMs = opts.timeoutMs ?? configuredTimeout() ?? DEFAULT_TIMEOUT_MS;
   const callClient = client.forCall({ signal: extra.signal, timeoutMs });
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   if (token !== undefined && extra.sendNotification) {

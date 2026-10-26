@@ -16,6 +16,7 @@ import { createHttpServer, originAllowed } from '../src/http-server.js';
 import { createLexServer, runTool, SERVER_INSTRUCTIONS } from '../src/server.js';
 import { selectTools, tools } from '../src/tools.js';
 import { request as httpRequest, Agent } from 'node:http';
+import { connect as netConnect } from 'node:net';
 import { PACKAGE_VERSION } from '../src/version.js';
 import { fakeDocument, parseText } from './helpers.js';
 
@@ -76,7 +77,9 @@ describe('MCP protocol (in-memory)', () => {
 
     // N10: tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
     const listJson = JSON.stringify(listed);
-    expect(listJson.length).toBeLessThan(36_000);
+    // Tripwire with headroom: the first cut was ~39.6k characters (~10k tokens);
+    // fail if it creeps back towards that, not on every new sentence.
+    expect(listJson.length).toBeLessThan(38_000);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for that date/);
@@ -98,7 +101,7 @@ describe('MCP protocol (in-memory)', () => {
 });
 
 describe('tool call plumbing (S3)', () => {
-  it('sends progress heartbeats when the request has a progress token, and uses the long timeout', async () => {
+  it('F2: sends progress heartbeats with a progress token, but keeps the 55 s timeout (the client may not reset on progress)', async () => {
     const sent: unknown[] = [];
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
@@ -114,7 +117,7 @@ describe('tool call plumbing (S3)', () => {
     const res = await p;
     expect(res.isError).toBeFalsy();
     expect(sent[0]).toMatchObject({ method: 'notifications/progress', params: { progressToken: 'tok', progress: 1 } });
-    expect(seenTimeout).toBe(120_000);
+    expect(seenTimeout).toBe(55_000);
   });
 
   it('without a progress token the timeout stays under the client default', async () => {
@@ -177,13 +180,57 @@ describe('Streamable HTTP (hosted server)', () => {
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
   });
 
-  it('S4: a key with control characters is a 401, never echoed', async () => {
-    const r = await fetch(`${base}/v1`, { method: 'POST', headers: { 'x-api-key': 'lex_SECRET\u0001x', 'content-type': 'application/json' }, body: '{}' }).catch(() => undefined);
-    // fetch itself may refuse a control character; if it went through, it must be a 401 without the key.
-    if (r) {
+  it('S4/F6: a malformed key is a 401 that says "malformed" (not "missing"), never echoed', async () => {
+    // Node's HTTP parser already answers 400 to control characters in a header,
+    // so what reaches us is whitespace inside the value (a two-line paste).
+    for (const headers of [{ 'x-api-key': 'lex_SECRET lex_other' }, { authorization: 'Bearer lex_SECRET lex_other' }] as Array<Record<string, string>>) {
+      const r = await fetch(`${base}/v1`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}' });
       expect(r.status).toBe(401);
-      expect(await r.text()).not.toContain('SECRET');
+      const text = await r.text();
+      expect(text).toMatch(/Malformed API key/);
+      expect(text).not.toMatch(/Missing API key/);
+      expect(text).not.toContain('SECRET');
     }
+    // Control characters never get past Node's parser (raw socket, since clients refuse to send them).
+    const port = Number(new URL(base).port);
+    const raw = await new Promise<string>((resolve, reject) => {
+      const sock = netConnect(port, '127.0.0.1', () => {
+        sock.write('POST /v1 HTTP/1.1\r\nHost: x\r\nx-api-key: lex_SECRET\u0001x\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}');
+      });
+      let out = '';
+      sock.on('data', (d) => { out += d; });
+      sock.on('end', () => resolve(out));
+      sock.on('error', reject);
+    });
+    expect(raw).toMatch(/^HTTP\/1\.1 4\d\d/);
+    expect(raw).not.toContain('SECRET');
+  });
+
+  for (const mb of [1.2, 8]) {
+    it(`F1: a ${mb} MB body gets a 413 the client actually receives (5/5), not a reset`, async () => {
+      const body = Buffer.alloc(Math.round(mb * 1_000_000), 0x20);
+      for (let i = 0; i < 5; i++) {
+        const r = await fetch(`${base}/v1`, { method: 'POST', headers: { authorization: 'Bearer lex_good', 'content-type': 'application/json' }, body });
+        expect(r.status).toBe(413);
+        expect(await r.text()).toMatch(/too large/);
+      }
+      expect((await fetch(`${base}/health`)).status).toBe(200);
+    });
+  }
+
+  it('F1: a chunked (no Content-Length) oversized body also gets its 413', async () => {
+    const port = Number(new URL(base).port);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, path: '/v1', method: 'POST', headers: { authorization: 'Bearer lex_good', 'content-type': 'application/json', 'transfer-encoding': 'chunked' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      const chunk = Buffer.alloc(256_000, 0x20);
+      for (let i = 0; i < 12; i++) req.write(chunk); // ~3 MB
+      req.end();
+    });
+    expect(status).toBe(413);
   });
 
   it('N1: a 413 closes the connection so the next keep-alive request is not corrupted', async () => {

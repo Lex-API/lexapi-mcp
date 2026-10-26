@@ -3,16 +3,13 @@ import { PACKAGE_VERSION } from './version.js';
 
 export const DEFAULT_BASE_URL = 'https://lex-api.com/api/v1';
 /**
- * Per-attempt timeout. LexAPI's own upstream budgets: EUR-Lex fetches are
- * hard-capped at 90 s server-side, semantic legislation search (with asOf)
- * at 45 s, the citation network at 30 s — so 120 s covers every endpoint.
- */
-export const LONG_TIMEOUT_MS = 120_000;
-/**
- * Without a progress token the MCP client's own request timeout applies
- * (the TypeScript SDK default is 60 s; Claude Code: MCP_TOOL_TIMEOUT). Give up
- * a few seconds earlier so the model gets our actionable timeout message
- * instead of the client's generic -32001.
+ * Deadline for one tool call (all attempts, backoff and 429 sleeps included).
+ * MCP clients give up after their own request timeout (the TypeScript SDK
+ * default is 60 s; Claude Code: MCP_TOOL_TIMEOUT), so stop a few seconds
+ * earlier and return an actionable message instead of the client's generic
+ * -32001. LexAPI's own upstream budgets (EUR-Lex fetch 90 s, semantic
+ * legislation 45 s, citation network 30 s) can exceed this on a cold live
+ * fetch; users who raise their client's timeout raise LEXAPI_TIMEOUT_MS too.
  */
 export const DEFAULT_TIMEOUT_MS = 55_000;
 
@@ -61,7 +58,12 @@ export interface LexAPIClientOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Aborts every request of this client (MCP request cancellation). */
   signal?: AbortSignal;
+  /** Injected for tests (the per-call deadline clock). */
+  now?: () => number;
 }
+
+/** No retry or 429 sleep is started unless at least this much of the call's deadline would remain. */
+const MIN_ATTEMPT_MS = 2000;
 
 export type Query = Record<string, string | number | boolean | string[] | undefined | null>;
 
@@ -82,6 +84,7 @@ export class LexAPIClient {
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly signal?: AbortSignal;
+  private readonly now: () => number;
   private readonly opts: LexAPIClientOptions;
 
   constructor(opts: LexAPIClientOptions) {
@@ -92,6 +95,7 @@ export class LexAPIClient {
     this.opts = opts;
     this.apiKey = key;
     this.signal = opts.signal;
+    this.now = opts.now ?? Date.now;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.maxRetries = opts.maxRetries ?? 1;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -136,22 +140,34 @@ export class LexAPIClient {
     if (opts.body !== undefined) headers['content-type'] = 'application/json';
 
     const canRetry = opts.retry !== false;
+    // ONE deadline for the whole call — attempts, backoff and 429 sleeps all
+    // come out of it, so retries can never push a call past the timeout the
+    // MCP client is waiting on.
+    const deadline = this.now() + this.timeoutMs;
+    const remaining = () => deadline - this.now();
+    const canWait = (ms: number) => remaining() - ms >= MIN_ATTEMPT_MS;
     let attempt = 0;
     for (;;) {
+      if (remaining() <= 0) {
+        throw new LexAPITransportError(`no response within ${Math.round(this.timeoutMs / 1000)} s`, true);
+      }
       let res: Response;
+      const attemptSignal = combineSignals(this.signal, AbortSignal.timeout(Math.max(1, remaining())));
       try {
         res = await this.fetchImpl(url, {
           method,
           headers,
           ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
-          signal: combineSignals(this.signal, AbortSignal.timeout(this.timeoutMs)),
+          signal: attemptSignal.signal,
         });
       } catch (err) {
+        attemptSignal.dispose();
         if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-        if (!timedOut && canRetry && attempt < this.maxRetries) {
+        const backoff = 500 * 2 ** (attempt + 1);
+        if (!timedOut && canRetry && attempt < this.maxRetries && canWait(backoff)) {
           attempt++;
-          await this.sleep(500 * 2 ** attempt);
+          await this.sleep(backoff);
           continue;
         }
         // Never forward the runtime's message: undici quotes header values
@@ -163,28 +179,42 @@ export class LexAPIClient {
       }
 
       if (this.signal?.aborted) {
+        attemptSignal.dispose();
         await discard(res);
         throw new LexAPITransportError('the request was cancelled by the client', false, true);
       }
       if (res.status === 429 && canRetry && attempt < this.maxRetries) {
         const wait = retryAfterSeconds(res);
-        if (wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S) {
+        const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
+        if (wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S && canWait(waitMs)) {
+          attemptSignal.dispose();
           await discard(res);
           attempt++;
-          await this.sleep(Math.max(1, wait) * 1000);
+          await this.sleep(waitMs);
           continue;
         }
       }
       // 500/502/503 are transient and refunded in full on credit plans.
       // 504 is NOT retried: it already means a 90 s upstream budget ran out.
-      if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries) {
+      const backoff = 500 * 2 ** (attempt + 1);
+      if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)) {
+        attemptSignal.dispose();
         await discard(res);
         attempt++;
-        await this.sleep(500 * 2 ** attempt);
+        await this.sleep(backoff);
         continue;
       }
 
-      const text = res.status === 204 ? '' : await res.text();
+      let text: string;
+      try {
+        text = res.status === 204 ? '' : await res.text();
+      } catch (err) {
+        if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
+        const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+        throw new LexAPITransportError(timedOut ? `no response within ${Math.round(this.timeoutMs / 1000)} s` : networkReason(err), timedOut);
+      } finally {
+        attemptSignal.dispose();
+      }
       const kept: LexResponse['headers'] = {};
       for (const h of KEPT_HEADERS) {
         const v = res.headers.get(h);
@@ -277,15 +307,30 @@ export class LexAPIClient {
   testWebhook(id: string) { return this.request('POST', `/webhooks/${enc(id)}/test`, { retry: false }); }
 }
 
-function combineSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
-  if (!a) return b;
-  if (typeof AbortSignal.any === 'function') return AbortSignal.any([a, b]);
+/**
+ * The call's cancellation signal combined with this attempt's timeout.
+ * `dispose()` detaches the listeners of the pre-20.3 fallback (no
+ * AbortSignal.any), so long-lived call signals don't accumulate them.
+ */
+export function combineSignals(a: AbortSignal | undefined, b: AbortSignal): { signal: AbortSignal; dispose: () => void } {
+  if (!a) return { signal: b, dispose: () => {} };
+  if (typeof AbortSignal.any === 'function') return { signal: AbortSignal.any([a, b]), dispose: () => {} };
   const c = new AbortController();
-  const abort = () => c.abort();
-  if (a.aborted || b.aborted) c.abort();
+  const dispose = () => {
+    a.removeEventListener('abort', abort);
+    b.removeEventListener('abort', abort);
+  };
+  function abort() {
+    dispose();
+    c.abort();
+  }
+  if (a.aborted || b.aborted) {
+    c.abort();
+    return { signal: c.signal, dispose: () => {} };
+  }
   a.addEventListener('abort', abort, { once: true });
   b.addEventListener('abort', abort, { once: true });
-  return c.signal;
+  return { signal: c.signal, dispose };
 }
 
 /** A key-free description of a network failure: errno code if there is one, else the error class. */

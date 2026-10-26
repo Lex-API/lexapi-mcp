@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LexAPIClient } from '../src/client.js';
+import { combineSignals, LexAPIClient } from '../src/client.js';
 import { LexAPIError, LexAPITransportError, describeError } from '../src/errors.js';
 import { PACKAGE_VERSION } from '../src/version.js';
 import { clientWith } from './helpers.js';
@@ -166,6 +166,97 @@ describe('LexAPIClient request building', () => {
     const c = new LexAPIClient({ apiKey: 'lex_ok' });
     expect(c.timeout).toBeLessThan(60_000);
     expect(c.forCall({ timeoutMs: 120_000 }).timeout).toBe(120_000);
+  });
+});
+
+describe('F3: one deadline per call', () => {
+  it('no 429 sleep when it would end past the deadline', async () => {
+    let t = 0;
+    const sleeps: number[] = [];
+    let n = 0;
+    const client = new LexAPIClient({
+      apiKey: 'lex_k', timeoutMs: 55_000, now: () => t, sleep: async (ms) => { sleeps.push(ms); t += ms; },
+      fetch: (async () => { n++; t += 50_000; return new Response('{"error":"Rate limit exceeded"}', { status: 429, headers: { 'retry-after': '5' } }); }) as typeof fetch,
+    });
+    const err = await client.info().catch((e) => e);
+    expect(err).toBeInstanceOf(LexAPIError);
+    expect(err.status).toBe(429);
+    expect(n).toBe(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('no retry after a late network error; the error is reported instead', async () => {
+    let t = 0;
+    let n = 0;
+    const client = new LexAPIClient({
+      apiKey: 'lex_k', timeoutMs: 55_000, now: () => t, sleep: async (ms) => { t += ms; },
+      fetch: (async () => { n++; t += 54_000; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); }) as typeof fetch,
+    });
+    const err = await client.info().catch((e) => e);
+    expect(err).toBeInstanceOf(LexAPITransportError);
+    expect(n).toBe(1);
+  });
+
+  it('retries early failures inside the deadline, and each attempt only gets what remains', async () => {
+    let t = 0;
+    const budgets: number[] = [];
+    const client = new LexAPIClient({
+      apiKey: 'lex_k', timeoutMs: 55_000, now: () => t, sleep: async (ms) => { t += ms; },
+      fetch: (async (_u: unknown, init: RequestInit) => {
+        budgets.push(t);
+        t += 10_000;
+        void init;
+        return budgets.length === 1 ? new Response('{}', { status: 503 }) : new Response('{"ok":1}', { status: 200 });
+      }) as typeof fetch,
+    });
+    expect((await client.info()).body).toEqual({ ok: 1 });
+    expect(budgets).toEqual([0, 11_000]); // second attempt starts 10 s + 1 s backoff in
+  });
+
+  it('fails fast once the whole-call deadline has passed', async () => {
+    let t = 0;
+    let n = 0;
+    const client = new LexAPIClient({
+      apiKey: 'lex_k', timeoutMs: 5_000, maxRetries: 3, now: () => t, sleep: async (ms) => { t += ms; },
+      fetch: (async () => { n++; t += 4_000; return new Response('{}', { status: 500 }); }) as typeof fetch,
+    });
+    await expect(client.info()).rejects.toBeInstanceOf(LexAPIError);
+    expect(n).toBe(1); // 4 s used, a 1 s backoff would leave < 2 s
+  });
+});
+
+describe('F6: combineSignals fallback (Node < 20.3, no AbortSignal.any)', () => {
+  it('removes its listeners when disposed', () => {
+    const any = (AbortSignal as any).any;
+    (AbortSignal as any).any = undefined;
+    try {
+      const added: string[] = [];
+      const removed: string[] = [];
+      const fake = (name: string) => ({
+        aborted: false,
+        addEventListener: (_t: string, _f: unknown) => { added.push(name); },
+        removeEventListener: (_t: string, _f: unknown) => { removed.push(name); },
+      }) as unknown as AbortSignal;
+      const c = combineSignals(fake('call'), fake('timeout'));
+      expect(added).toEqual(['call', 'timeout']);
+      c.dispose();
+      expect(removed.sort()).toEqual(['call', 'timeout']);
+    } finally {
+      (AbortSignal as any).any = any;
+    }
+  });
+
+  it('still aborts when either signal fires', () => {
+    const any = (AbortSignal as any).any;
+    (AbortSignal as any).any = undefined;
+    try {
+      const a = new AbortController();
+      const c = combineSignals(a.signal, new AbortController().signal);
+      a.abort();
+      expect(c.signal.aborted).toBe(true);
+    } finally {
+      (AbortSignal as any).any = any;
+    }
   });
 });
 
