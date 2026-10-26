@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Package contents
+        run: npm pack --dry-run
+
+  # The published bin must run on every supported Node version (engines: >=20).
+  # vitest needs Node 22+, so older runtimes get the stdio smoke test only.
+  runtime:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node scripts/smoke-stdio.mjs
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t lexapi-mcp:ci .
+      - name: Health check
+        run: |
+          docker run -d --name mcp -p 3000:3000 lexapi-mcp:ci
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3000/health && exit 0; sleep 1; done
+          docker logs mcp; exit 1
