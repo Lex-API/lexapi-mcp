@@ -41,8 +41,9 @@ describe('tool catalogue', () => {
     expect(ro).not.toContain('lex_update_webhook');
     expect(ro).not.toContain('lex_delete_webhook');
     expect(ro).not.toContain('lex_test_webhook');
+    expect(ro).not.toContain('lex_extract_citations'); // N8: writes to the shared graph
     expect(ro).toContain('lex_list_webhooks');
-    expect(ro).toHaveLength(tools.length - 4);
+    expect(ro).toHaveLength(tools.length - 5);
   });
 
   it('annotates writes honestly', () => {
@@ -53,8 +54,8 @@ describe('tool catalogue', () => {
     expect(byName.lex_delete_webhook.annotations.destructiveHint).toBe(true);
   });
 
-  it('every description states its cost or that it is free', () => {
-    for (const t of tools.filter((x) => !x.write)) {
+  it('every description states its cost or that it is free (N7: including webhook writes)', () => {
+    for (const t of tools) {
       expect(t.description, t.name).toMatch(/[Cc]ost|[Ff]ree/);
     }
   });
@@ -222,6 +223,33 @@ describe('lex_get_document', () => {
 });
 
 describe('lex_get_documents_batch / lex_get_metadata / lex_get_document_by_url', () => {
+  it('B1: batch + articleId returns the article text, not an outline', async () => {
+    const { data } = await call('lex_get_documents_batch', { celexNumbers: ['32016R0679', '32018R1725'], articleId: '5' }, () => ({
+      body: { success: true, requested: 2, processed: 2, successful: 2, failed: 0, documents: [fakeDocument(1, 3000), fakeDocument(1, 3000, { celex: '32018R1725' })], errors: [] },
+    }));
+    for (const d of data.documents) {
+      expect(d.content.articles[0].content).toMatch(/^x+/);
+      expect(d.note ?? '').not.toMatch(/Outline only/);
+    }
+  });
+
+  it('B1: batch + include returns those parts', async () => {
+    const { data } = await call('lex_get_documents_batch', { celexNumbers: ['32016R0679'], include: ['articles'] }, () => ({
+      body: { success: true, documents: [fakeDocument(3, 100)], errors: [] },
+    }));
+    expect(data.documents[0].content.articles[0]).toHaveProperty('content');
+  });
+
+  it('N6: batch output stays within the shared maxChars budget', async () => {
+    const docs = Array.from({ length: 40 }, (_, i) => fakeDocument(20, 2000, { celex: `3201${i}R0001` }));
+    const { data } = await call('lex_get_documents_batch', { celexNumbers: docs.map((d) => d.celex), include: ['articles'], maxChars: 20_000 }, () => ({
+      body: { success: true, documents: docs, errors: [] },
+    }));
+    const bodyChars = data.documents.reduce((n: number, d: any) => n + JSON.stringify(d.content ?? {}).length, 0);
+    expect(bodyChars).toBeLessThan(20_000 * 1.6); // JSON overhead aside, no 2,000-char floor × 40
+  });
+
+
   it('batch: normalises CELEX numbers, outlines by default, keeps errors', async () => {
     const { calls, data } = await call('lex_get_documents_batch', { celexNumbers: ['32016r0679', '62018CJ0311'] }, () => ({
       body: {
@@ -304,16 +332,36 @@ describe('lex_semantic_legislation', () => {
     expect(data).not.toHaveProperty('asOfCaveat');
   });
 
-  it('warns when hits could not be resolved to the asOf date', async () => {
-    const { data } = await call('lex_semantic_legislation', { query: 'x', asOf: '2001-01-01' }, () => ({
+  it('S2: groups unresolved hits by reason class with per-class guidance', async () => {
+    const hit = (law_id: string, asOfReason: string) => ({ law_id, article_ref: 'art_1', score: 0.7, asOf: '2019-06-01', asOfResolved: false, asOfReason });
+    const { data } = await call('lex_semantic_legislation', { query: 'x', asOf: '2019-06-01' }, () => ({
       body: {
-        success: true, asOf: '2001-01-01', asOfSummary: { liveFetches: 0, unresolved: 1 },
-        results: [{ law_id: '32016R0679', article_ref: 'art_17', score: 0.7, asOf: '2001-01-01', asOfResolved: false, asOfReason: 'not_yet_adopted' }],
+        success: true, asOf: '2019-06-01', asOfSummary: { liveFetches: 1, unresolved: 4 },
+        results: [
+          hit('32024R1689', 'not_yet_adopted'),
+          hit('32013R0575', 'fetch_pending'),
+          hit('32016R0679', 'insufficient_credits'),
+          hit('32006R1907', 'article_not_in_version'),
+          { law_id: '32019R0001', article_ref: 'art_2', score: 0.8, asOf: '2019-06-01', asOfResolved: true },
+        ],
       },
     }));
-    expect(data.results[0].asOfReason).toBe('not_yet_adopted');
-    expect(data.asOfCaveat).toMatch(/not the version in force on 2001-01-01/);
+    const c = data.asOfCaveat;
+    expect(c.notInForce).toEqual(['32024R1689 art_1 (not_yet_adopted)']);
+    expect(c.retryable).toEqual(['32013R0575 art_1 (fetch_pending)']);
+    expect(c.needsCredits).toEqual(['32016R0679 art_1 (insufficient_credits)']);
+    expect(c.unavailable).toEqual(['32006R1907 art_1 (article_not_in_version)']);
+    expect(c.guidance.join(' ')).toMatch(/not in force on 2019-06-01.*that is the answer/);
+    expect(c.guidance.join(' ')).toMatch(/call again shortly/);
+    expect(c.guidance.join(' ')).toMatch(/tell the user/);
     expect(data).not.toHaveProperty('citing');
+  });
+
+  it('S2: only the classes present are reported', async () => {
+    const { data } = await call('lex_semantic_legislation', { query: 'x', asOf: '2001-01-01' }, () => ({
+      body: { success: true, asOf: '2001-01-01', results: [{ law_id: '32016R0679', article_ref: 'art_17', asOf: '2001-01-01', asOfResolved: false, asOfReason: 'no_longer_in_force' }] },
+    }));
+    expect(Object.keys(data.asOfCaveat).sort()).toEqual(['guidance', 'notInForce', 'note']);
   });
 
   it('without consolidated hits the output has no citing note', async () => {
@@ -498,6 +546,34 @@ describe('webhook tools', () => {
     const { calls, data } = await call('lex_delete_webhook', { id: 'w1' }, () => ({ status: 204 }));
     expect(calls[0].method).toBe('DELETE');
     expect(data).toEqual({ deleted: 'w1' });
+  });
+});
+
+describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
+  it('N3: cited-by no longer claims completeness; points at relationSync', () => {
+    const d = byName.lex_cited_by.description;
+    expect(d).not.toMatch(/are complete/);
+    expect(d).toMatch(/relationSync/);
+    expect(d).toMatch(/refreshed on read/);
+  });
+
+  it('N9: export cost is neutral and the unreliable date filters are gone', () => {
+    const t = byName.lex_export;
+    expect(t.description).not.toMatch(/per row/);
+    expect(Object.keys(t.inputSchema)).not.toContain('dateFrom');
+    expect(Object.keys(t.inputSchema)).not.toContain('dateTo');
+  });
+
+  it('webhook URLs must be public https', () => {
+    expect(byName.lex_create_webhook.description).toMatch(/must be a public https URL/);
+    expect((byName.lex_update_webhook.inputSchema.url as any).description).toMatch(/public https URL/);
+  });
+
+  it('N10: languages are validated without repeating the 24-code enum', () => {
+    const s = z.object(byName.lex_get_document.inputSchema);
+    expect(s.safeParse({ celexNumber: '32016R0679', language: 'hu' }).success).toBe(true);
+    expect(s.safeParse({ celexNumber: '32016R0679', language: 'xx' }).success).toBe(false);
+    expect(s.safeParse({ celexNumber: '32016R0679', acceptLanguages: ['fr', 'zz'] }).success).toBe(false);
   });
 });
 

@@ -7,7 +7,21 @@ export const DEFAULT_BASE_URL = 'https://lex-api.com/api/v1';
  * hard-capped at 90 s server-side, semantic legislation search (with asOf)
  * at 45 s, the citation network at 30 s — so 120 s covers every endpoint.
  */
-export const DEFAULT_TIMEOUT_MS = 120_000;
+export const LONG_TIMEOUT_MS = 120_000;
+/**
+ * Without a progress token the MCP client's own request timeout applies
+ * (the TypeScript SDK default is 60 s; Claude Code: MCP_TOOL_TIMEOUT). Give up
+ * a few seconds earlier so the model gets our actionable timeout message
+ * instead of the client's generic -32001.
+ */
+export const DEFAULT_TIMEOUT_MS = 55_000;
+
+/** Printable ASCII, no spaces — anything else cannot be a LexAPI key (and would end up in an undici error message). */
+const KEY_RE = /^[\x21-\x7e]+$/;
+
+export function isWellFormedKey(key: string): boolean {
+  return KEY_RE.test(key);
+}
 /** A 429 whose Retry-After is longer than this is returned to the model instead of slept on. */
 const MAX_RETRY_AFTER_SLEEP_S = 10;
 
@@ -45,6 +59,8 @@ export interface LexAPIClientOptions {
   fetch?: typeof fetch;
   /** Injected for tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Aborts every request of this client (MCP request cancellation). */
+  signal?: AbortSignal;
 }
 
 export type Query = Record<string, string | number | boolean | string[] | undefined | null>;
@@ -65,15 +81,35 @@ export class LexAPIClient {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly signal?: AbortSignal;
+  private readonly opts: LexAPIClientOptions;
 
   constructor(opts: LexAPIClientOptions) {
-    if (!opts.apiKey || !opts.apiKey.trim()) throw new Error('LexAPIClient: apiKey is required');
-    this.apiKey = opts.apiKey.trim();
+    const key = (opts.apiKey ?? '').trim();
+    if (!key) throw new Error('LexAPI API key is missing.');
+    // Never include the key itself in this message.
+    if (!isWellFormedKey(key)) throw new Error('LexAPI API key contains whitespace or control characters — paste it again as a single line.');
+    this.opts = opts;
+    this.apiKey = key;
+    this.signal = opts.signal;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.maxRetries = opts.maxRetries ?? 1;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetch ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  }
+
+  /** A client for one MCP request: its cancellation signal and timeout. */
+  forCall(call: { signal?: AbortSignal; timeoutMs?: number }): LexAPIClient {
+    return new LexAPIClient({
+      ...this.opts,
+      ...(call.signal ? { signal: call.signal } : {}),
+      ...(call.timeoutMs ? { timeoutMs: call.timeoutMs } : {}),
+    });
+  }
+
+  get timeout(): number {
+    return this.timeoutMs;
   }
 
   /** Low-level request. Throws LexAPIError (HTTP error) or LexAPITransportError. */
@@ -108,23 +144,28 @@ export class LexAPIClient {
           method,
           headers,
           ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: combineSignals(this.signal, AbortSignal.timeout(this.timeoutMs)),
         });
       } catch (err) {
+        if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
         if (!timedOut && canRetry && attempt < this.maxRetries) {
           attempt++;
           await this.sleep(500 * 2 ** attempt);
           continue;
         }
-        // Never echo the request (the key travels in its headers); report
-        // only the runtime's own reason ("fetch failed", ...).
+        // Never forward the runtime's message: undici quotes header values
+        // (the key) in some of them. Report only the error class / errno.
         const reason = timedOut
           ? `no response within ${Math.round(this.timeoutMs / 1000)} s`
-          : err instanceof Error ? err.message : String(err);
+          : networkReason(err);
         throw new LexAPITransportError(reason, timedOut);
       }
 
+      if (this.signal?.aborted) {
+        await discard(res);
+        throw new LexAPITransportError('the request was cancelled by the client', false, true);
+      }
       if (res.status === 429 && canRetry && attempt < this.maxRetries) {
         const wait = retryAfterSeconds(res);
         if (wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S) {
@@ -234,6 +275,28 @@ export class LexAPIClient {
   deleteWebhook(id: string) { return this.request('DELETE', `/webhooks/${enc(id)}`, { retry: false }); }
   // A retried test would POST to the user's endpoint twice.
   testWebhook(id: string) { return this.request('POST', `/webhooks/${enc(id)}/test`, { retry: false }); }
+}
+
+function combineSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
+  if (!a) return b;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([a, b]);
+  const c = new AbortController();
+  const abort = () => c.abort();
+  if (a.aborted || b.aborted) c.abort();
+  a.addEventListener('abort', abort, { once: true });
+  b.addEventListener('abort', abort, { once: true });
+  return c.signal;
+}
+
+/** A key-free description of a network failure: errno code if there is one, else the error class. */
+function networkReason(err: unknown): string {
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+  const code = cause && typeof cause === 'object' && typeof (cause as { code?: unknown }).code === 'string'
+    ? (cause as { code: string }).code
+    : undefined;
+  if (code && /^[A-Z_]+$/.test(code)) return `network error ${code}`;
+  if (err instanceof TypeError && /invalid header/i.test(err.message)) return 'invalid request header (check the API key)';
+  return `network error (${err instanceof Error ? err.name : 'unknown'})`;
 }
 
 function enc(s: string): string {

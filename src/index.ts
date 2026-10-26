@@ -15,7 +15,15 @@ if (!apiKey) {
 }
 
 const readOnly = readOnlyFromEnv();
-const server = createLexServer(clientFromEnv(apiKey), { readOnly });
+let client;
+try {
+  client = clientFromEnv(apiKey);
+} catch (err) {
+  // The message never contains the key (see LexAPIClient).
+  console.error(`[${PACKAGE_NAME}] ${err instanceof Error ? err.message : 'invalid configuration'} (LEXAPI_API_KEY)`);
+  process.exit(1);
+}
+const server = createLexServer(client, { readOnly });
 await server.connect(new StdioServerTransport());
 console.error(
   `[${PACKAGE_NAME}] v${PACKAGE_VERSION} ready · ${selectTools({ readOnly }).length} tools${readOnly ? ' (read-only)' : ''}`,

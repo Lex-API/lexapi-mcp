@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
+import { isWellFormedKey } from './client.js';
 import { clientFromEnv, createLexServer, PACKAGE_NAME, readOnlyFromEnv } from './server.js';
 import { selectTools } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
@@ -21,6 +22,20 @@ export function extractApiKey(req: IncomingMessage): string | null {
   const x = req.headers['x-api-key'];
   if (typeof x === 'string' && x.trim()) return x.trim();
   return null;
+}
+
+/**
+ * Origin validation (MCP Streamable HTTP: servers MUST validate Origin, a
+ * DNS-rebinding defence). Requests without an Origin header — every
+ * non-browser MCP client — are allowed. A browser request is allowed only
+ * when its Origin is listed in LEXAPI_MCP_ALLOWED_ORIGINS (comma-separated;
+ * "*" allows any). Auth is a bearer key with no ambient credentials, so this
+ * is defence in depth, not the access control.
+ */
+export function originAllowed(origin: string | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!origin) return true;
+  const list = (env.LEXAPI_MCP_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.includes('*') || list.includes(origin);
 }
 
 class BodyTooLargeError extends Error {}
@@ -61,7 +76,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   }
 
   const apiKey = extractApiKey(req);
-  if (!apiKey) {
+  if (!apiKey || !isWellFormedKey(apiKey)) {
     writeJson(res, 401, {
       error: {
         code: 'unauthorized',
@@ -76,7 +91,12 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   try {
     body = await readJsonBody(req);
   } catch (err) {
-    if (err instanceof BodyTooLargeError) jsonRpcError(res, 413, -32600, 'Request body too large');
+    if (err instanceof BodyTooLargeError) {
+      // The rest of the body is still on the socket: close it, or the next
+      // keep-alive request on this connection would read garbage.
+      res.on('finish', () => req.destroy());
+      jsonRpcError(res, 413, -32600, 'Request body too large', { Connection: 'close' });
+    }
     else jsonRpcError(res, 400, -32700, 'Parse error: body is not valid JSON');
     return;
   }
@@ -100,11 +120,15 @@ export function createHttpServer(): HttpServer {
     try {
       const path = (req.url ?? '/').split('?')[0];
 
-      // CORS: browser-based MCP clients. The key is a bearer token (no
-      // cookies), so a wildcard origin does not expose ambient credentials.
+      const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+      if (!originAllowed(origin)) {
+        writeJson(res, 403, { error: { code: 'origin_not_allowed', message: `Origin ${origin} is not allowed. Browser clients must be listed in LEXAPI_MCP_ALLOWED_ORIGINS.` } });
+        return;
+      }
+      // CORS for allowed browser origins (echoed, never a wildcard with a real origin).
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
-          'Access-Control-Allow-Origin': '*',
+          ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
           'Access-Control-Allow-Methods': 'POST, OPTIONS',
           'Access-Control-Allow-Headers': 'Authorization, X-API-Key, Content-Type, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID',
           'Access-Control-Max-Age': '86400',
@@ -112,7 +136,10 @@ export function createHttpServer(): HttpServer {
         res.end();
         return;
       }
-      res.setHeader('Access-Control-Allow-Origin', '*');
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+      }
       res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, Mcp-Protocol-Version, WWW-Authenticate');
 
       if (path === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {

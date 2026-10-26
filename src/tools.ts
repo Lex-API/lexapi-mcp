@@ -68,20 +68,31 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const celex = (what = 'CELEX number') =>
   z.string().trim().regex(CELEX_RE, `${what} must look like 32016R0679, 62018CJ0311, 02016R0679-20180524 or 32013R0952R(04)`)
-    .describe(`${what}, e.g. 32016R0679 (GDPR), 62018CJ0311 (Schrems II), 02016R0679-20180524 (a consolidated version).`);
+    .describe(`${what}, e.g. 32016R0679.`);
+// The 24-code enum used to be repeated in ~10 tools (~3k tokens of tools/list).
+// A pattern + refine keeps the validation and lists the codes nowhere.
+const LANG_SET = new Set<string>(LANGUAGES);
+const lang = (d = 'Language: ISO 639-1 code of an official EU language (en, fr, de, …; default en).') =>
+  z.string().regex(/^[a-z]{2}$/).refine((v) => LANG_SET.has(v), 'not an official EU language code').describe(d);
 const isoDate = (d: string) => z.string().regex(DATE_RE, 'use YYYY-MM-DD').describe(d);
-const oneOrMany = <T extends readonly [string, ...string[]]>(values: T, d: string) =>
-  z.union([z.enum(values), z.array(z.enum(values)).min(1)]).describe(d);
+// One value or a list; the allowed values are listed once, in the description
+// (an enum inside a string|array union would print them twice).
+const oneOrMany = <T extends readonly [string, ...string[]]>(values: T, d: string) => {
+  const set = new Set<string>(values);
+  return z.union([z.string(), z.array(z.string()).min(1)])
+    .refine((v) => (Array.isArray(v) ? v : [v]).every((x) => set.has(x)), `allowed: ${values.join(', ')}`)
+    .describe(`${d} One or a list of: ${values.join(', ')}.`);
+};
 
 const view = z.enum(['auto', 'outline', 'full']).default('auto').describe(
-  'auto (default): the whole body when it fits maxChars, otherwise an outline (article list, section tree, counts). outline: always the outline. full: the body up to maxChars, then a note with the offset to continue from.',
+  'auto: the body if it fits maxChars, else an outline. full: body up to maxChars, then offset to continue.',
 );
 const maxChars = (def: number) => z.number().int().min(2000).max(200_000).default(def)
-  .describe(`Character budget for returned text (default ${def}, ≈${Math.round(def / 4000)}k tokens).`);
+  .describe(`Text budget in characters (default ${def}).`);
 const offset = z.number().int().min(0).optional()
-  .describe('Skip this many body items (articles, recitals, paragraphs, … in order) — to continue after a truncated response.');
+  .describe('Continue after a truncated response (value given in its note).');
 const include = z.array(z.enum(CONTENT_PARTS)).min(1).optional().describe(
-  'Return only these parts. "paragraphs" holds judgment grounds (case law) and the text of documents without articles; "fullText" duplicates the structured parts.',
+  'Only these parts. "paragraphs" = judgment grounds / text of documents without articles.',
 );
 
 export function normCelex(v: string): string {
@@ -102,7 +113,7 @@ export interface ToolDef {
   description: string;
   inputSchema: z.ZodRawShape;
   annotations: ToolAnnotations;
-  /** Changes account state (webhooks). Hidden when LEXAPI_MCP_READ_ONLY is set. */
+  /** Not read-only (webhooks, citation extraction). Hidden when LEXAPI_MCP_READ_ONLY is set. */
   write?: boolean;
   handler: (args: any, client: LexAPIClient) => Promise<unknown>;
 }
@@ -141,11 +152,18 @@ function noteArticleMiss(a: DocArgs, shaped: Record<string, unknown>): Record<st
   };
 }
 
+/**
+ * Shaping options. An articleId (or include) means "read these parts": the
+ * selected parts are returned (paged by maxChars/offset), never re-outlined —
+ * otherwise a large article would bounce the model back to the outline it
+ * just used.
+ */
 function contentOpts(a: DocArgs, budget?: number) {
+  const include = a.include?.length ? a.include : a.articleId ? ['articles'] : undefined;
   return {
-    view: a.view ?? 'auto',
+    view: a.view,
     maxChars: budget ?? a.maxChars ?? 40_000,
-    include: a.include,
+    include,
     offset: a.offset,
   };
 }
@@ -180,7 +198,7 @@ export const tools: ToolDef[] = [
     name: 'lex_search',
     title: 'Search EUR-Lex',
     description:
-      'Structured EUR-Lex search: keyword text plus filters (dates, document type, author, procedure, collection). Returns CELEX numbers, titles, types and dates — fetch a hit with lex_get_document. Keyword matching is literal: use 1–3 distinctive terms; for concept questions ("rules on X") use lex_semantic_legislation / lex_semantic_case_law instead. Cost: 3 credits per result page (maxPages, ~10 results each); unfetched pages are refunded. Identical searches within 60 min come from a cache at the same price.',
+      'Structured EUR-Lex search: keywords plus filters (dates, type, author, procedure, collection) → CELEX numbers, titles, dates; read a hit with lex_get_document. Matching is literal: use 1–3 distinctive terms; for concept questions use lex_semantic_legislation / lex_semantic_case_law. Cost: 3 credits per result page (~10 results; unfetched pages refunded).',
     inputSchema: {
       query: z.string().max(1000).optional().describe('Search text. Quotes force an exact phrase. "*" = no text constraint (filter-only search).'),
       textScope: z.enum(['title', 'text', 'title-text', 'any']).optional().describe('Where the text must match (API default title-text).'),
@@ -193,7 +211,7 @@ export const tools: ToolDef[] = [
       procedure: oneOrMany(PROCEDURES, 'Legislative procedure(s).').optional(),
       domain: z.enum(['EU_LAW', 'NATIONAL_LAW', 'ALL']).optional().describe('EUR-Lex collection.'),
       subdomain: oneOrMany(SUBDOMAINS, 'Sub-collection(s), e.g. "case-law", "legislation", "consolidated".').optional(),
-      language: z.enum(LANGUAGES).optional().describe('Result language (default en).'),
+      language: lang('Result language (default en).').optional(),
       maxPages: z.number().int().min(1).max(100).default(1).describe('Result pages to fetch (3 credits each; clamped to the plan: FREE 1, STARTER 5, PROFESSIONAL 20, higher 100). Raise it when a tight date filter reports postFilteredBy "date".'),
       fresh: z.boolean().optional().describe('Bypass the 60-minute result cache.'),
     },
@@ -215,7 +233,7 @@ export const tools: ToolDef[] = [
       author: z.enum(AUTHORS).optional(),
       domain: z.enum(['EU_LAW', 'NATIONAL_LAW', 'ALL']).optional(),
       subdomain: z.enum(SUBDOMAINS).optional(),
-      language: z.enum(LANGUAGES).optional().describe('Keep documents available in this language (default en).'),
+      language: lang('Keep documents available in this language (default en).').optional(),
       limit: z.number().int().min(1).max(500).default(20).describe('Max results (each 10 cost 3 credits when filtered).'),
     },
     annotations: { ...READ, idempotentHint: false },
@@ -245,11 +263,11 @@ export const tools: ToolDef[] = [
     name: 'lex_get_document',
     title: 'Fetch an EU document by CELEX',
     description:
-      'A parsed EU document: metadata plus the body (articles, recitals, judgment paragraphs, annexes, tables). Large documents come back as an outline first — then fetch one article with articleId ("17", "art_6a") or specific parts with include. If the text is not published (content: null), textAvailability says why and may point to the latest consolidated version. Consolidated CELEXes (0…-YYYYMMDD) are labelled: they are not the authentic text — cite the base act. Cost: 1 credit from the LexAPI corpus, 4 via the Publications Office, 5 for a live EUR-Lex fetch (each call is charged, including follow-ups).',
+      'A parsed EU document by CELEX: metadata plus body (articles, recitals, judgment paragraphs, annexes). Large documents return an outline first; then read an article with articleId or parts with include. content: null means no published text — textAvailability says why and may point to the latest consolidated version. Consolidated CELEXes (0…-YYYYMMDD) are labelled: not the authentic text, cite the base act. Cost: 1 credit from the corpus, 4 via the Publications Office, 5 live (every call is charged).',
     inputSchema: {
       celexNumber: celex(),
-      language: z.enum(LANGUAGES).optional().describe('Language of the whole document (default en). Falls back to English, labelled languageFallback, when EUR-Lex lacks it.'),
-      acceptLanguages: z.union([z.array(z.enum(LANGUAGES)).min(1), z.literal('any')]).optional().describe('Fallback languages to serve when the requested one has no text (e.g. ["fr"] for General Court decisions), or "any".'),
+      language: lang('Language of the whole document (default en). Falls back to English, labelled languageFallback, when EUR-Lex lacks it.').optional(),
+      acceptLanguages: z.union([z.array(lang()).min(1), z.literal('any')]).optional().describe('Fallback languages to serve when the requested one has no text (e.g. ["fr"] for General Court decisions), or "any".'),
       articleId: z.string().trim().min(1).max(40).optional().describe('Return only this article: "17", "art_17", "Article 17", "6a".'),
       include,
       view,
@@ -279,11 +297,11 @@ export const tools: ToolDef[] = [
       'Fetch up to 50 documents by CELEX in one call (batch size is clamped to the plan: FREE 1, STARTER 5, PROFESSIONAL 20, higher 50). Per-document failures are listed in errors; documents without published text stay in documents with textAvailability. Same per-document cost as lex_get_document (1 / 4 / 5 credits); trimmed items are not charged.',
     inputSchema: {
       celexNumbers: z.array(celex()).min(1).max(50).describe('CELEX numbers.'),
-      language: z.enum(LANGUAGES).optional(),
-      acceptLanguages: z.union([z.array(z.enum(LANGUAGES)).min(1), z.literal('any')]).optional(),
+      language: lang().optional(),
+      acceptLanguages: z.union([z.array(lang()).min(1), z.literal('any')]).optional(),
       articleId: z.string().trim().min(1).max(40).optional().describe('Return only this article of each document.'),
       include,
-      view: z.enum(['auto', 'outline', 'full']).default('outline').describe('outline (default) | auto | full — applied per document.'),
+      view: z.enum(['auto', 'outline', 'full']).optional().describe('Per document. Default: outline, except when articleId or include is given (then those parts are returned).'),
       maxChars: maxChars(60_000).describe('Character budget shared by all documents.'),
     },
     annotations: READ,
@@ -297,7 +315,9 @@ export const tools: ToolDef[] = [
       }));
       const b = res.body;
       const docs = Array.isArray(b.documents) ? b.documents : [];
-      const per = Math.max(2000, Math.floor((a.maxChars ?? 60_000) / Math.max(1, docs.length)));
+      // The budget is shared: per-document shares never add up past maxChars.
+      const per = Math.max(500, Math.floor((a.maxChars ?? 60_000) / Math.max(1, docs.length)));
+      const batchView: View = a.view ?? (a.articleId || a.include?.length ? 'auto' : 'outline');
       return withNotice(res, compact({
         requested: b.requested,
         processed: b.processed,
@@ -305,7 +325,7 @@ export const tools: ToolDef[] = [
         failed: b.failed,
         textUnavailable: b.textUnavailable,
         trimmedReason: b.trimmed ? b.trimmedReason : undefined,
-        documents: docs.map((d) => shapeDocument(d, {}, contentOpts({ ...a, offset: undefined }, per))),
+        documents: docs.map((d) => shapeDocument(d, {}, contentOpts({ ...a, view: batchView, offset: undefined }, per))),
         errors: b.errors,
       }));
     },
@@ -365,7 +385,7 @@ export const tools: ToolDef[] = [
       "Every text change LexAPI observed on a document, newest first. These are snapshots of the document as LexAPI fetched it — NOT the law in force on a date (for that use lex_semantic_legislation with asOf, or a consolidated CELEX). History starts when the document entered the corpus. Cost: 1 credit.",
     inputSchema: {
       celexNumber: celex(),
-      language: z.enum(LANGUAGES).optional(),
+      language: lang().optional(),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -399,7 +419,7 @@ export const tools: ToolDef[] = [
       celexNumber: celex(),
       version: z.number().int().min(1).optional().describe('Snapshot number (from lex_document_versions).'),
       date: isoDate('Return the snapshot current on this date (end of day UTC).').optional(),
-      language: z.enum(LANGUAGES).optional(),
+      language: lang().optional(),
       include: z.array(z.enum(CONTENT_PARTS)).min(1).optional(),
       view,
       maxChars: maxChars(40_000),
@@ -438,10 +458,10 @@ export const tools: ToolDef[] = [
     name: 'lex_semantic_legislation',
     title: 'Semantic search over EU legislation',
     description:
-      'Find EU legislation articles by meaning ("obligations of providers of high-risk AI systems"). Returns article-level hits: law_id (CELEX), article_ref (usable as articleId in lex_get_document), law_title, score, snippet. Some hits are consolidated texts (consolidated: true, with consolidatedNote and baseCelex): quote them, but cite the authentic act (baseCelex) as published in the Official Journal. Pass asOf to get the text in force on a past date. Cost: 5 credits; with asOf, plus up to 5 for each in-force version LexAPI has to fetch live (by default at most 3 per call; failed fetches are free).',
+      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref (use as articleId in lex_get_document), law_title, score, snippet. Consolidated hits (consolidated: true) are not authentic: quote them, cite baseCelex. asOf gives the text in force on a past date. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
     inputSchema: {
       query: z.string().trim().min(1).max(1000).describe('Natural-language description of the provision you are looking for.'),
-      asOf: isoDate('The law as in force on this date (YYYY-MM-DD, 1952-01-01 … today). Use when the question is about a past date ("in 2019", "when the contract was signed"): each hit then carries the article version in force that day (asOfResolved: true, asOfVersion says which version). Hits that cannot be resolved keep the CURRENT text with asOfResolved: false and an asOfReason — never present those as the law on that date. Omit for the current law.').optional(),
+      asOf: isoDate('The law as in force on this date (YYYY-MM-DD, 1952-01-01 to today) — use for questions about a past date. Hits then carry the version in force (asOfResolved: true, asOfVersion). Unresolved hits keep the CURRENT text with an asOfReason; follow asOfCaveat. Omit for current law.').optional(),
       limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap: FREE 10, STARTER 20, higher 50). Merged consolidated/base duplicates can make a page shorter.'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor. Default ≈0.7 server-side; lower (0.5) when you got fewer hits than limit, 0 disables it.'),
       language: z.enum(SEMANTIC_LANGUAGES).optional().describe('Preferred language of the text (default en); acts without it come back in another language, labelled.'),
@@ -505,7 +525,7 @@ export const tools: ToolDef[] = [
     name: 'lex_cited_by',
     title: 'Documents citing a CELEX',
     description:
-      'Inbound citations: documents that cite, amend, correct, repeal, implement or are based on this act, with the edge type. For legislation the amendment / corrigendum / repeal edges come from the Publications Office (refreshed weekly) and are complete; other edge types cover documents LexAPI has extracted. Cost: 1 credit.',
+      'Inbound citations: documents that cite, amend, correct, repeal, implement or are based on this act, with the edge type. For legislation, amendment / corrigendum / repeal edges are read from the Publications Office (Cellar) and refreshed on read when older than 7 days; if that refresh does not finish in ~2.5 s, relationSync.status is "pending" (or "skipped") and the stored edges are served — check relationSync before calling the list complete. Other edge types cover only documents LexAPI has extracted. Cost: 1 credit.',
     inputSchema: {
       celexNumber: celex(),
       citationType: z.enum(CITATION_TYPES).optional().describe('Only this edge type (e.g. "amendment" for the amending acts).'),
@@ -623,6 +643,8 @@ export const tools: ToolDef[] = [
       'Read a document\'s EUR-Lex notice and add its outbound citations to the graph, so lex_cites / lex_related work for it. Idempotent: returns alreadyExtracted when done before. Cost: 5 credits (1 when already extracted).',
     inputSchema: { celexNumber: celex() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    // Writes to the shared citation graph and spends credits: hidden in read-only mode like the other writes.
+    write: true,
     handler: async (a, client) => {
       const res = await client.extractCitations({ celexNumber: normCelex(a.celexNumber) });
       const b = stripEnvelope(res.body);
@@ -640,14 +662,12 @@ export const tools: ToolDef[] = [
     name: 'lex_export',
     title: 'Export corpus rows',
     description:
-      'Rows from the LexAPI corpus matching filters — e.g. documents of a type fetched since a date. BUSINESS plans and above (403 otherwise). Cost: 1 credit per row, so keep limit small. Bulk export for ML training needs a separate licence (Terms §6).',
+      'Rows from the LexAPI corpus matching filters — e.g. documents of a type fetched since a date. BUSINESS plans and above (403 otherwise). Cost: metered from the credit pool — see the LexAPI export pricing (https://lex-api.com/docs); keep limit small. Bulk export for ML training needs a separate licence (Terms §6).',
     inputSchema: {
       documentType: z.array(z.string().min(1)).min(1).optional().describe('Stored document-type labels, matched exactly, e.g. ["Regulation","Directive"].'),
       author: z.array(z.string().min(1)).min(1).optional().describe('Stored author labels, matched exactly.'),
       subdomain: z.array(z.enum(['treaties', 'international', 'legislation', 'internal', 'preparatory', 'case-law', 'national-transposition', 'national-case-law', 'questions', 'consolidated'])).min(1).optional(),
-      language: z.enum(LANGUAGES).optional(),
-      dateFrom: isoDate('Document date from.').optional(),
-      dateTo: isoDate('Document date to.').optional(),
+      language: lang().optional(),
       fetchedSince: z.string().datetime({ offset: true }).optional().describe('Only rows (re)fetched at or after this ISO timestamp.'),
       includeContent: z.boolean().default(false).describe('Include each row\'s parsed body (bounded by maxChars).'),
       includeStubs: z.boolean().optional().describe('Also rows whose text EUR-Lex does not publish.'),
@@ -661,8 +681,6 @@ export const tools: ToolDef[] = [
         author: a.author,
         subdomain: a.subdomain,
         language: a.language,
-        dateFrom: a.dateFrom,
-        dateTo: a.dateTo,
         fetchedSince: a.fetchedSince,
         includeContent: a.includeContent ? 'true' : 'false',
         includeStubs: a.includeStubs ? 'true' : undefined,
@@ -677,7 +695,7 @@ export const tools: ToolDef[] = [
         else if (isObj(l) && '_done' in l) done = l._done;
         else rows.push(l);
       }
-      const per = Math.max(2000, Math.floor((a.maxChars ?? 40_000) / Math.max(1, rows.length)));
+      const per = Math.max(500, Math.floor((a.maxChars ?? 40_000) / Math.max(1, rows.length)));
       return compact({
         totalMatching: isObj(meta) ? meta.totalMatching : res.headers['x-export-total'],
         returned: rows.length,
@@ -743,10 +761,10 @@ export const tools: ToolDef[] = [
     name: 'lex_create_webhook',
     title: 'Create a webhook',
     description:
-      'Subscribe an HTTPS URL to (a) new EUR-Lex documents matching searchCriteria and/or (b) changes to watched acts (watchCelex: amendments, corrigenda, repeals, new consolidated versions). Checked hourly; deliveries are free and HMAC-signed. The signing secret is returned ONLY in this response — tell the user to store it. Plan limits apply (FREE has no webhooks). Confirm the URL and criteria with the user first.',
+      'Subscribe a URL (must be a public https URL) to (a) new EUR-Lex documents matching searchCriteria and/or (b) changes to watched acts (watchCelex: amendments, corrigenda, repeals, new consolidated versions). Checked hourly; deliveries are free and HMAC-signed. The signing secret is returned ONLY in this response — tell the user to store it. Plan limits apply (FREE has no webhooks). Confirm the URL and criteria with the user first. Free.',
     inputSchema: {
       name: z.string().trim().min(1).max(200).describe('Label.'),
-      url: z.string().trim().url().describe('HTTPS endpoint that receives the POSTs.'),
+      url: z.string().trim().url().describe('Must be a public https URL; it receives the POSTs.'),
       searchCriteria: z.object({
         query: z.string().optional().describe('Words that must all appear in the title (whole words; 4+ characters match word starts; trailing * for prefixes).'),
         documentType: z.union([z.string(), z.array(z.string())]).optional(),
@@ -784,11 +802,11 @@ export const tools: ToolDef[] = [
     name: 'lex_update_webhook',
     title: 'Update a webhook',
     description:
-      'Change a webhook\'s name, URL, searchCriteria (null removes them), watch list (replaces the whole list) or status. status ACTIVE re-enables a PAUSED or FAILED webhook and re-queues its recent failed deliveries; PAUSED stops deliveries.',
+      'Change a webhook\'s name, URL, searchCriteria (null removes them), watch list (replaces the whole list) or status. status ACTIVE re-enables a PAUSED or FAILED webhook and re-queues its recent failed deliveries; PAUSED stops deliveries. Free.',
     inputSchema: {
       id: z.string().trim().min(1).max(64),
       name: z.string().trim().min(1).max(200).optional(),
-      url: z.string().trim().url().optional(),
+      url: z.string().trim().url().optional().describe('Must be a public https URL.'),
       searchCriteria: z.union([z.record(z.string(), z.unknown()), z.null()]).optional().describe('New criteria (same shape as lex_create_webhook), or null to remove.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional(),
       status: z.enum(['ACTIVE', 'PAUSED']).optional(),
@@ -809,7 +827,7 @@ export const tools: ToolDef[] = [
   {
     name: 'lex_delete_webhook',
     title: 'Delete a webhook',
-    description: 'Permanently delete a webhook and its delivery history. Cannot be undone — confirm with the user first.',
+    description: 'Permanently delete a webhook and its delivery history. Cannot be undone — confirm with the user first. Free.',
     inputSchema: { id: z.string().trim().min(1).max(64) },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     write: true,
@@ -822,7 +840,7 @@ export const tools: ToolDef[] = [
   {
     name: 'lex_test_webhook',
     title: 'Send a test delivery',
-    description: 'POST a signed webhook.test payload to the webhook URL now and report the endpoint\'s response. Use to check an endpoint is reachable and verifies signatures.',
+    description: 'POST a signed webhook.test payload to the webhook URL now and report the endpoint\'s response. Use to check an endpoint is reachable and verifies signatures. Free.',
     inputSchema: { id: z.string().trim().min(1).max(64) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     write: true,

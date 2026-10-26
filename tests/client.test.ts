@@ -116,7 +116,56 @@ describe('LexAPIClient request building', () => {
   });
 
   it('rejects an empty key', () => {
-    expect(() => new LexAPIClient({ apiKey: '  ' })).toThrow(/apiKey is required/);
+    expect(() => new LexAPIClient({ apiKey: '  ' })).toThrow(/API key is missing/);
+  });
+
+  it('S4: rejects a malformed key without echoing it', () => {
+    let msg = '';
+    try { new LexAPIClient({ apiKey: 'lex_SECRET123\nlex_other' }); } catch (e) { msg = (e as Error).message; }
+    expect(msg).toMatch(/whitespace or control characters/);
+    expect(msg).not.toContain('SECRET123');
+  });
+
+  it('S4: never forwards the runtime error text (undici quotes header values)', async () => {
+    const client = new LexAPIClient({
+      apiKey: 'lex_ok',
+      fetch: (async () => { throw new TypeError('Headers.append: "lex_ok_SECRET" is an invalid header value.'); }) as typeof fetch,
+      sleep: async () => {},
+    });
+    const err = await client.info().catch((e) => e);
+    expect(describeError(err)).not.toContain('SECRET');
+    expect(describeError(err)).toMatch(/invalid request header/);
+    const refused = new LexAPIClient({
+      apiKey: 'lex_ok',
+      fetch: (async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); }) as typeof fetch,
+      sleep: async () => {},
+    });
+    expect(describeError(await refused.info().catch((e) => e))).toMatch(/network error ECONNREFUSED/);
+  });
+
+  it('S3: the call signal aborts the upstream request and is not retried', async () => {
+    const ctl = new AbortController();
+    let calls = 0;
+    const base = new LexAPIClient({
+      apiKey: 'lex_ok',
+      fetch: ((_u: unknown, init: RequestInit) => {
+        calls++;
+        return new Promise((_r, rej) => init.signal!.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+      }) as typeof fetch,
+      sleep: async () => {},
+    });
+    const p = base.forCall({ signal: ctl.signal }).info().catch((e) => e);
+    ctl.abort();
+    const err = await p;
+    expect(err).toBeInstanceOf(LexAPITransportError);
+    expect(err.cancelled).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it('S3: default timeout stays under the 60 s MCP client default; forCall overrides it', () => {
+    const c = new LexAPIClient({ apiKey: 'lex_ok' });
+    expect(c.timeout).toBeLessThan(60_000);
+    expect(c.forCall({ timeoutMs: 120_000 }).timeout).toBe(120_000);
   });
 });
 

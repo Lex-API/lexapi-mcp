@@ -27,7 +27,7 @@ export class LexAPIError extends Error {
 
 /** Raised for network failures / timeouts before any HTTP status arrived. */
 export class LexAPITransportError extends Error {
-  constructor(message: string, public readonly timedOut: boolean) {
+  constructor(message: string, public readonly timedOut: boolean, public readonly cancelled = false) {
     super(message);
     this.name = 'LexAPITransportError';
   }
@@ -82,8 +82,9 @@ function detailsLine(details: unknown): string {
  */
 export function describeError(err: unknown): string {
   if (err instanceof LexAPITransportError) {
+    if (err.cancelled) return 'Cancelled: the client cancelled this request before LexAPI answered.';
     return err.timedOut
-      ? `LexAPI did not answer in time (${err.message}). Nothing was returned; the call is safe to retry once. If it keeps timing out, the upstream (EUR-Lex) may be slow — try again later or narrow the request.`
+      ? `LexAPI did not answer in time (${err.message}). Live EUR-Lex fetches can take longer than an MCP client waits; the call is safe to retry once, and a repeat may be served from the LexAPI corpus. If it keeps timing out, narrow the request (fewer pages, a smaller limit) or raise the client's tool timeout (Claude Code: MCP_TOOL_TIMEOUT) and LEXAPI_TIMEOUT_MS.`
       : `Could not reach LexAPI (${err.message}). Check network access to lex-api.com (or LEXAPI_BASE_URL) and retry.`;
   }
   if (!(err instanceof LexAPIError)) {
@@ -91,7 +92,7 @@ export function describeError(err: unknown): string {
     return `Tool execution failed: ${message}`;
   }
 
-  const head = `LexAPI error ${err.status} (${err.code}): ${err.message}.`;
+  const head = `LexAPI error ${err.status} (${err.code}): ${err.message.trim().replace(/[.\s]+$/, '')}.`;
   const d = (err.details && typeof err.details === 'object' && !Array.isArray(err.details))
     ? err.details as Record<string, unknown>
     : undefined;
@@ -118,7 +119,19 @@ export function describeError(err: unknown): string {
       return `${head} The account's current state does not allow this action; tell the user (it is not fixed by retrying).`;
     case 429: {
       const wait = err.retryAfterSeconds;
-      return `${head} Rate limit reached (per-minute limit of the API key, or the daily quota on legacy plans).${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
+      const resetsAt = d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined;
+      // Per-minute limiter: Retry-After header / body retryAfter. The legacy
+      // quotas (daily calls, monthly semantic searches) send neither — only
+      // usage.resetsAt — and retrying them every minute is pointless.
+      if (wait === undefined && (resetsAt || /quota/i.test(`${err.code} ${err.message}`))) {
+        const which = /semantic/i.test(`${err.code} ${err.message}`)
+          ? 'the monthly semantic-search quota of this (legacy) plan'
+          : /daily/i.test(`${err.code} ${err.message}`)
+            ? 'the daily call quota of this (legacy) plan'
+            : 'a usage quota of this plan';
+        return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''}. Do not retry before then — tell the user. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
+      }
+      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
     }
     case 502:
       return `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;

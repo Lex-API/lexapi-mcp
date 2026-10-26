@@ -34,13 +34,13 @@
         },
         {
           "name": "LEXAPI_MCP_READ_ONLY",
-          "description": "Set to true to hide the tools that change account state (webhook create/update/delete/test).",
+          "description": "Set to true to hide every non-read-only tool (webhook create/update/delete/test, citation extraction).",
           "isRequired": false,
           "isSecret": false
         },
         {
           "name": "LEXAPI_TIMEOUT_MS",
-          "description": "Per-request timeout in milliseconds (default 120000).",
+          "description": "Per-request timeout in milliseconds (default 55000; 120000 when the client sends a progress token).",
           "isRequired": false,
           "isSecret": false
         }

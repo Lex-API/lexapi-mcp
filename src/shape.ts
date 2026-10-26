@@ -115,11 +115,12 @@ export function shapeMetadata(doc: Obj, headers: LexResponse['headers'] = {}): O
 export type View = 'auto' | 'outline' | 'full';
 
 export interface ContentOptions {
-  view: View;
+  /** Default 'auto'. 'outline' only when the caller asked for it explicitly. */
+  view?: View;
   maxChars: number;
   /** Parts the caller asked for explicitly (API `include`); undefined = all. */
   include?: string[];
-  /** Skip this many items (across parts, in order) — paging after truncation. */
+  /** Skip this many items (across parts, in order) — paging after truncation. In outline view: articles. */
   offset?: number;
 }
 
@@ -128,14 +129,41 @@ type Part = (typeof PART_ORDER)[number];
 
 interface Item { part: Part; value: unknown; label: string }
 
-function itemsOf(content: Obj, parts: readonly Part[]): Item[] {
+/** Split a long string into pieces of at most `max` chars, preferring line / word boundaries. */
+function splitText(t: string, max: number): string[] {
+  if (t.length <= max) return [t];
+  const out: string[] = [];
+  let rest = t;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf('\n', max);
+    if (cut < max * 0.5) cut = rest.lastIndexOf(' ', max);
+    if (cut < max * 0.5) cut = max;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\s+/, '');
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+/**
+ * Body items in reading order. Any item whose text is longer than `chunk`
+ * is split into consecutive pieces (labelled "part j/k"), so `offset` can
+ * page through a giant annex or a fullText without blank lines.
+ */
+function itemsOf(content: Obj, parts: readonly Part[], chunk: number): Item[] {
   const items: Item[] = [];
   for (const part of parts) {
     const v = content[part];
     if (part === 'fullText') {
       if (typeof v === 'string' && v.trim()) {
-        v.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean)
-          .forEach((block, i) => items.push({ part, value: block, label: `fullText block ${i + 1}` }));
+        v.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean).forEach((block, i) => {
+          const pieces = splitText(block, chunk);
+          pieces.forEach((piece, j) => items.push({
+            part,
+            value: piece,
+            label: `fullText block ${i + 1}${pieces.length > 1 ? ` part ${j + 1}/${pieces.length}` : ''}`,
+          }));
+        });
       }
       continue;
     }
@@ -146,7 +174,18 @@ function itemsOf(content: Obj, parts: readonly Part[]): Item[] {
         : part === 'recitals' || part === 'paragraphs' ? `${part.slice(0, -1)} ${e.number ?? i + 1}`
           : part === 'annexes' ? `annex: ${truncate(str(e.title), 60) ?? `#${i + 1}`}`
             : `${part.slice(0, -1)} #${i + 1}`;
-      items.push({ part, value: entry, label });
+      const key = typeof e.content === 'string' ? 'content' : typeof e.text === 'string' ? 'text' : undefined;
+      const text = key ? (e[key] as string) : undefined;
+      if (key && text && text.length > chunk) {
+        const pieces = splitText(text, chunk);
+        pieces.forEach((piece, j) => items.push({
+          part,
+          value: { ...e, [key]: piece, part: `${j + 1}/${pieces.length}` },
+          label: `${label} part ${j + 1}/${pieces.length}`,
+        }));
+      } else {
+        items.push({ part, value: entry, label });
+      }
     });
   }
   return items;
@@ -156,9 +195,9 @@ function size(v: unknown): number {
   return typeof v === 'string' ? v.length : JSON.stringify(v).length;
 }
 
-/** Truncate the text-bearing field(s) of one oversized item to `budget` chars. */
+/** Last resort: cut the text of one item that still exceeds the budget. */
 function clipItem(item: Item, budget: number): unknown {
-  const marker = (n: number) => ` …[truncated: ${n} more characters; raise maxChars (max 200000) to read the rest]`;
+  const marker = (n: number) => ` …[truncated: ${n} more characters]`;
   if (typeof item.value === 'string') {
     return item.value.slice(0, budget) + marker(item.value.length - budget);
   }
@@ -166,9 +205,9 @@ function clipItem(item: Item, budget: number): unknown {
     const v = { ...item.value };
     for (const k of ['content', 'text']) {
       if (typeof v[k] === 'string') {
-        const s = v[k] as string;
-        const keep = Math.max(200, budget - (size(v) - s.length));
-        if (s.length > keep) v[k] = s.slice(0, keep) + marker(s.length - keep);
+        const t = v[k] as string;
+        const keep = Math.max(200, budget - (size(v) - t.length));
+        if (t.length > keep) v[k] = t.slice(0, keep) + marker(t.length - keep);
       }
     }
     return v;
@@ -176,28 +215,59 @@ function clipItem(item: Item, budget: number): unknown {
   return item.value;
 }
 
-function outlineOf(content: Obj): Obj {
+/** How to read on from an outline — only suggesting parts this document has. */
+function readingHint(content: Obj): string {
+  const has = (k: string) => Array.isArray(content[k]) && (content[k] as unknown[]).length > 0;
+  const ways: string[] = [];
+  if (has('articles')) ways.push(`one article with articleId (e.g. "${firstArticleId(content)}")`);
+  if (has('paragraphs')) ways.push('the paragraphs (judgment grounds / body text) with include ["paragraphs"]');
+  if (has('recitals')) ways.push('the recitals with include ["recitals"]');
+  if (has('annexes')) ways.push('the annexes with include ["annexes"]');
+  if (has('tables')) ways.push('the tables with include ["tables"]');
+  if (!ways.length && typeof content.fullText === 'string' && content.fullText) ways.push('the text with include ["fullText"] (or view "full")');
+  return ways.length ? `Read on: ${ways.join('; ')}. Long parts continue with offset.` : 'The document has no body text.';
+}
+
+function outlineOf(content: Obj, maxChars: number, offset: number): { outline: Obj; note?: string } {
   const articles = Array.isArray(content.articles) ? content.articles as unknown[] : [];
   const annexes = Array.isArray(content.annexes) ? content.annexes as unknown[] : [];
   const sections = Array.isArray(content.sections) ? content.sections as unknown[] : [];
   const count = (k: string) => (Array.isArray(content[k]) ? (content[k] as unknown[]).length : 0);
-  return compact({
-    sections: sections.map((s) => (isObj(s)
-      ? compact({ type: s.type, number: s.number, title: s.title, articles: Array.isArray(s.articleRange) ? (s.articleRange as unknown[]).join('–') : undefined })
-      : s)),
-    articles: articles.map((a) => (isObj(a) ? compact({ id: a.id, number: a.number, title: a.title }) : a)),
+  const base = compact({
+    sections: sections.map((sec) => (isObj(sec)
+      ? compact({ type: sec.type, number: sec.number, title: sec.title, articles: Array.isArray(sec.articleRange) ? (sec.articleRange as unknown[]).join('–') : undefined })
+      : sec)),
     recitalCount: count('recitals') || undefined,
     paragraphCount: count('paragraphs') || undefined,
     annexes: annexes.map((a, i) => (isObj(a) ? truncate(str(a.title), 120) ?? `Annex #${i + 1}` : a)),
     tableCount: count('tables') || undefined,
     fullTextChars: typeof content.fullText === 'string' ? content.fullText.length : undefined,
   });
+  // The article list is the part that grows (CRR-size acts: ~500 entries) —
+  // bound it by maxChars and page it with offset.
+  let budget = maxChars - size(base);
+  const listed: unknown[] = [];
+  const from = Math.min(offset, articles.length);
+  let i = from;
+  for (; i < articles.length; i++) {
+    const a = articles[i];
+    const entry = isObj(a) ? compact({ id: a.id, number: a.number, title: truncate(str(a.title), 160) }) : a;
+    const s = size(entry) + 1;
+    if (s > budget && listed.length) break;
+    budget -= s;
+    listed.push(entry);
+  }
+  const outline = compact({ ...base, articles: listed, articleCount: articles.length > listed.length ? articles.length : undefined });
+  const note = articles.length && (from > 0 || i < articles.length)
+    ? `Article list ${from + 1}–${i} of ${articles.length}${i < articles.length ? `; call again with view "outline" and offset=${i} for the rest` : ''}.`
+    : undefined;
+  return { outline, note };
 }
 
 /**
  * Shape `content` (a document's parsed body) under a character budget.
- * Returns the shaped content plus a human-readable note when anything was
- * outlined, truncated or omitted.
+ * Returns the shaped content plus a note when anything was outlined, split,
+ * truncated or omitted.
  */
 export function shapeContent(content: unknown, opts: ContentOptions): { content?: Obj; note?: string } {
   if (!isObj(content)) return {};
@@ -210,17 +280,21 @@ export function shapeContent(content: unknown, opts: ContentOptions): { content?
     ? PART_ORDER.filter((p) => explicit.includes(p))
     : structured.length ? structured.filter((p) => p !== 'sections') : ['fullText'];
 
-  const all = itemsOf(content, parts);
+  const chunk = Math.max(1000, Math.floor(opts.maxChars * 0.9));
+  const all = itemsOf(content, parts, chunk);
   const totalSize = all.reduce((n, i) => n + size(i.value), 0);
   const offset = Math.max(0, opts.offset ?? 0);
 
-  let view = opts.view;
+  // Explicitly selected parts are read, never outlined — unless the caller
+  // asked for the outline itself.
+  let view = opts.view ?? 'auto';
   if (view === 'auto') view = explicit?.length || offset || totalSize <= opts.maxChars ? 'full' : 'outline';
 
   if (view === 'outline') {
+    const { outline, note } = outlineOf(content, opts.maxChars, offset);
     return {
-      content: outlineOf(content),
-      note: `Outline only: the body is ${totalSize} characters (budget maxChars=${opts.maxChars}). Fetch one article with articleId (e.g. "${firstArticleId(content) ?? '17'}"), or pass include (e.g. ["paragraphs"] for judgment grounds, ["annexes"]); long parts are paged with offset.`,
+      content: outline,
+      note: [`Outline only: the body is ${totalSize} characters (budget maxChars=${opts.maxChars}).`, note, readingHint(content)].filter(Boolean).join(' '),
     };
   }
 
@@ -236,7 +310,7 @@ export function shapeContent(content: unknown, opts: ContentOptions): { content?
     let value = item.value;
     if (used + s > opts.maxChars) {
       if (emitted > 0) { stoppedAt = i; break; }
-      value = clipItem(item, opts.maxChars); // a single item larger than the whole budget
+      value = clipItem(item, opts.maxChars);
       clipped = true;
     }
     if (item.part === 'fullText') {
@@ -252,19 +326,19 @@ export function shapeContent(content: unknown, opts: ContentOptions): { content?
 
   const notes: string[] = [];
   if (offset) notes.push(`Skipped the first ${offset} items (offset).`);
+  if (offset >= all.length && all.length) notes.push(`offset ${offset} is past the end (${all.length} items).`);
+  if (all.some((i) => / part \d+\/\d+$/.test(i.label))) notes.push('Long items are split into consecutive parts ("part j/k").');
   if (stoppedAt !== undefined) {
     const omitted = rest.slice(stoppedAt);
-    const first = omitted[0].label;
-    const last = omitted[omitted.length - 1].label;
-    notes.push(`Truncated at maxChars=${opts.maxChars}: ${omitted.length} more items omitted (${first} … ${last}). Call again with the same arguments and offset=${offset + stoppedAt}, or fetch a single article with articleId.`);
+    notes.push(`Truncated at maxChars=${opts.maxChars}: ${omitted.length} more items omitted (${omitted[0].label} … ${omitted[omitted.length - 1].label}). Call again with the same arguments and offset=${offset + stoppedAt}.`);
   }
-  if (clipped) notes.push('One item was longer than maxChars and was cut.');
+  if (clipped) notes.push('One item was longer than maxChars and was cut; raise maxChars (max 200000) to read it whole.');
   return { content: out, note: notes.length ? notes.join(' ') : undefined };
 }
 
 function firstArticleId(content: Obj): string | undefined {
   const a = Array.isArray(content.articles) ? content.articles[0] : undefined;
-  return isObj(a) ? str(a.id) : undefined;
+  return isObj(a) ? (str(a.id) ?? str(a.number)) : undefined;
 }
 
 /** A full document object (from /documentContent, batch, by-URL) → compact form. */
@@ -413,7 +487,6 @@ export function shapeLegislation(res: LexResponse<Json>): Obj {
   const results = Array.isArray(b.results) ? b.results.map(shapeLegislationHit) : [];
   const anyConsolidated = results.some((r) => r.consolidated === true
     || (isObj(r.asOfVersion) && r.asOfVersion.kind === 'consolidated'));
-  const unresolved = results.filter((r) => r.asOfResolved === false).length;
   return compact({
     asOf: b.asOf,
     asOfSummary: b.asOfSummary,
@@ -423,9 +496,48 @@ export function shapeLegislation(res: LexResponse<Json>): Obj {
     citing: anyConsolidated
       ? 'Some hits are consolidated texts (consolidated: true, or asOfVersion.kind "consolidated"): they are documentation tools without legal force. Quote them for reading, but cite the authentic act (baseCelex / baseAct.law_id) as published in the Official Journal, plus the amending acts where relevant.'
       : undefined,
-    asOfCaveat: b.asOf && unresolved
-      ? `${unresolved} hit(s) have asOfResolved: false — their text is the LATEST version, not the version in force on ${String(b.asOf)}; asOfReason says why. Do not present those as the law on that date.`
-      : undefined,
+    asOfCaveat: b.asOf ? asOfCaveat(results, String(b.asOf)) : undefined,
+  });
+}
+
+// asOfReason classes (docs.md "asOf — the text in force on a date").
+const AS_OF_NOT_IN_FORCE = new Set(['not_yet_adopted', 'not_yet_in_force', 'no_longer_in_force']);
+const AS_OF_RETRYABLE = new Set([
+  'fetch_pending', 'fetch_capacity', 'fetch_budget_exhausted', 'request_deadline', 'fetch_timeout',
+  'fetch_failed', 'version_lookup_cap', 'version_list_unavailable', 'credit_check_failed',
+]);
+const AS_OF_USER_ACTION = new Set(['insufficient_credits']);
+
+/**
+ * One instruction per class of unresolved hit present. Every unresolved
+ * hit carries the LATEST text; what the model should do differs:
+ *   - not in force on the date → that IS the answer (say so);
+ *   - transient → retry shortly, or with a smaller limit;
+ *   - credits → tell the user;
+ *   - anything else (no text in that version, language, article missing…) →
+ *     the version in force could not be read; don't quote it as of that date.
+ */
+export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
+  const groups: Record<string, string[]> = { notInForce: [], retryable: [], needsCredits: [], unavailable: [] };
+  for (const r of results) {
+    if (r.asOfResolved !== false) continue;
+    const reason = String(r.asOfReason ?? 'unknown');
+    const id = `${String(r.law_id ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''} (${reason})`;
+    if (AS_OF_NOT_IN_FORCE.has(reason)) groups.notInForce.push(id);
+    else if (AS_OF_RETRYABLE.has(reason)) groups.retryable.push(id);
+    else if (AS_OF_USER_ACTION.has(reason)) groups.needsCredits.push(id);
+    else groups.unavailable.push(id);
+  }
+  const guidance: string[] = [];
+  if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; say so, and do not quote their text as the law on that date.`);
+  if (groups.retryable.length) guidance.push('retryable: the version in force could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
+  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version in force — tell the user.');
+  if (groups.unavailable.length) guidance.push(`unavailable: the version in force on ${asOf} could not be read (see asOfReason) — do not present the returned text as the law on that date.`);
+  if (!guidance.length) return undefined;
+  return compact({
+    note: `Unresolved hits carry the LATEST text, not the text in force on ${asOf}.`,
+    ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
+    guidance,
   });
 }
 
