@@ -3,6 +3,8 @@
 // LexAPI answers errors in two shapes (docs.md "Errors & retries"):
 //   typed:  { success: false, error: { code, message, details? } }
 //   legacy: { error: "slug or sentence", message?, details?, retryAfter?, upgradeUrl?, usage? }
+//           — from lex-api #304 on also a top-level `code` (e.g. RATE_LIMITED,
+//           QUOTA_EXHAUSTED) and, on quota 429s, a top-level `resetsAt`.
 // We normalise both, then turn the status into a message that says what
 // happened AND what to do next — the model relays it to the user, so it has
 // to be actionable without the model knowing LexAPI's billing rules.
@@ -17,8 +19,10 @@ export class LexAPIError extends Error {
     public readonly code: string,
     message: string,
     public readonly details?: unknown,
-    /** Seconds from the `Retry-After` header / `retryAfter` body (429). */
+    /** Seconds from the `Retry-After` header / `retryAfter` body (429); never set for QUOTA_EXHAUSTED. */
     public readonly retryAfterSeconds?: number,
+    /** When an exhausted legacy quota refills (`resetsAt`, else `usage.resetsAt`). */
+    public readonly resetsAt?: string,
   ) {
     super(message);
     this.name = 'LexAPIError';
@@ -37,32 +41,40 @@ export function parseErrorBody(
   json: unknown,
   rawText: string,
   status: number,
-): { code: string; message: string; details?: unknown; retryAfter?: number } {
+): { code: string; message: string; details?: unknown; retryAfter?: number; resetsAt?: string } {
   const fallback = { code: `HTTP_${status}`, message: rawText.trim().slice(0, 300) || `HTTP ${status}` };
   if (!json || typeof json !== 'object' || Array.isArray(json)) return fallback;
   const j = json as Record<string, unknown>;
   const retryAfter = typeof j.retryAfter === 'number' ? j.retryAfter : undefined;
+  // A top-level string `code` (lex-api #304) beats the legacy `error` text.
+  const topCode = typeof j.code === 'string' && j.code ? j.code : undefined;
+  const usage = j.usage && typeof j.usage === 'object' ? j.usage as Record<string, unknown> : undefined;
+  const resetsAt = typeof j.resetsAt === 'string' ? j.resetsAt
+    : usage && typeof usage.resetsAt === 'string' ? usage.resetsAt
+      : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
     const eo = e as Record<string, unknown>;
     return {
-      code: typeof eo.code === 'string' ? eo.code : fallback.code,
+      code: typeof eo.code === 'string' ? eo.code : (topCode ?? fallback.code),
       message:
         typeof eo.message === 'string' ? eo.message
           : typeof j.message === 'string' ? j.message
             : fallback.message,
       details: eo.details ?? j.details,
       retryAfter,
+      resetsAt,
     };
   }
   // Legacy: `error` is a short sentence ("Invalid API key"), `message` the detail.
   const errStr = typeof e === 'string' ? e : undefined;
   const msg = typeof j.message === 'string' ? j.message : undefined;
   return {
-    code: errStr ?? fallback.code,
+    code: topCode ?? errStr ?? fallback.code,
     message: errStr && msg ? `${errStr}: ${msg}` : (msg ?? errStr ?? fallback.message),
     details: j.details ?? j.usage,
     retryAfter,
+    resetsAt,
   };
 }
 
@@ -119,17 +131,19 @@ export function describeError(err: unknown): string {
       return `${head} The account's current state does not allow this action; tell the user (it is not fixed by retrying).`;
     case 429: {
       const wait = err.retryAfterSeconds;
-      const resetsAt = d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined;
-      // Per-minute limiter: Retry-After header / body retryAfter. The legacy
-      // quotas (daily calls, monthly semantic searches) send neither — only
-      // usage.resetsAt — and retrying them every minute is pointless.
-      if (wait === undefined && (resetsAt || /quota/i.test(`${err.code} ${err.message}`))) {
-        const which = /semantic/i.test(`${err.code} ${err.message}`)
+      const resetsAt = err.resetsAt ?? (d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined);
+      // QUOTA_EXHAUSTED (lex-api #304) is a used-up legacy quota, whatever
+      // else the response carries. Fallback for older servers: the per-minute
+      // limiter sends Retry-After / retryAfter, the legacy quotas (daily
+      // calls, monthly semantic searches) send neither — only usage.resetsAt.
+      // Retrying a quota before it refills is pointless.
+      if (err.code === 'QUOTA_EXHAUSTED' || (wait === undefined && (resetsAt || /quota/i.test(`${err.code} ${err.message}`)))) {
+        const which = /semantic/i.test(err.message)
           ? 'the monthly semantic-search quota of this (legacy) plan'
-          : /daily/i.test(`${err.code} ${err.message}`)
+          : /daily/i.test(err.message)
             ? 'the daily call quota of this (legacy) plan'
             : 'a usage quota of this plan';
-        return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''}. Do not retry before then — tell the user. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
+        return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — do not retry, tell the user. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
       }
       return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
     }

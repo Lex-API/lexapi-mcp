@@ -704,11 +704,25 @@ export const tools: ToolDef[] = [
       const lines = Array.isArray(res.body.lines) ? res.body.lines : [];
       let meta: unknown;
       let done: unknown;
+      let serverError: unknown;
       const rows: unknown[] = [];
       for (const l of lines) {
         if (isObj(l) && '_meta' in l) meta = l._meta;
         else if (isObj(l) && '_done' in l) done = l._done;
+        // A line whose only key is `_error` is a failure signal, never a row.
+        else if (isObj(l) && Object.keys(l).length === 1 && '_error' in l) serverError = l._error;
         else rows.push(l);
+      }
+      // SDK contract §1.8: complete only with a `_done` trailer that does not
+      // say `complete: false`, and no `_error` line. Anything else is a
+      // partial export that must not be presented as the result.
+      if (done === undefined || (isObj(done) && done.complete === false) || serverError !== undefined) {
+        const why = serverError !== undefined
+          ? `the server reported an error mid-stream (${isObj(serverError) ? `${String(serverError.code ?? 'UNKNOWN')}: ${String(serverError.message ?? '')}` : String(serverError)})`
+          : done === undefined
+            ? 'the stream ended without its completion trailer'
+            : 'its completion trailer says complete: false';
+        throw new Error(`lex_export is incomplete: ${why} after ${rows.length} row(s). The rows received are not the whole result — do not treat them as complete; retry the export (a smaller limit or narrower filters helps).`);
       }
       const per = Math.max(500, Math.floor((a.maxChars ?? 40_000) / Math.max(1, rows.length)));
       return compact({
