@@ -2,19 +2,19 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Lex-API/lexapi-mcp",
   "title": "LexAPI",
-  "description": "Search EUR-Lex, fetch parsed EU legislation and case law, explore the citation graph.",
+  "description": "EU law for AI: EUR-Lex legislation and case law, citation graph, semantic search with asOf.",
   "websiteUrl": "https://lex-api.com",
   "repository": {
     "url": "https://github.com/Lex-API/lexapi-mcp",
     "source": "github"
   },
-  "version": "0.2.0",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@lexapi/mcp",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -22,13 +22,25 @@
       "environmentVariables": [
         {
           "name": "LEXAPI_API_KEY",
-          "description": "LexAPI API key. Get one at https://lex-api.com/dashboard (FREE tier available; semantic tools require a paid plan).",
+          "description": "LexAPI API key. Get one at https://lex-api.com/dashboard (FREE plan: 500 credits/month).",
           "isRequired": true,
           "isSecret": true
         },
         {
           "name": "LEXAPI_BASE_URL",
           "description": "Override the LexAPI base URL. Defaults to https://lex-api.com/api/v1.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "LEXAPI_MCP_READ_ONLY",
+          "description": "Set to true to hide the tools that change account state (webhook create/update/delete/test).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "LEXAPI_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds (default 120000).",
           "isRequired": false,
           "isSecret": false
         }
@@ -42,7 +54,7 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Bearer <your LexAPI API key>. Get one at https://lex-api.com/dashboard (FREE tier available; semantic tools require a paid plan).",
+          "description": "Bearer <your LexAPI API key>. Get one at https://lex-api.com/dashboard (FREE plan: 500 credits/month).",
           "isRequired": true,
           "isSecret": true
         }

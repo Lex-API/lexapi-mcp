@@ -10,3 +10,8 @@ internal-docs
 .env
 .env.local
 .DS_Store
+tests
+scripts
+coverage
+*.md
+!README.md

@@ -1,117 +1,74 @@
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 
-import { LexAPIClient, LexAPIError } from './client.js';
-import { tools, toolsByName } from './tools.js';
+import { clientFromEnv, createLexServer, PACKAGE_NAME, readOnlyFromEnv } from './server.js';
+import { selectTools } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
 
-const PACKAGE_NAME = 'lexapi-mcp';
 const MCP_PATH = '/v1';
+const MAX_BODY_BYTES = 1_000_000;
 
-function extractBearer(req: IncomingMessage): string | null {
-  const header = req.headers['authorization'];
-  if (!header || typeof header !== 'string') return null;
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
+/**
+ * The caller's LexAPI key: `Authorization: Bearer <key>` (what server.json
+ * advertises), or `x-api-key: <key>` (the REST API's own header).
+ */
+export function extractApiKey(req: IncomingMessage): string | null {
+  const auth = req.headers['authorization'];
+  if (typeof auth === 'string') {
+    const m = auth.match(/^Bearer\s+(\S+)\s*$/i);
+    if (m) return m[1];
+  }
+  const x = req.headers['x-api-key'];
+  if (typeof x === 'string' && x.trim()) return x.trim();
+  return null;
 }
+
+class BodyTooLargeError extends Error {}
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    // MCP JSON-RPC messages are small; anything larger is abuse.
+    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError('request body too large');
     chunks.push(chunk as Buffer);
-    // 1 MB request-body cap — MCP JSON-RPC messages are tiny; anything larger is abuse.
-    if (chunks.reduce((n, c) => n + c.length, 0) > 1_000_000) {
-      throw new Error('request body too large');
-    }
   }
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text) return undefined;
   return JSON.parse(text);
 }
 
-function buildMcpServer(apiKey: string): Server {
-  const baseUrl = process.env.LEXAPI_BASE_URL;
-  const client = new LexAPIClient({
-    apiKey,
-    ...(baseUrl ? { baseUrl } : {}),
-  });
-
-  const server = new Server(
-    { name: PACKAGE_NAME, version: PACKAGE_VERSION },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map(({ name, description, inputSchema, annotations }) => ({
-      name,
-      description,
-      inputSchema,
-      annotations,
-    })),
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args = {} } = request.params;
-    const tool = toolsByName[name];
-
-    if (!tool) {
-      return {
-        isError: true,
-        content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-      };
-    }
-
-    try {
-      const result = await tool.handler(args as Record<string, unknown>, client);
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-      };
-    } catch (err) {
-      if (err instanceof LexAPIError) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: 'text',
-              text: `LexAPI error (${err.status} ${err.slug}): ${err.message}`,
-            },
-          ],
-        };
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        isError: true,
-        content: [{ type: 'text', text: `Tool execution failed: ${message}` }],
-      };
-    }
-  });
-
-  return server;
-}
-
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function writeJson(res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store, private',
+    ...extra,
   });
   res.end(JSON.stringify(body));
 }
 
+function jsonRpcError(res: ServerResponse, status: number, code: number, message: string, extra: Record<string, string> = {}) {
+  writeJson(res, status, { jsonrpc: '2.0', error: { code, message }, id: null }, extra);
+}
+
 async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const apiKey = extractBearer(req);
+  // Stateless server: there is no session to open a GET event stream on or to
+  // DELETE, so only POST is meaningful (MCP Streamable HTTP, stateless mode).
+  if (req.method !== 'POST') {
+    jsonRpcError(res, 405, -32000, 'Method not allowed: this server is stateless; send JSON-RPC requests with POST.', { Allow: 'POST, OPTIONS' });
+    return;
+  }
+
+  const apiKey = extractApiKey(req);
   if (!apiKey) {
     writeJson(res, 401, {
       error: {
         code: 'unauthorized',
         message:
-          'Missing or invalid Authorization header. Send: Authorization: Bearer <your LexAPI key>. Get a key at https://lex-api.com/dashboard.',
+          'Missing API key. Send "Authorization: Bearer <your LexAPI key>" (or "x-api-key: <key>"). Get a key at https://lex-api.com/dashboard?ref=mcp-hosted.',
       },
-    });
+    }, { 'WWW-Authenticate': 'Bearer realm="lexapi"' });
     return;
   }
 
@@ -119,70 +76,66 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse): Promise<voi
   try {
     body = await readJsonBody(req);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    writeJson(res, 400, { error: { code: 'bad_request', message } });
+    if (err instanceof BodyTooLargeError) jsonRpcError(res, 413, -32600, 'Request body too large');
+    else jsonRpcError(res, 400, -32700, 'Parse error: body is not valid JSON');
     return;
   }
 
-  // Defense-in-depth headers — Cloudflare + intermediate proxies should not
-  // buffer streamed responses, and per-user MCP responses must never be cached.
+  // Per-user responses must never be cached or buffered by proxies.
   res.setHeader('X-Accel-Buffering', 'no');
   res.setHeader('Cache-Control', 'no-store, private');
 
-  const mcpServer = buildMcpServer(apiKey);
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
-
+  const server = createLexServer(clientFromEnv(apiKey), { readOnly: readOnlyFromEnv() });
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on('close', () => {
     transport.close().catch(() => {});
-    mcpServer.close().catch(() => {});
+    server.close().catch(() => {});
   });
-
-  await mcpServer.connect(transport);
+  await server.connect(transport);
   await transport.handleRequest(req, res, body);
 }
 
 export function createHttpServer(): HttpServer {
   return createServer(async (req, res) => {
     try {
-      // CORS preflight — MCP clients called from browsers need this.
+      const path = (req.url ?? '/').split('?')[0];
+
+      // CORS: browser-based MCP clients. The key is a bearer token (no
+      // cookies), so a wildcard origin does not expose ambient credentials.
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version',
+          'Access-Control-Allow-Methods': 'POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Authorization, X-API-Key, Content-Type, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID',
           'Access-Control-Max-Age': '86400',
         });
         res.end();
         return;
       }
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id, Mcp-Protocol-Version, WWW-Authenticate');
 
-      if (req.method === 'GET' && req.url === '/health') {
+      if (path === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {
         writeJson(res, 200, {
           status: 'ok',
           name: PACKAGE_NAME,
           version: PACKAGE_VERSION,
-          tools: tools.length,
+          tools: selectTools({ readOnly: readOnlyFromEnv() }).length,
         });
         return;
       }
 
-      if (req.url === MCP_PATH || req.url === MCP_PATH + '/') {
+      if (path === MCP_PATH || path === `${MCP_PATH}/`) {
         await handleMcp(req, res);
         return;
       }
 
-      writeJson(res, 404, { error: { code: 'not_found', message: `No route for ${req.method} ${req.url}` } });
+      writeJson(res, 404, { error: { code: 'not_found', message: `No route for ${req.method} ${path}. The MCP endpoint is POST ${MCP_PATH}.` } });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!res.headersSent) {
-        writeJson(res, 500, { error: { code: 'internal_error', message } });
-      } else {
-        res.end();
-      }
+      // Log server-side only; the client gets a generic message (no internals).
+      console.error(`[${PACKAGE_NAME}] request failed:`, err instanceof Error ? err.message : err);
+      if (!res.headersSent) jsonRpcError(res, 500, -32603, 'Internal server error');
+      else res.end();
     }
   });
 }
