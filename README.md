@@ -70,7 +70,7 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_related` | Documents citing the same acts (bibliographic coupling). | 20 |
 | `lex_citation_stats` | Citation graph totals and most-cited documents. | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
-| `lex_export` | Corpus rows by type, author, collection, language or `fetchedSince` (BUSINESS plans and above; no document-date filter). | metered — see the [LexAPI docs](https://lex-api.com/docs?ref=npm-mcp) |
+| `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and for changes to watched acts (paid plans). The URL must be a public https URL (port 443/8443, no internal hosts or private addresses) — checked here as well as by the API. | free |
