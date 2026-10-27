@@ -752,7 +752,8 @@ export const tools: ToolDef[] = [
         totalMatching: isObj(meta) ? meta.totalMatching : res.headers['x-export-total'],
         returned: rows.length,
         truncated: isObj(done) ? done.truncated : undefined,
-        // limit | max_rows | credits (the pool could not pay for rows added since the count)
+        // limit | max_rows | credits (the pool could not pay for rows added since the
+        // count) | recovered (the server's recovery sweep took the export's billing record mid-stream)
         truncatedBy: isObj(done) ? done.truncatedBy : undefined,
         skippedStubs: isObj(done) ? done.skippedStubs : undefined,
         rows: rows.map((r) => {
