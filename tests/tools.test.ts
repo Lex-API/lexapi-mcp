@@ -576,12 +576,48 @@ describe('review round 2', () => {
     expect(update.safeParse({ id: 'w1', status: 'PAUSED' }).success).toBe(true);
   });
 
-  it('F5: lex_export refuses dateFrom/dateTo before any call and points to fetchedSince', async () => {
-    const { result, calls } = await call('lex_export', { dateFrom: '2024-01-01' }, () => ({ body: {} }));
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/fetchedSince/);
-    expect(calls).toHaveLength(0);
-    expect(byName.lex_export.description).toMatch(/No document-date filter \(use fetchedSince\)/);
+  it('F5 (API 2.3.0): lex_export sends dateFrom/dateTo, changedSince and documentTypeCode', async () => {
+    const { calls } = await call('lex_export', {
+      dateFrom: '2024-01-01', dateTo: '2024-12-31', changedSince: '2026-05-11', documentTypeCode: ['regulation'],
+    }, () => ({ raw: '{"_meta":{}}\n{"_done":{"written":0}}', headers: { 'content-type': 'application/x-ndjson' } }));
+    expect(Object.fromEntries(calls[0].url.searchParams)).toEqual({
+      dateFrom: '2024-01-01', dateTo: '2024-12-31', changedSince: '2026-05-11', documentTypeCode: 'regulation', includeContent: 'false', limit: '20',
+    });
+  });
+
+  it('F5: timestamps need a timezone; dates must be YYYY-MM-DD', () => {
+    const s = z.object(byName.lex_export.inputSchema);
+    expect(s.safeParse({ changedSince: '2026-05-11T10:00:00Z' }).success).toBe(true);
+    expect(s.safeParse({ fetchedSince: '2026-05-11T10:00:00+02:00' }).success).toBe(true);
+    expect(s.safeParse({ changedSince: '2026-05-11T10:00:00' }).success).toBe(false);
+    expect(s.safeParse({ dateFrom: '01/02/2024' }).success).toBe(false);
+  });
+
+  it('F5 (review): the timestamp/date schema accepts exactly what the API accepts', () => {
+    const s = z.object(byName.lex_export.inputSchema);
+    // Verdicts of lex-api's parseIsoTimestamp (exportController, #303 head).
+    const accepted = [
+      '2026-05-11', '2026-05-11T10:00Z', '2026-05-11T10:00:00Z', '2026-05-11T10:00:00.123456789Z',
+      '2026-05-11T10:00:00+0200', '2026-05-11T10:00:00-02:00', '2026-05-11T23:59:59.5+23:59',
+    ];
+    const rejected = [
+      '2026-05-11T10:00:00.1234567891Z', '2026-02-30', '2026-02-30T10:00:00Z', '2026-05-11T24:00:00Z',
+      '2026-05-11T10:60:00Z', '2026-05-11T10:00:60Z', '2026-05-11T10:00:00', '2026-05-11T10:00:00+99:00',
+      '2026-05-11T10:00:00+02:60', '2026-05-11 10:00:00Z', '2026-05-11T10Z', '2026-05-11T10:00:00.Z',
+      '2026-05-11T10:00:00z', '2026-05-11T10:00:00+2',
+    ];
+    for (const v of accepted) expect({ v, ok: s.safeParse({ changedSince: v }).success }).toEqual({ v, ok: true });
+    for (const v of rejected) expect({ v, ok: s.safeParse({ fetchedSince: v }).success }).toEqual({ v, ok: false });
+    expect(s.safeParse({ dateTo: '2024-02-29' }).success).toBe(true);
+    expect(s.safeParse({ dateTo: '2023-02-29' }).success).toBe(false); // the API 400s a non-date
+  });
+
+  it('lex_export surfaces truncatedBy from the trailer', async () => {
+    const { data } = await call('lex_export', {}, () => ({
+      raw: '{"_meta":{}}\n{"celex":"A"}\n{"_done":{"written":1,"truncated":true,"truncatedBy":"credits"}}',
+      headers: { 'content-type': 'application/x-ndjson' },
+    }));
+    expect(data).toMatchObject({ truncated: true, truncatedBy: 'credits' });
   });
 });
 
@@ -593,10 +629,15 @@ describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
     expect(d).toMatch(/refreshed on read/);
   });
 
-  it('N9: export cost is neutral; dateFrom/dateTo exist only to be refused (see F5)', () => {
+  it('N9 (API 2.3.0): export billing is stated exactly; documentType is a case-insensitive exact label', () => {
     const t = byName.lex_export;
-    expect(t.description).not.toMatch(/per row/);
-    expect((t.inputSchema.dateFrom as any).description).toMatch(/Not supported/);
+    expect(t.description).toMatch(/1 credit per row returned, at least 1 per call/);
+    expect(t.description).toMatch(/admitted for 1 credit/);
+    expect(t.description).toMatch(/402 before returning anything/);
+    expect(t.description).toMatch(/refunded/);
+    expect((t.inputSchema.documentType as any).description).toMatch(/matched exactly but ignoring case/);
+    expect(t.description).not.toMatch(/No document-date filter/);
+    expect(z.object(t.inputSchema).safeParse({ dateFrom: '2024-01-01' }).success).toBe(true);
   });
 
   it('webhook URLs must be public https', () => {

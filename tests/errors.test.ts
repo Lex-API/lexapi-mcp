@@ -44,7 +44,7 @@ describe('describeError — actionable messages', () => {
     const t = describeError(new LexAPIError(429, 'Daily quota exceeded', 'Daily quota exceeded: You have used all 100 calls.', { current: 100, limit: 100, resetsAt: '2026-10-27T00:00:00.000Z' }));
     expect(t).toMatch(/daily call quota/);
     expect(t).toContain('until 2026-10-27T00:00:00.000Z');
-    expect(t).toMatch(/Do not retry/);
+    expect(t).toMatch(/do not retry, tell the user/);
     expect(t).not.toMatch(/Wait about a minute/);
     expect(t).not.toContain('..');
   });

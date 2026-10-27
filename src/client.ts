@@ -183,7 +183,9 @@ export class LexAPIClient {
         await discard(res);
         throw new LexAPITransportError('the request was cancelled by the client', false, true);
       }
-      if (res.status === 429 && canRetry && attempt < this.maxRetries) {
+      // A used-up legacy quota (QUOTA_EXHAUSTED, lex-api #304) cannot succeed
+      // before it refills, whatever its Retry-After says: never retried.
+      if (res.status === 429 && canRetry && attempt < this.maxRetries && !(await isQuotaExhausted(res))) {
         const wait = retryAfterSeconds(res);
         const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
         if (wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S && canWait(waitMs)) {
@@ -223,12 +225,15 @@ export class LexAPIClient {
 
       if (!res.ok) {
         const parsed = parseErrorBody(safeJson(text), text, res.status);
+        const quota = parsed.code === 'QUOTA_EXHAUSTED';
         throw new LexAPIError(
           res.status,
           parsed.code,
           parsed.message,
           parsed.details,
-          retryAfterSeconds(res) ?? parsed.retryAfter,
+          // A quota 429 has no meaningful retry-after (SDK contract §1.2).
+          quota ? undefined : (retryAfterSeconds(res) ?? parsed.retryAfter),
+          parsed.resetsAt,
         );
       }
 
@@ -353,6 +358,16 @@ async function discard(res: Response): Promise<void> {
     await res.body?.cancel();
   } catch {
     /* already consumed */
+  }
+}
+
+/** Peeks a 429 body (on a clone) for `code: "QUOTA_EXHAUSTED"`. */
+async function isQuotaExhausted(res: Response): Promise<boolean> {
+  try {
+    const j = safeJson(await res.clone().text());
+    return !!j && typeof j === 'object' && (j as Record<string, unknown>).code === 'QUOTA_EXHAUSTED';
+  } catch {
+    return false;
   }
 }
 

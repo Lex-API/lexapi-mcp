@@ -82,7 +82,29 @@ const webhookUrl = (d: string) => z.string().trim().superRefine((v, ctx) => {
   const problem = webhookUrlProblem(v);
   if (problem) ctx.addIssue({ code: 'custom', message: problem });
 }).describe(d);
-const isoDate = (d: string) => z.string().regex(DATE_RE, 'use YYYY-MM-DD').describe(d);
+// The export API's own checks (lex-api exportController parseIsoDate /
+// parseIsoTimestamp), mirrored exactly so the schema accepts what the server
+// accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
+// zone (Z, ±HH:MM or ±HHMM), seconds are optional, a fraction has 1–9 digits.
+const ISO_TS_RE = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2}))?$/;
+export function isApiDate(value: string): boolean {
+  if (!DATE_RE.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+export function isApiTimestamp(value: string): boolean {
+  const m = ISO_TS_RE.exec(value);
+  if (!m || !isApiDate(m[1])) return false;
+  if (m[2] !== undefined && (Number(m[2]) > 23 || Number(m[3]) > 59 || Number(m[4] ?? 0) > 59)) return false;
+  return !Number.isNaN(new Date(m[2] === undefined ? `${m[1]}T00:00:00Z` : value).getTime());
+}
+const isoDate = (d: string) =>
+  z.string().regex(DATE_RE, 'use YYYY-MM-DD').refine(isApiDate, 'not a calendar date').describe(d);
+/** An ISO 8601 date, or a date-time WITH a timezone (the API rejects one without). */
+const since = (d: string) =>
+  z.string().regex(ISO_TS_RE, 'use YYYY-MM-DD or an ISO 8601 date-time with a timezone (Z or ±HH:MM)')
+    .refine(isApiTimestamp, 'not a valid date/time')
+    .describe(`${d} ISO 8601: a date (YYYY-MM-DD, midnight UTC) or a date-time with a timezone.`);
 // One value or a list; the allowed values are listed once, in the description
 // (an enum inside a string|array union would print them twice).
 const oneOrMany = <T extends readonly [string, ...string[]]>(values: T, d: string) => {
@@ -670,32 +692,33 @@ export const tools: ToolDef[] = [
     name: 'lex_export',
     title: 'Export corpus rows',
     description:
-      'Rows from the LexAPI corpus matching filters — e.g. documents of a type fetched since a date. BUSINESS plans and above (403 otherwise). Cost: metered from the credit pool — see the LexAPI export pricing (https://lex-api.com/docs); keep limit small. No document-date filter (use fetchedSince). Bulk export for ML training needs a separate licence (Terms §6).',
+      'Rows from the LexAPI corpus matching filters — e.g. regulations dated 2024 or documents whose text changed since a date. BUSINESS plans and above (403 otherwise). Cost: 1 credit per row returned, at least 1 per call. The call is admitted for 1 credit, the matching rows are counted, and the rest of 1 credit per row it can return (up to limit) is reserved; if the pool cannot cover that, LexAPI answers 402 before returning anything (retry with a smaller limit). Reserved credits for rows not returned are refunded. Keep limit small. An export that fails part-way is reported as incomplete, never as a result. Bulk export for ML training needs a separate licence (Terms §6).',
     inputSchema: {
-      documentType: z.array(z.string().min(1)).min(1).optional().describe('Stored document-type labels, matched exactly, e.g. ["Regulation","Directive"].'),
-      author: z.array(z.string().min(1)).min(1).optional().describe('Stored author labels, matched exactly.'),
+      documentType: z.array(z.string().min(1)).min(1).optional().describe('Stored document-type labels, matched exactly but ignoring case, e.g. ["Regulation","Directive"]: "regulation" matches Regulation, not Implementing regulation (use documentTypeCode for the family).'),
+      documentTypeCode: z.array(z.string().min(1)).min(1).optional().describe('Type families by documentTypeCode, e.g. ["regulation"] — includes implementing and delegated regulations. Combined with documentType, both must match.'),
+      author: z.array(z.string().min(1)).min(1).optional().describe('Stored author values, matched whole and ignoring case (a joint act\'s "European Parliament, Council of the European Union" is one value).'),
       subdomain: z.array(z.enum(['treaties', 'international', 'legislation', 'internal', 'preparatory', 'case-law', 'national-transposition', 'national-case-law', 'questions', 'consolidated'])).min(1).optional(),
       language: lang().optional(),
-      fetchedSince: z.string().datetime({ offset: true }).optional().describe('Only rows (re)fetched at or after this ISO timestamp.'),
-      // Declared only so that a model sending them gets an error instead of a
-      // silently unfiltered (and metered) export — the SDK strips unknown keys.
-      dateFrom: z.unknown().optional().describe('Not supported: export has no document-date filter. Use fetchedSince.'),
-      dateTo: z.unknown().optional().describe('Not supported: export has no document-date filter. Use fetchedSince.'),
+      dateFrom: isoDate('Document date from (inclusive, YYYY-MM-DD).').optional(),
+      dateTo: isoDate('Document date to (inclusive, YYYY-MM-DD).').optional(),
+      changedSince: since('Only rows whose text changed at or after this time — the cheapest incremental sync.').optional(),
+      fetchedSince: since('Only rows written to at or after this time (any update, including metadata-only). Prefer changedSince for syncing text.').optional(),
       includeContent: z.boolean().default(false).describe('Include each row\'s parsed body (bounded by maxChars).'),
       includeStubs: z.boolean().optional().describe('Also rows whose text EUR-Lex does not publish.'),
-      limit: z.number().int().min(1).max(200).default(20).describe('Rows (1 credit each).'),
+      limit: z.number().int().min(1).max(200).default(20).describe('Rows (1 credit each; at least 1 credit per call).'),
       maxChars: maxChars(40_000),
     },
     annotations: READ,
     handler: async (a, client) => {
-      if (a.dateFrom !== undefined || a.dateTo !== undefined) {
-        throw new Error('lex_export has no document-date filter (dateFrom/dateTo are not supported; nothing was charged). Use fetchedSince to export rows fetched since a time, or lex_search for documents by date.');
-      }
       const res = await client.exportCorpus({
         documentType: a.documentType,
+        documentTypeCode: a.documentTypeCode,
         author: a.author,
         subdomain: a.subdomain,
         language: a.language,
+        dateFrom: a.dateFrom,
+        dateTo: a.dateTo,
+        changedSince: a.changedSince,
         fetchedSince: a.fetchedSince,
         includeContent: a.includeContent ? 'true' : 'false',
         includeStubs: a.includeStubs ? 'true' : undefined,
@@ -704,17 +727,34 @@ export const tools: ToolDef[] = [
       const lines = Array.isArray(res.body.lines) ? res.body.lines : [];
       let meta: unknown;
       let done: unknown;
+      let serverError: unknown;
       const rows: unknown[] = [];
       for (const l of lines) {
         if (isObj(l) && '_meta' in l) meta = l._meta;
         else if (isObj(l) && '_done' in l) done = l._done;
+        // A line whose only key is `_error` is a failure signal, never a row.
+        else if (isObj(l) && Object.keys(l).length === 1 && '_error' in l) serverError = l._error;
         else rows.push(l);
+      }
+      // SDK contract §1.8: complete only with a `_done` trailer that does not
+      // say `complete: false`, and no `_error` line. Anything else is a
+      // partial export that must not be presented as the result.
+      if (done === undefined || (isObj(done) && done.complete === false) || serverError !== undefined) {
+        const why = serverError !== undefined
+          ? `the server reported an error mid-stream (${isObj(serverError) ? `${String(serverError.code ?? 'UNKNOWN')}: ${String(serverError.message ?? '')}` : String(serverError)})`
+          : done === undefined
+            ? 'the stream ended without its completion trailer'
+            : 'its completion trailer says complete: false';
+        throw new Error(`lex_export is incomplete: ${why} after ${rows.length} row(s). The rows received are not the whole result — do not treat them as complete; retry the export (a smaller limit or narrower filters helps).`);
       }
       const per = Math.max(500, Math.floor((a.maxChars ?? 40_000) / Math.max(1, rows.length)));
       return compact({
         totalMatching: isObj(meta) ? meta.totalMatching : res.headers['x-export-total'],
         returned: rows.length,
         truncated: isObj(done) ? done.truncated : undefined,
+        // limit | max_rows | credits (the pool could not pay for rows added since the
+        // count) | recovered (the server's recovery sweep took the export's billing record mid-stream)
+        truncatedBy: isObj(done) ? done.truncatedBy : undefined,
         skippedStubs: isObj(done) ? done.skippedStubs : undefined,
         rows: rows.map((r) => {
           if (!isObj(r)) return r;
