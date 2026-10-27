@@ -82,10 +82,28 @@ const webhookUrl = (d: string) => z.string().trim().superRefine((v, ctx) => {
   const problem = webhookUrlProblem(v);
   if (problem) ctx.addIssue({ code: 'custom', message: problem });
 }).describe(d);
-const isoDate = (d: string) => z.string().regex(DATE_RE, 'use YYYY-MM-DD').describe(d);
+// The export API's own checks (lex-api exportController parseIsoDate /
+// parseIsoTimestamp), mirrored exactly so the schema accepts what the server
+// accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
+// zone (Z, ±HH:MM or ±HHMM), seconds are optional, a fraction has 1–9 digits.
+const ISO_TS_RE = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2}))?$/;
+export function isApiDate(value: string): boolean {
+  if (!DATE_RE.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+export function isApiTimestamp(value: string): boolean {
+  const m = ISO_TS_RE.exec(value);
+  if (!m || !isApiDate(m[1])) return false;
+  if (m[2] !== undefined && (Number(m[2]) > 23 || Number(m[3]) > 59 || Number(m[4] ?? 0) > 59)) return false;
+  return !Number.isNaN(new Date(m[2] === undefined ? `${m[1]}T00:00:00Z` : value).getTime());
+}
+const isoDate = (d: string) =>
+  z.string().regex(DATE_RE, 'use YYYY-MM-DD').refine(isApiDate, 'not a calendar date').describe(d);
 /** An ISO 8601 date, or a date-time WITH a timezone (the API rejects one without). */
 const since = (d: string) =>
-  z.union([z.string().regex(DATE_RE), z.string().datetime({ offset: true })])
+  z.string().regex(ISO_TS_RE, 'use YYYY-MM-DD or an ISO 8601 date-time with a timezone (Z or ±HH:MM)')
+    .refine(isApiTimestamp, 'not a valid date/time')
     .describe(`${d} ISO 8601: a date (YYYY-MM-DD, midnight UTC) or a date-time with a timezone.`);
 // One value or a list; the allowed values are listed once, in the description
 // (an enum inside a string|array union would print them twice).
@@ -734,6 +752,8 @@ export const tools: ToolDef[] = [
         totalMatching: isObj(meta) ? meta.totalMatching : res.headers['x-export-total'],
         returned: rows.length,
         truncated: isObj(done) ? done.truncated : undefined,
+        // limit | max_rows | credits (the pool could not pay for rows added since the count)
+        truncatedBy: isObj(done) ? done.truncatedBy : undefined,
         skippedStubs: isObj(done) ? done.skippedStubs : undefined,
         rows: rows.map((r) => {
           if (!isObj(r)) return r;

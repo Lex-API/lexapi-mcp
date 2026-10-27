@@ -592,6 +592,33 @@ describe('review round 2', () => {
     expect(s.safeParse({ changedSince: '2026-05-11T10:00:00' }).success).toBe(false);
     expect(s.safeParse({ dateFrom: '01/02/2024' }).success).toBe(false);
   });
+
+  it('F5 (review): the timestamp/date schema accepts exactly what the API accepts', () => {
+    const s = z.object(byName.lex_export.inputSchema);
+    // Verdicts of lex-api's parseIsoTimestamp (exportController, #303 head).
+    const accepted = [
+      '2026-05-11', '2026-05-11T10:00Z', '2026-05-11T10:00:00Z', '2026-05-11T10:00:00.123456789Z',
+      '2026-05-11T10:00:00+0200', '2026-05-11T10:00:00-02:00', '2026-05-11T23:59:59.5+23:59',
+    ];
+    const rejected = [
+      '2026-05-11T10:00:00.1234567891Z', '2026-02-30', '2026-02-30T10:00:00Z', '2026-05-11T24:00:00Z',
+      '2026-05-11T10:60:00Z', '2026-05-11T10:00:60Z', '2026-05-11T10:00:00', '2026-05-11T10:00:00+99:00',
+      '2026-05-11T10:00:00+02:60', '2026-05-11 10:00:00Z', '2026-05-11T10Z', '2026-05-11T10:00:00.Z',
+      '2026-05-11T10:00:00z', '2026-05-11T10:00:00+2',
+    ];
+    for (const v of accepted) expect({ v, ok: s.safeParse({ changedSince: v }).success }).toEqual({ v, ok: true });
+    for (const v of rejected) expect({ v, ok: s.safeParse({ fetchedSince: v }).success }).toEqual({ v, ok: false });
+    expect(s.safeParse({ dateTo: '2024-02-29' }).success).toBe(true);
+    expect(s.safeParse({ dateTo: '2023-02-29' }).success).toBe(false); // the API 400s a non-date
+  });
+
+  it('lex_export surfaces truncatedBy from the trailer', async () => {
+    const { data } = await call('lex_export', {}, () => ({
+      raw: '{"_meta":{}}\n{"celex":"A"}\n{"_done":{"written":1,"truncated":true,"truncatedBy":"credits"}}',
+      headers: { 'content-type': 'application/x-ndjson' },
+    }));
+    expect(data).toMatchObject({ truncated: true, truncatedBy: 'credits' });
+  });
 });
 
 describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
