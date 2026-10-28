@@ -73,7 +73,7 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
 | `lex_national_coverage` | Which countries' national law LexAPI covers and what's live in each (sources, licences, attribution). Call first. | free |
 | `lex_list_national_documents` | Browse a country's national legislation/case law by title or type; cursor paging past the first 1,000 rows. | 1 per call (API 2.5.0; was 3 — unconfirmed) |
-| `lex_get_national_document` | A national document by id. Always served from the corpus. | 1 |
+| `lex_get_national_document` | A national document by id. Always served from the corpus. | 5 → 1 |
 | `lex_national_semantic_case_law` | Semantic search over one country's case law. | 5 |
 | `lex_national_semantic_legislation` | Semantic search over one country's legislation. | 5 |
 | `lex_info` | Your plan, credit balance and limits. | free |

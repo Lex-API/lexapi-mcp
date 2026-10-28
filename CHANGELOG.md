@@ -20,6 +20,11 @@ Targets LexAPI's national-law launch (2026-11-03): member-state legislation and 
 - Added a licensing/permitted-use guardrail to `SERVER_INSTRUCTIONS` (consolidated national texts are not authentic; never re-identify anonymised/pseudonymised parties; never evaluate/compare/predict individual French judges, art. 33 loi n° 2019-222).
 - The `tools/list` size tripwire (`tests/transports.test.ts`) raised from 38,000 to 46,500 characters: the 5 national-law tools (~7.5k, trimmed twice for size) plus `includeNational` on the 6 citation tools, on top of the existing ~36.4k baseline.
 
+### Fixed (review round 3)
+- **Release blocker:** `server.json`'s `description` was 134 characters; the MCP registry schema it declares (`ServerDetail.description`) caps it at 100, so `mcp-publisher publish` would have rejected it. Shortened to 94 characters. New `tests/server-json.test.ts` validates `server.json` against a local mirror of the schema's constraints (name pattern, `description` length, package `version` shape) so this class of regression fails CI instead of needing a human reviewer to count characters.
+- README tools table: `lex_get_national_document`'s cost corrected to "5 → 1" (was "1" — 5 are reserved upfront, so a pool under 5 still 402s even though it settles at 1).
+- `describeError`'s national-404 branch hedges its message ("...or the route itself is wrong") since its `Unknown API endpoint` detection matches any unmatched route, not only an unlaunched country — low risk (these tools only ever build known routes) but the wording shouldn't overclaim.
+
 ## 0.3.0 — 2026-10-26
 
 Brings the server in line with the current LexAPI API (API changelog up to the consolidated-text / `asOf` release, LexAPI PR #298).

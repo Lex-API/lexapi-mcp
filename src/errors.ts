@@ -162,7 +162,11 @@ export function describeError(err: unknown): string {
         || /^Document not found:/i.test(err.message)
         || /Unknown API endpoint/i.test(err.message);
       if (isNational) {
-        return `${head} Not retryable as-is. Either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents).`;
+        // "Unknown API endpoint" is the generic 404 for ANY unmatched route,
+        // not only an unlaunched country — these tools only ever build
+        // known routes, so that's the near-certain cause here, but the
+        // hedge keeps the message honest if that ever changes.
+        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents) — or the route itself is wrong.`;
       }
       return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title).`;
     }
