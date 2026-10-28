@@ -607,7 +607,7 @@ export const tools: ToolDef[] = [
     name: 'lex_list_national_documents',
     title: 'Browse national documents',
     description:
-      'Browse a country\'s national documents by title/type, newest-first by document date. Not yet live 404s — check lex_national_coverage first. Cost: 1 credit flat, not per page (API 2.5.0; was 3 — unconfirmed, check docs.md if this matters). Counts against the national-law allowance on lower plans (see allowance in the response). Paging: page only reaches the first 1,000 rows (a 400 past that) — pass this call\'s own nextCursor as cursor to page further, which works at any depth; omit page once you start using cursor.',
+      'Browse a country\'s national documents by title/type, newest-first by document date. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page. Counts against the national-law allowance on lower plans (see allowance in the response). Paging: page only reaches the first 1,000 rows (a 400 past that) — pass this call\'s own nextCursor as cursor to page further, which works at any depth; omit page once you start using cursor.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       q: z.string().trim().min(3).max(200).optional().describe('Title search, 3–200 characters.'),
