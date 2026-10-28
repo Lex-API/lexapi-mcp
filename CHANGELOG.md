@@ -2,6 +2,20 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
+## 0.4.0 — unreleased
+
+Targets LexAPI's national-law launch (2026-11-03): member-state legislation and case law, ahead of lex-api PR #306 (the FREE/STARTER/PROFESSIONAL monthly allowance) and the new `GET /national/coverage` endpoint. **Publish only after both are deployed**, and smoke-test against the live API once it ships — the allowance/coverage contracts were built from the PR diff and the controllers, not a running server.
+
+### Added
+- **5 tools**: `lex_national_coverage` (which countries are live, and their legislation/case-law/semantic coverage, sources, licences and attribution — call this first), `lex_list_national_documents` (browse by title/type), `lex_get_national_document` (fetch one by id), `lex_national_semantic_case_law` and `lex_national_semantic_legislation` (separate tools, mirroring the `lex_semantic_case_law` / `lex_semantic_legislation` split — different filters and billing notes). Every tool but the coverage one states in its description that a country may be registered but not yet available to customers, and to call `lex_national_coverage` first.
+- **National-law allowance** (lex-api PR #306): `X-National-Limit` / `X-National-Remaining` / `X-National-Reset` response headers are surfaced as `allowance: { limit, remaining, resetsAt }` on every national tool's result (omitted for BUSINESS and higher, which have no separate limit — the headers are absent for them). A `402 NATIONAL_ALLOWANCE_EXHAUSTED` gets its own actionable message in `describeError`, distinct from the credit-pool `CREDITS_EXHAUSTED` message: it's a separate monthly counter, a credit top-up does not help, and it resets at the start of next UTC month.
+- `attribution` (the official source and its licence, e.g. RIS, gesetze-im-internet.de, Normattiva, Légifrance/Judilibre, the Rechtspraak open data) is kept on every national document and every semantic hit — never dropped by response shaping, since it's required legal attribution, not optional context.
+- National legislation search has no `asOf` parameter (not supported server-side for national law); national case-law search accepts `hyde` for schema compatibility with `lex_semantic_case_law` but it is always a no-op (the national index never rewrites, so it never costs the 15-credit premium).
+- `tests/national.test.ts`.
+
+### Changed
+- The `tools/list` size tripwire (`tests/transports.test.ts`) raised from 38,000 to 45,000 characters: the 5 national-law tools add ~7.2k (already trimmed once for size) on top of the existing ~36.4k baseline.
+
 ## 0.3.0 — 2026-10-26
 
 Brings the server in line with the current LexAPI API (API changelog up to the consolidated-text / `asOf` release, LexAPI PR #298).

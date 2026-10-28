@@ -71,9 +71,18 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_citation_stats` | Citation graph totals and most-cited documents. | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
 | `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
+| `lex_national_coverage` | Which countries' national law LexAPI covers and what's live in each (sources, licences, attribution). Call first. | free |
+| `lex_list_national_documents` | Browse a country's national legislation/case law by title or type. | 3 per call |
+| `lex_get_national_document` | A national document by id. Always served from the corpus. | 1 |
+| `lex_national_semantic_case_law` | Semantic search over one country's case law. | 5 |
+| `lex_national_semantic_legislation` | Semantic search over one country's legislation. | 5 |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and for changes to watched acts (paid plans). The URL must be a public https URL (port 443/8443, no internal hosts or private addresses) — checked here as well as by the API. | free |
+
+### National law
+
+`lex_national_coverage`, `lex_list_national_documents`, `lex_get_national_document`, `lex_national_semantic_case_law` and `lex_national_semantic_legislation` cover member-state legislation and case law alongside the EU_LAW tools above. A country can be registered on LexAPI before it is made available to customers — always call `lex_national_coverage` first; the other tools answer an error for a country that isn't live yet. Every national result carries `attribution` (the official source and its licence, e.g. RIS, gesetze-im-internet.de, Normattiva, Légifrance/Judilibre, the Rechtspraak open data) — show it to the user alongside anything quoted. On FREE/STARTER/PROFESSIONAL plans, national-law calls also draw from a separate monthly allowance (reported as `allowance` on each response); BUSINESS and higher have no separate limit. This targets LexAPI's national-law launch (2026-11-03) — validate against the live API once it ships.
 
 ### How results are shaped for models
 

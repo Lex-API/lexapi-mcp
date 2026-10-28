@@ -7,6 +7,7 @@ import {
   compact,
   creditNotice,
   isObj,
+  nationalAllowanceOf,
   shapeCaseLaw,
   shapeCitedBy,
   shapeCites,
@@ -14,6 +15,10 @@ import {
   shapeDocument,
   shapeLegislation,
   shapeMetadata,
+  shapeNationalCaseLaw,
+  shapeNationalDocument,
+  shapeNationalLegislation,
+  shapeNationalSearchResult,
   shapeNetwork,
   shapeRecent,
   shapeSearch,
@@ -71,6 +76,15 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const celex = (what = 'CELEX number') =>
   z.string().trim().regex(CELEX_RE, `${what} must look like 32016R0679, 62018CJ0311, 02016R0679-20180524 or 32013R0952R(04)`)
     .describe(`${what}, e.g. 32016R0679.`);
+// National law (lex-api PR #306, launching 2026-11-03): jurisdiction codes
+// are not enumerated here — the server is the single source of truth for
+// which are registered and which are LIVE (lex_national_coverage), and the
+// set grows over time. A two-letter code that isn't live 404s like any
+// unmatched path, same as EU_LAW.
+const jurisdiction = () => z.string().trim().regex(/^[A-Za-z]{2}$/, 'a two-letter country code, e.g. "at"')
+  .transform((v) => v.toLowerCase())
+  .describe('ISO 3166-1 alpha-2 country code, e.g. "at". Check lex_national_coverage first — not yet live 404s.');
+
 // The 24-code enum used to be repeated in ~10 tools (~3k tokens of tools/list).
 // A pattern + refine keeps the validation and lists the codes nowhere.
 const LANG_SET = new Set<string>(LANGUAGES);
@@ -154,6 +168,12 @@ const READ: ToolAnnotations = { readOnlyHint: true, idempotentHint: true, openWo
 function withNotice(res: LexResponse<Json>, shaped: Record<string, unknown>): Record<string, unknown> {
   const notice = creditNotice(res.body);
   return notice ? { ...shaped, notice } : shaped;
+}
+
+/** Attach the national-law allowance (FREE/STARTER/PROFESSIONAL only — lex-api PR #306), when the response carried it. */
+function withAllowance(res: LexResponse<Json>, shaped: Record<string, unknown>): Record<string, unknown> {
+  const allowance = nationalAllowanceOf(res.headers);
+  return allowance ? { ...shaped, allowance } : shaped;
 }
 
 interface DocArgs {
@@ -547,6 +567,151 @@ export const tools: ToolDef[] = [
         filters: a.filters,
       }));
       return withNotice(res, budgetHitTexts(shapeCaseLaw(res), a.maxChars ?? 40_000));
+    },
+  },
+
+  // ── National law (lex-api PR #306; launching 2026-11-03) ────────────
+  // Member-state legislation and case law, alongside the EU_LAW corpus
+  // above. A country can be registered on LexAPI before it is available to
+  // customers, so every tool below except lex_national_coverage says to
+  // call it first; an unavailable country answers like an unmatched path
+  // (404), never a silent empty result. Attribution (source, licence) is
+  // kept on every result — it is required, not optional, context.
+  {
+    name: 'lex_national_coverage',
+    title: 'National-law coverage',
+    description:
+      "Countries with national-law coverage: live status, legislation/case-law coverage (counts, dates, courts), semantic-search availability, and sources with licence/attribution. Call this before any other national tool. Free.",
+    inputSchema: {},
+    annotations: READ,
+    handler: async (_a, client) => {
+      const res = await client.nationalCoverage();
+      return compact(res.body);
+    },
+  },
+
+  {
+    name: 'lex_list_national_documents',
+    title: 'Browse national documents',
+    description:
+      'Browse a country\'s national documents by title/type. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page. Counts against the national-law allowance on lower plans (see allowance in the response).',
+    inputSchema: {
+      jurisdiction: jurisdiction(),
+      q: z.string().trim().min(1).max(200).optional().describe('Title search.'),
+      documentType: z.string().trim().min(1).max(100).optional().describe('Document type as stored for this country.'),
+      page: z.number().int().min(1).default(1),
+      limit: z.number().int().min(1).max(100).default(20),
+      includeRepealed: z.boolean().optional().describe('Also list repealed/superseded acts.'),
+    },
+    annotations: READ,
+    handler: async (a, client) => {
+      const res = await client.listNationalDocuments(a.jurisdiction, compact({
+        q: a.q,
+        type: a.documentType,
+        page: a.page,
+        limit: a.limit,
+        includeRepealed: a.includeRepealed,
+      }));
+      const b = res.body;
+      const results = Array.isArray(b.results) ? b.results.map(shapeNationalSearchResult) : [];
+      return withAllowance(res, withNotice(res, compact({
+        jurisdiction: b.jurisdiction,
+        total: b.total,
+        page: b.page,
+        limit: b.limit,
+        includeRepealed: b.includeRepealed,
+        results,
+      })));
+    },
+  },
+
+  {
+    name: 'lex_get_national_document',
+    title: 'Fetch a national document',
+    description:
+      'A national document by id, e.g. "AT-NOR-12345". content: null means no text; see textAvailability. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 1 credit; counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
+    inputSchema: {
+      jurisdiction: jurisdiction(),
+      id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
+      language: lang().optional(),
+      view,
+      maxChars: maxChars(40_000),
+      offset,
+    },
+    annotations: READ,
+    handler: async (a, client) => {
+      const res = await client.getNationalDocument(a.jurisdiction, a.id, compact({ language: a.language }));
+      const shaped = shapeNationalDocument(res.body.document, contentOpts(a));
+      return withAllowance(res, withNotice(res, shaped));
+    },
+  },
+
+  {
+    name: 'lex_national_semantic_case_law',
+    title: 'Semantic search over national case law',
+    description:
+      'Find one country\'s case law by meaning. hyde is accepted for schema compatibility but is a no-op nationally (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
+    inputSchema: {
+      jurisdiction: jurisdiction(),
+      query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
+      limit: z.number().int().min(1).max(100).default(10).describe('Max cases (plan cap, same as lex_semantic_case_law).'),
+      min_score: z.number().min(0).max(1).optional().describe('Similarity floor (default ≈0.7).'),
+      language: z.enum(SEMANTIC_LANGUAGES).optional(),
+      hyde: z.boolean().optional().describe('No-op here; never adds cost or latency.'),
+      include: z.array(z.literal('text')).optional().describe('["text"] returns full judgment text, bounded by maxChars.'),
+      filters: z.object({
+        court: z.string().optional(),
+        date_from: isoDate('From.').optional(),
+        date_to: isoDate('To.').optional(),
+        ecli: z.string().optional(),
+      }).strict().optional().describe('No case_number nationally.'),
+      maxChars: maxChars(40_000),
+    },
+    annotations: { ...READ, idempotentHint: false },
+    handler: async (a, client) => {
+      const res = await client.nationalSemanticCaseLaw(a.jurisdiction, compact({
+        query: a.query,
+        limit: a.limit,
+        min_score: a.min_score,
+        language: a.language,
+        hyde: a.hyde,
+        include: a.include,
+        filters: a.filters,
+      }));
+      return withAllowance(res, withNotice(res, budgetHitTexts(shapeNationalCaseLaw(res), a.maxChars ?? 40_000)));
+    },
+  },
+
+  {
+    name: 'lex_national_semantic_legislation',
+    title: 'Semantic search over national legislation',
+    description:
+      'Find one country\'s legislation articles by meaning. No asOf — current text only. Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
+    inputSchema: {
+      jurisdiction: jurisdiction(),
+      query: z.string().trim().min(1).max(1000).describe('Natural-language description of the provision you are looking for.'),
+      limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap, same as lex_semantic_legislation).'),
+      min_score: z.number().min(0).max(1).optional().describe('Similarity floor (default ≈0.7).'),
+      language: z.enum(SEMANTIC_LANGUAGES).optional(),
+      include: z.array(z.literal('text')).optional().describe('["text"] returns full article text instead of a snippet.'),
+      filters: z.object({
+        id: z.string().trim().min(1).optional().describe('A specific national document id.'),
+        inForce: z.boolean().optional().describe('As of today.'),
+        documentType: z.string().trim().min(1).optional(),
+      }).strict().optional(),
+      maxChars: maxChars(40_000),
+    },
+    annotations: { ...READ, idempotentHint: false },
+    handler: async (a, client) => {
+      const res = await client.nationalSemanticLegislation(a.jurisdiction, compact({
+        query: a.query,
+        limit: a.limit,
+        min_score: a.min_score,
+        language: a.language,
+        include: a.include,
+        filters: a.filters,
+      }));
+      return withAllowance(res, withNotice(res, budgetHitTexts(shapeNationalLegislation(res), a.maxChars ?? 40_000)));
     },
   },
 

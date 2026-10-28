@@ -19,6 +19,8 @@ Citing: always give the CELEX number (and the EUR-Lex link). Consolidated texts 
 
 LexAPI provides source texts; it does not decide whether anyone is compliant — leave legal conclusions to the user and their advisers.
 
+National law (member-state legislation and case law): call lex_national_coverage before any other national tool — a country can be registered but not yet launched, and availability, courts and source licensing differ by country. Always carry the sources/attribution it and the national tools return through to the user; national-law calls also draw from a separate monthly allowance on some plans, reported in each tool's response.
+
 Costs come from the user's monthly credit pool and are stated in each tool description; avoid repeated or speculative calls. On a 402 (credits exhausted) or 429 (rate limit), stop and tell the user what the error says.`;
 
 export interface CreateServerOptions {

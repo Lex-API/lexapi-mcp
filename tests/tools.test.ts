@@ -29,7 +29,9 @@ describe('tool catalogue', () => {
       'lex_citation_network', 'lex_citation_path', 'lex_citation_stats', 'lex_cited_by', 'lex_cites',
       'lex_create_webhook', 'lex_delete_webhook', 'lex_document_versions', 'lex_export', 'lex_extract_citations',
       'lex_get_document', 'lex_get_document_by_url', 'lex_get_document_version', 'lex_get_documents_batch',
-      'lex_get_metadata', 'lex_get_webhook', 'lex_info', 'lex_list_webhooks', 'lex_recent_documents', 'lex_related',
+      'lex_get_metadata', 'lex_get_national_document', 'lex_get_webhook', 'lex_info', 'lex_list_national_documents',
+      'lex_list_webhooks', 'lex_national_coverage', 'lex_national_semantic_case_law',
+      'lex_national_semantic_legislation', 'lex_recent_documents', 'lex_related',
       'lex_resolve', 'lex_search', 'lex_semantic_case_law', 'lex_semantic_legislation', 'lex_test_webhook',
       'lex_update_webhook',
     ]);

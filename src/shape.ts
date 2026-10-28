@@ -63,6 +63,23 @@ export function creditNotice(body: unknown): string | undefined {
   return `LexAPI credit pool is low: ${remaining} of ${limit} credits left${reset ? ` (resets ${reset})` : ''}.`;
 }
 
+// ── National-law allowance (lex-api PR #306) ────────────────────────
+/**
+ * FREE/STARTER/PROFESSIONAL accounts get a monthly allowance of national
+ * calls, separate from the credit pool; BUSINESS and higher have no
+ * separate limit, so the `X-National-*` headers are simply absent for them.
+ * Surfaced on every national tool response (except lex_national_coverage,
+ * which does not count against it) so the model can warn the user before
+ * calls start to 402 `NATIONAL_ALLOWANCE_EXHAUSTED`.
+ */
+export function nationalAllowanceOf(headers: LexResponse['headers']): Obj | undefined {
+  const limit = num(Number(headers['x-national-limit']));
+  const remaining = num(Number(headers['x-national-remaining']));
+  const resetsAt = str(headers['x-national-reset']);
+  const out = compact({ limit, remaining, resetsAt });
+  return Object.keys(out).length ? out : undefined;
+}
+
 // ── Consolidated texts ─────────────────────────────────────────────
 const CONSOLIDATED_RE = /^0([0-9]{4}[A-Z]{1,2}[0-9]{4}(?:\([0-9]{2}\))?)-([0-9]{4})([0-9]{2})([0-9]{2})$/;
 
@@ -596,6 +613,145 @@ export function shapeNetwork(res: LexResponse<Json>): Obj {
     partialReason: b.partialReason,
     message: b.message,
     relationSync: b.relationSync,
+  });
+}
+
+// ── National law (lex-api PR #306, launching 2026-11-03) ────────────
+// National documents key on `id` (not `celex`) and always carry
+// `attribution` (per-source licence/attribution text) — never dropped by
+// compacting, since it is the legally required attribution for the source.
+
+export function shapeNationalSearchResult(r: unknown): Obj {
+  if (!isObj(r)) return {};
+  return compact({
+    id: r.id,
+    jurisdiction: r.jurisdiction,
+    language: r.language,
+    title: r.title,
+    documentType: r.documentType,
+    ecli: r.ecli,
+    eli: r.eli,
+    dateOfDocument: r.dateOfDocument,
+    version: r.version,
+    fetchedAt: r.fetchedAt,
+    validTo: r.validTo,
+    inForce: r.inForce,
+  });
+}
+
+/** A full national document (from GET /{jur}/documents/{id}). */
+export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
+  if (!isObj(doc)) return {};
+  // `compact` drops `null` values — build the metadata fields through it
+  // first, then set `content: null` (when that's the case) on the result
+  // directly, never through another `compact` call, or the "no text" signal
+  // would be lost (same pitfall shapeDocument's content:null branch avoids).
+  const out: Obj = compact({
+    id: doc.id,
+    jurisdiction: doc.jurisdiction,
+    language: doc.language,
+    title: doc.title,
+    documentType: doc.documentType,
+    ecli: doc.ecli,
+    eli: doc.eli,
+    dateOfDocument: doc.dateOfDocument,
+    version: doc.version,
+    fetchedAt: doc.fetchedAt,
+    validTo: doc.validTo,
+    inForce: doc.inForce,
+    textBasis: doc.textBasis,
+    // Required legal attribution for the source (RIS, gesetze-im-internet.de,
+    // Normattiva, Légifrance/Judilibre, the Rechtspraak open data, …): always
+    // kept, never dropped by compacting elsewhere.
+    attribution: doc.attribution,
+  });
+  // A text-availability block that just says "available" is noise (mirrors
+  // shapeMetadata); any other state (no text, why, which languages) is kept.
+  const ta = doc.textAvailability;
+  if (isObj(ta) && !(ta.available === true && Object.keys(ta).length === 1)) out.textAvailability = ta;
+  if (doc.content === null) {
+    out.content = null; // no text published — textAvailability says why
+    return out;
+  }
+  const { content, note } = shapeContent(doc.content, opts);
+  if (content) out.content = content;
+  if (note) out.note = note;
+  return out;
+}
+
+export function shapeNationalCaseLawHit(r: unknown): Obj {
+  if (!isObj(r)) return {};
+  const md = isObj(r.metadata) ? r.metadata : {};
+  const out: Obj = {
+    documentId: r.documentId ?? md.celex_id,
+    jurisdiction: r.jurisdiction,
+    score: round3(r.score),
+    case_name: r.case_name,
+    case_number: r.case_number,
+    ecli: r.ecli,
+    court: r.court,
+    decision_date: r.decision_date,
+    parties: r.parties,
+    language: r.language && r.language !== 'en' ? r.language : undefined,
+    summary: r.summary,
+    snippet: r.summary ? undefined : r.snippet,
+    text: r.text,
+    validTo: r.validTo,
+    inForce: r.inForce,
+    // Required legal attribution for the source — always kept.
+    attribution: r.attribution,
+  };
+  for (const k of CASE_ANALYTICS) out[k] = r[k];
+  return compact(out);
+}
+
+export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
+  const b = res.body;
+  const results = Array.isArray(b.results) ? b.results.map(shapeNationalCaseLawHit) : [];
+  return compact({
+    jurisdiction: b.jurisdiction,
+    resultCount: results.length,
+    results,
+    hint: b.hint,
+    // The national index never rewrites (clausly answers hyde:false) — the
+    // request's hyde was accepted but did not cost the HyDE premium.
+    hyde: b.hyde,
+    attribution: b.attribution,
+  });
+}
+
+export function shapeNationalLegislationHit(r: unknown): Obj {
+  if (!isObj(r)) return {};
+  return compact({
+    law_id: r.law_id,
+    documentId: r.documentId,
+    jurisdiction: r.jurisdiction,
+    law_title: r.law_title,
+    article_ref: r.article_ref,
+    section: r.section,
+    chapter: r.chapter,
+    score: round3(r.score),
+    language: r.language,
+    snippet: r.snippet,
+    text: r.text,
+    // Our row's confirmed-repeal override, when it fired (snake_case —
+    // mirrors the server's own field names on this endpoint only).
+    in_force: r.in_force,
+    valid_to: r.valid_to,
+    // Required legal attribution for the source — always kept.
+    attribution: r.attribution,
+  });
+}
+
+export function shapeNationalLegislation(res: LexResponse<Json>): Obj {
+  const b = res.body;
+  const results = Array.isArray(b.results) ? b.results.map(shapeNationalLegislationHit) : [];
+  return compact({
+    jurisdiction: b.jurisdiction,
+    resultCount: results.length,
+    results,
+    hint: b.hint,
+    attribution: b.attribution,
   });
 }
 

@@ -115,6 +115,17 @@ export function describeError(err: unknown): string {
     case 401:
       return `${head} The LexAPI API key is missing, wrong, or revoked. Ask the user to check the key configured for this MCP server (LEXAPI_API_KEY, or the Authorization header for the hosted server) or create a new one at ${DASHBOARD_URL}.`;
     case 402: {
+      // The monthly allowance of national-law calls for FREE/STARTER/
+      // PROFESSIONAL plans (lex-api PR #306) — a separate counter from the
+      // credit pool, so the usual "buy a top-up" advice does not apply.
+      if (err.code === 'NATIONAL_ALLOWANCE_EXHAUSTED') {
+        const parts: string[] = [];
+        if (d) {
+          if (typeof d.limit === 'number') parts.push(`the monthly allowance is ${d.limit} national-law calls`);
+          if (typeof d.resetsAt === 'string') parts.push(`it resets at ${d.resetsAt} (start of next UTC month)`);
+        }
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This is the account's monthly allowance of national-law calls on its plan, not the LexAPI credit pool — a top-up does not help. Tell the user: wait for the reset, or upgrade to BUSINESS or higher, which has no separate national-law limit (${DASHBOARD_URL}, plans: ${PRICING_URL}). Do not retry this call unchanged.`;
+      }
       const parts: string[] = [];
       if (d) {
         if (typeof d.weight === 'number') parts.push(`this call needs ${d.weight} credits`);
