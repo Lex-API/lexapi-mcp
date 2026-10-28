@@ -53,12 +53,18 @@ export function parseErrorBody(
     : usage && typeof usage.resetsAt === 'string' ? usage.resetsAt
       : undefined;
   // National error bodies (lex-api national-law lanes) carry `jurisdiction`
-  // as a plain top-level sibling of `error`/`code`/`message`, never nested
-  // in `details` — the document-id 404, the 409 NATIONAL_SEMANTIC_NOT_ENABLED
-  // and 503 NATIONAL_SEMANTIC_UNAVAILABLE bodies, and the per-jurisdiction
-  // 403 tier gate all do this. Fall back to it only when nothing else
+  // (and, for a withdrawn document — lex-api PR #320 — also `id` and
+  // `withdrawnAt`) as plain top-level siblings of `error`/`code`/`message`,
+  // never nested in `details` — the document-id 404, the 409
+  // NATIONAL_SEMANTIC_NOT_ENABLED and 503 NATIONAL_SEMANTIC_UNAVAILABLE
+  // bodies, the per-jurisdiction 403 tier gate, and the citation routes' 410
+  // DOCUMENT_WITHDRAWN all do this. Fall back to it only when nothing else
   // supplied a details object, so it never shadows a real one.
-  const jurisdictionFallback = typeof j.jurisdiction === 'string' ? { jurisdiction: j.jurisdiction } : undefined;
+  const strayFields: Record<string, unknown> = {};
+  if (typeof j.jurisdiction === 'string') strayFields.jurisdiction = j.jurisdiction;
+  if (typeof j.id === 'string') strayFields.id = j.id;
+  if (typeof j.withdrawnAt === 'string') strayFields.withdrawnAt = j.withdrawnAt;
+  const jurisdictionFallback = Object.keys(strayFields).length ? strayFields : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
     const eo = e as Record<string, unknown>;
@@ -194,6 +200,24 @@ export function describeError(err: unknown): string {
         return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — do not retry, tell the user. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
       }
       return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
+    }
+    case 410: {
+      // A national document its source withdrew (lex-api PR #320) — a
+      // takedown, a pseudonymisation fix, a robots.txt listing. Served
+      // nowhere: no title, no metadata, no text. Two shapes carry it: the
+      // typed envelope (lex_get_national_document, details nested) and the
+      // legacy shape (citation tools, id/jurisdiction/withdrawnAt as
+      // top-level siblings via the fallback above) — `d` covers either.
+      if (err.code === 'DOCUMENT_WITHDRAWN') {
+        const parts: string[] = [];
+        if (d) {
+          if (typeof d.id === 'string') parts.push(`id ${d.id}`);
+          if (typeof d.jurisdiction === 'string') parts.push(`jurisdiction ${d.jurisdiction}`);
+          if (typeof d.withdrawnAt === 'string') parts.push(`withdrawn ${d.withdrawnAt}`);
+        }
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This document was withdrawn by its source and LexAPI serves nothing of it — not even the title. Gone for good, not a temporary failure: do not retry. If you or the user were holding a cached copy, drop it — a withdrawal can be a legal takedown or a pseudonymisation fix, and keeping or re-deriving the content (including trying to identify who it was about) would defeat that. Nothing was charged.`;
+      }
+      return `${head} Gone. Not retryable; nothing was charged.`;
     }
     case 502:
       return `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;

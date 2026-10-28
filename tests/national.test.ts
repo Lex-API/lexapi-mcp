@@ -98,6 +98,77 @@ describe('lex_list_national_documents', () => {
     const { data } = await call('lex_list_national_documents', { jurisdiction: 'AT' }, () => ({ body: { results: [] } }));
     expect(data).not.toHaveProperty('allowance');
   });
+
+  it('cursor paging (lex-api PR #320): sends cursor instead of page, keeps nextCursor/hasMore/totalExact, and nextCursor: null is not dropped by compact', async () => {
+    const { calls, data } = await call('lex_list_national_documents', {
+      jurisdiction: 'at', cursor: 'abc123', limit: 50,
+    }, () => ({
+      body: {
+        jurisdiction: 'AT', total: 1200, totalExact: false, limit: 50, includeRepealed: false,
+        hasMore: false, nextCursor: null, results: [],
+      },
+    }));
+    expect(Object.fromEntries(calls[0].url.searchParams)).toEqual({ cursor: 'abc123', limit: '50' });
+    expect(calls[0].url.searchParams.has('page')).toBe(false);
+    expect(data.totalExact).toBe(false);
+    expect(data.hasMore).toBe(false);
+    expect(data.nextCursor).toBeNull();
+  });
+
+  it('a page is dropped from the query when cursor is also given', async () => {
+    const { calls } = await call('lex_list_national_documents', {
+      jurisdiction: 'at', page: 3, cursor: 'c1',
+    }, () => ({ body: { results: [] } }));
+    expect(calls[0].url.searchParams.has('page')).toBe(false);
+    expect(calls[0].url.searchParams.get('cursor')).toBe('c1');
+  });
+
+  it('q shorter than 3 characters is rejected by the schema itself (no network call)', () => {
+    const tool = byName.lex_list_national_documents;
+    const result = z.object(tool.inputSchema).safeParse({ jurisdiction: 'at', q: 'ab' });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('a national document its source withdrew (410 DOCUMENT_WITHDRAWN, lex-api PR #320)', () => {
+  it('typed envelope on lex_get_national_document: not retryable, says to drop any copy', async () => {
+    const { result } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-5' }, () => ({
+      status: 410,
+      body: {
+        success: false,
+        error: {
+          code: 'DOCUMENT_WITHDRAWN',
+          message: 'AT document AT-NOR-5 was withdrawn by its source and is no longer served',
+          details: { id: 'AT-NOR-5', jurisdiction: 'AT', withdrawnAt: '2026-10-20T00:00:00.000Z' },
+        },
+      },
+    }));
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/withdrawn/i);
+    expect(text).toMatch(/do not retry/i);
+    expect(text).toMatch(/drop it/i);
+    expect(text).not.toMatch(/lex_resolve/);
+  });
+
+  it('legacy shape on a citation tool (id/jurisdiction/withdrawnAt as top-level siblings)', async () => {
+    const { result } = await call('lex_cited_by', { celexNumber: 'AT-NOR-5' }, () => ({
+      status: 410,
+      body: {
+        success: false,
+        code: 'DOCUMENT_WITHDRAWN',
+        error: 'Document withdrawn: AT-NOR-5',
+        message: 'AT document AT-NOR-5 was withdrawn by its source and is no longer served.',
+        id: 'AT-NOR-5',
+        jurisdiction: 'AT',
+        withdrawnAt: '2026-10-20T00:00:00.000Z',
+      },
+    }));
+    expect(result.isError).toBe(true);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toMatch(/withdrawn/i);
+    expect(text).toMatch(/AT/);
+  });
 });
 
 describe('lex_get_national_document', () => {

@@ -607,34 +607,43 @@ export const tools: ToolDef[] = [
     name: 'lex_list_national_documents',
     title: 'Browse national documents',
     description:
-      'Browse a country\'s national documents by title/type. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page. Counts against the national-law allowance on lower plans (see allowance in the response).',
+      'Browse a country\'s national documents by title/type, newest-first by document date. Not yet live 404s — check lex_national_coverage first. Cost: 1 credit flat, not per page (API 2.5.0; was 3 — unconfirmed, check docs.md if this matters). Counts against the national-law allowance on lower plans (see allowance in the response). Paging: page only reaches the first 1,000 rows (a 400 past that) — pass this call\'s own nextCursor as cursor to page further, which works at any depth; omit page once you start using cursor.',
     inputSchema: {
       jurisdiction: jurisdiction(),
-      q: z.string().trim().min(1).max(200).optional().describe('Title search.'),
+      q: z.string().trim().min(3).max(200).optional().describe('Title search, 3–200 characters.'),
       documentType: z.string().trim().min(1).max(100).optional().describe('Document type as stored for this country.'),
-      page: z.number().int().min(1).default(1),
+      page: z.number().int().min(1).optional().describe('1-based page, first 1,000 rows only. Omit when paging with cursor.'),
+      cursor: z.string().trim().min(1).optional().describe('Opaque cursor from a previous call\'s nextCursor — pages past the first 1,000 rows. Do not combine with page.'),
       limit: z.number().int().min(1).max(100).default(20),
       includeRepealed: z.boolean().optional().describe('Also list repealed/superseded acts.'),
     },
-    annotations: READ,
+    annotations: { ...READ, idempotentHint: false },
     handler: async (a, client) => {
       const res = await client.listNationalDocuments(a.jurisdiction, compact({
         q: a.q,
         type: a.documentType,
-        page: a.page,
+        page: a.cursor ? undefined : a.page,
+        cursor: a.cursor,
         limit: a.limit,
         includeRepealed: a.includeRepealed,
       }));
       const b = res.body;
       const results = Array.isArray(b.results) ? b.results.map(shapeNationalSearchResult) : [];
-      return withAllowance(res, withNotice(res, compact({
+      // nextCursor is meaningfully `null` ("no more pages") — compact()
+      // would otherwise drop it indistinguishably from "absent", the same
+      // pitfall `content: null` has elsewhere.
+      const shaped: Record<string, unknown> = compact({
         jurisdiction: b.jurisdiction,
         total: b.total,
+        totalExact: b.totalExact,
         page: b.page,
         limit: b.limit,
         includeRepealed: b.includeRepealed,
+        hasMore: b.hasMore,
         results,
-      })));
+      });
+      if (b.hasMore !== undefined) shaped.nextCursor = b.nextCursor ?? null;
+      return withAllowance(res, withNotice(res, shaped));
     },
   },
 
@@ -642,7 +651,7 @@ export const tools: ToolDef[] = [
     name: 'lex_get_national_document',
     title: 'Fetch a national document',
     description:
-      'A national document by id, e.g. "AT-NOR-12345". content: null means no text; see textAvailability. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too) — a pool with fewer than 5 available 402s even though it only spends 1. Counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
+      'A national document by id, e.g. "AT-NOR-12345". content: null means the source publishes no machine-readable text for this id — see textAvailability for why. A document its source withdrew (a takedown, a pseudonymisation fix) is a distinct error instead — nothing of it is served, not even the title; do not retry, and drop any copy you were holding. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too) — a pool with fewer than 5 available 402s even though it only spends 1. Counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
