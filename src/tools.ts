@@ -76,6 +76,19 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const celex = (what = 'CELEX number') =>
   z.string().trim().regex(CELEX_RE, `${what} must look like 32016R0679, 62018CJ0311, 02016R0679-20180524 or 32013R0952R(04)`)
     .describe(`${what}, e.g. 32016R0679.`);
+
+// National-corpus ids (e.g. `AT-NOR-10001597`, `SI-JUD-UPRS-2025-I.U.727.2022.`):
+// a two-letter jurisdiction prefix, same as middleware/jurisdiction.js's
+// nationalIdParamGuard (`/^([A-Z]{2})-/`) uses to recognise them on the
+// citation graph. `includeNational`-aware citation tools accept either
+// shape; document reads stay celex()-only (lex_get_national_document /
+// lex_list_national_documents cover national documents directly).
+const NATIONAL_ID_RE = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
+const celexOrNationalId = (what = 'identifier') =>
+  z.string().trim()
+    .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v),
+      `${what} must be a CELEX number (e.g. 32016R0679) or a national document id (e.g. AT-NOR-12345)`)
+    .describe(`${what}: a CELEX number, or (with includeNational) a national document id, e.g. "AT-NOR-12345".`);
 // National law (lex-api PR #306, launching 2026-11-03): jurisdiction codes
 // are not enumerated here — the server is the single source of truth for
 // which are registered and which are LIVE (lex_national_coverage), and the
@@ -629,7 +642,7 @@ export const tools: ToolDef[] = [
     name: 'lex_get_national_document',
     title: 'Fetch a national document',
     description:
-      'A national document by id, e.g. "AT-NOR-12345". content: null means no text; see textAvailability. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 1 credit; counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
+      'A national document by id, e.g. "AT-NOR-12345". content: null means no text; see textAvailability. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too) — a pool with fewer than 5 available 402s even though it only spends 1. Counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
@@ -656,7 +669,7 @@ export const tools: ToolDef[] = [
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
       limit: z.number().int().min(1).max(100).default(10).describe('Max cases (plan cap, same as lex_semantic_case_law).'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor (default ≈0.7).'),
-      language: z.enum(SEMANTIC_LANGUAGES).optional(),
+      language: lang('Optional — omit, or the country\'s own language (e.g. "de" for AT, from lex_national_coverage); any other value is a 400.').optional(),
       hyde: z.boolean().optional().describe('No-op here; never adds cost or latency.'),
       include: z.array(z.literal('text')).optional().describe('["text"] returns full judgment text, bounded by maxChars.'),
       filters: z.object({
@@ -689,10 +702,10 @@ export const tools: ToolDef[] = [
       'Find one country\'s legislation articles by meaning. No asOf — current text only. Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
-      query: z.string().trim().min(1).max(1000).describe('Natural-language description of the provision you are looking for.'),
+      query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
       limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap, same as lex_semantic_legislation).'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor (default ≈0.7).'),
-      language: z.enum(SEMANTIC_LANGUAGES).optional(),
+      language: lang('Optional — omit, or the country\'s own language (e.g. "de" for AT, from lex_national_coverage); any other value is a 400.').optional(),
       include: z.array(z.literal('text')).optional().describe('["text"] returns full article text instead of a snippet.'),
       filters: z.object({
         id: z.string().trim().min(1).optional().describe('A specific national document id.'),
@@ -720,12 +733,13 @@ export const tools: ToolDef[] = [
     name: 'lex_cited_by',
     title: 'Documents citing a CELEX',
     description:
-      'Inbound citations: documents that cite, amend, correct, repeal, implement or are based on this act, with the edge type. For legislation, amendment / corrigendum / repeal edges are read from the Publications Office (Cellar) and refreshed on read when older than 7 days; if that refresh does not finish in ~2.5 s, relationSync.status is "pending" (or "skipped") and the stored edges are served — check relationSync before calling the list complete. Other edge types cover only documents LexAPI has extracted. Cost: 1 credit.',
+      'Inbound citations: documents that cite, amend, correct, repeal, implement or are based on this act, with the edge type. For legislation, amendment / corrigendum / repeal edges are read from the Publications Office (Cellar) and refreshed on read when older than 7 days; if that refresh does not finish in ~2.5 s, relationSync.status is "pending" (or "skipped") and the stored edges are served — check relationSync before calling the list complete. Other edge types cover only documents LexAPI has extracted. includeNational adds national neighbours (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
     inputSchema: {
-      celexNumber: celex(),
+      celexNumber: celexOrNationalId(),
       citationType: z.enum(CITATION_TYPES).optional().describe('Only this edge type (e.g. "amendment" for the amending acts).'),
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per page.'),
       offset: z.number().int().min(0).default(0).describe('Paging offset, in edges.'),
+      includeNational: z.boolean().optional().describe('Also include national neighbours of live countries (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -739,12 +753,13 @@ export const tools: ToolDef[] = [
     name: 'lex_cites',
     title: 'Documents a CELEX cites',
     description:
-      'Outbound citations: what this document references, amends, repeals, implements or is based on, with the edge type. Only populated for documents whose citations were extracted (lex_extract_citations). Cost: 1 credit.',
+      'Outbound citations: what this document references, amends, repeals, implements or is based on, with the edge type. Only populated for documents whose citations were extracted (lex_extract_citations). includeNational adds national neighbours (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
     inputSchema: {
-      celexNumber: celex(),
+      celexNumber: celexOrNationalId(),
       citationType: z.enum(CITATION_TYPES).optional(),
       limit: z.number().int().min(1).max(500).default(50),
       offset: z.number().int().min(0).default(0),
+      includeNational: z.boolean().optional().describe('Also include national neighbours of live countries (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -758,12 +773,13 @@ export const tools: ToolDef[] = [
     name: 'lex_citation_network',
     title: 'Citation neighbourhood of a CELEX',
     description:
-      'Both directions at once — documents this one cites and documents citing it — deduplicated, with edge types per neighbour; paging.citesTotal / citedByTotal give the full counts. Cost: 20 credits (prefer lex_cited_by / lex_cites at 1 credit when one direction is enough).',
+      'Both directions at once — documents this one cites and documents citing it — deduplicated, with edge types per neighbour; paging.citesTotal / citedByTotal give the full counts. includeNational adds national neighbours (BUSINESS+ only; also accepts a national id). Cost: 20 credits (prefer lex_cited_by / lex_cites at 1 credit when one direction is enough).',
     inputSchema: {
-      celexNumber: celex(),
+      celexNumber: celexOrNationalId(),
       citationType: z.enum(CITATION_TYPES).optional(),
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per direction.'),
       offset: z.number().int().min(0).default(0),
+      includeNational: z.boolean().optional().describe('Also include national neighbours of live countries (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -777,15 +793,16 @@ export const tools: ToolDef[] = [
     name: 'lex_citation_path',
     title: 'Citation path between two documents',
     description:
-      'Shortest chain of outbound citations from one document to another (e.g. how a judgment reaches a directive). found: false is a normal answer, not an error. Cost: 20 credits.',
+      'Shortest chain of outbound citations from one document to another (e.g. how a judgment reaches a directive). found: false is a normal answer, not an error. includeNational follows national documents too (BUSINESS+ only; from/to also accept a national id). Cost: 20 credits.',
     inputSchema: {
-      from: celex('Start CELEX'),
-      to: celex('Target CELEX'),
+      from: celexOrNationalId('Start identifier'),
+      to: celexOrNationalId('Target identifier'),
       maxDepth: z.number().int().min(1).max(8).default(3).describe('Max hops.'),
+      includeNational: z.boolean().optional().describe('Also follow national documents of live countries (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
-      const res = await client.citationPath(normCelex(a.from), normCelex(a.to), { maxDepth: a.maxDepth });
+      const res = await client.citationPath(normCelex(a.from), normCelex(a.to), { maxDepth: a.maxDepth, includeNational: a.includeNational });
       const b = stripEnvelope(res.body);
       if (Array.isArray(b.path)) {
         b.path = b.path.map((n) => (isObj(n) ? compact({ celex: n.celexNumber, title: n.title }) : n));
@@ -798,14 +815,15 @@ export const tools: ToolDef[] = [
     name: 'lex_related',
     title: 'Documents related by shared citations',
     description:
-      'Documents that cite the most of the same acts as this one (bibliographic coupling) — "what else deals with this". Needs the seed\'s outbound citations (lex_extract_citations). Cost: 20 credits.',
+      'Documents that cite the most of the same acts as this one (bibliographic coupling) — "what else deals with this". Needs the seed\'s outbound citations (lex_extract_citations). includeNational considers national documents too (BUSINESS+ only; also accepts a national id). Cost: 20 credits.',
     inputSchema: {
-      celexNumber: celex(),
+      celexNumber: celexOrNationalId(),
       limit: z.number().int().min(1).max(50).default(10),
+      includeNational: z.boolean().optional().describe('Also consider national documents of live countries (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
-      const res = await client.related(normCelex(a.celexNumber), { limit: a.limit });
+      const res = await client.related(normCelex(a.celexNumber), { limit: a.limit, includeNational: a.includeNational });
       const b = stripEnvelope(res.body, ['method']);
       if (Array.isArray(b.related)) {
         b.related = b.related.map((r) => (isObj(r) ? compact({
@@ -822,11 +840,13 @@ export const tools: ToolDef[] = [
   {
     name: 'lex_citation_stats',
     title: 'Citation graph statistics',
-    description: 'Totals for the whole LexAPI citation graph plus the 10 most-cited and 10 most-citing documents. Cost: 20 credits.',
-    inputSchema: {},
+    description: 'Totals for the whole LexAPI citation graph plus the 10 most-cited and 10 most-citing documents. includeNational counts national documents too (BUSINESS+ only). Cost: 20 credits.',
+    inputSchema: {
+      includeNational: z.boolean().optional().describe('Also count national documents of live countries (BUSINESS+ only).'),
+    },
     annotations: READ,
-    handler: async (_a, client) => {
-      const res = await client.citationStats();
+    handler: async (a, client) => {
+      const res = await client.citationStats({ includeNational: a.includeNational });
       return withNotice(res, stripEnvelope(res.body));
     },
   },

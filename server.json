@@ -2,19 +2,19 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Lex-API/lexapi-mcp",
   "title": "LexAPI",
-  "description": "EU law for AI: EUR-Lex legislation and case law, citation graph, semantic search with asOf.",
+  "description": "EU law and national law (as jurisdictions launch) for AI: EUR-Lex legislation and case law, citation graph, semantic search with asOf.",
   "websiteUrl": "https://lex-api.com",
   "repository": {
     "url": "https://github.com/Lex-API/lexapi-mcp",
     "source": "github"
   },
-  "version": "0.3.0",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@lexapi/mcp",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

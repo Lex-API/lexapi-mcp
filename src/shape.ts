@@ -582,6 +582,10 @@ export function shapeCitedBy(res: LexResponse<Json>): Obj {
     offset: b.offset,
     citedBy: Array.isArray(b.citedBy) ? b.citedBy.map(shapeEdgeGroup) : [],
     relationSync: b.relationSync,
+    // Present only when the caller's account can see at least one national
+    // jurisdiction (middleware/jurisdiction.js citationScopeFields) — absent
+    // entirely for everyone else, so EU-only responses are unchanged.
+    includeNational: b.includeNational,
   });
 }
 
@@ -593,6 +597,7 @@ export function shapeCites(res: LexResponse<Json>): Obj {
     limit: b.limit,
     offset: b.offset,
     cites: Array.isArray(b.cites) ? b.cites.map(shapeEdgeGroup) : [],
+    includeNational: b.includeNational,
   });
 }
 
@@ -613,6 +618,7 @@ export function shapeNetwork(res: LexResponse<Json>): Obj {
     partialReason: b.partialReason,
     message: b.message,
     relationSync: b.relationSync,
+    includeNational: b.includeNational,
   });
 }
 

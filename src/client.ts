@@ -300,7 +300,7 @@ export class LexAPIClient {
     return this.request('GET', `/citations/path/${enc(from)}/${enc(to)}`, { query });
   }
   related(celex: string, query: Query) { return this.request('GET', `/citations/related/${enc(celex)}`, { query }); }
-  citationStats() { return this.request('GET', '/citations/stats'); }
+  citationStats(query: Query = {}) { return this.request('GET', '/citations/stats', { query }); }
 
   // ── National law ─────────────────────────────────────────────────
   // Launching 2026-11-03. Jurisdiction codes are lower-cased on the wire

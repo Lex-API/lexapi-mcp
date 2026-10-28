@@ -52,6 +52,13 @@ export function parseErrorBody(
   const resetsAt = typeof j.resetsAt === 'string' ? j.resetsAt
     : usage && typeof usage.resetsAt === 'string' ? usage.resetsAt
       : undefined;
+  // National error bodies (lex-api national-law lanes) carry `jurisdiction`
+  // as a plain top-level sibling of `error`/`code`/`message`, never nested
+  // in `details` — the document-id 404, the 409 NATIONAL_SEMANTIC_NOT_ENABLED
+  // and 503 NATIONAL_SEMANTIC_UNAVAILABLE bodies, and the per-jurisdiction
+  // 403 tier gate all do this. Fall back to it only when nothing else
+  // supplied a details object, so it never shadows a real one.
+  const jurisdictionFallback = typeof j.jurisdiction === 'string' ? { jurisdiction: j.jurisdiction } : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
     const eo = e as Record<string, unknown>;
@@ -61,7 +68,7 @@ export function parseErrorBody(
         typeof eo.message === 'string' ? eo.message
           : typeof j.message === 'string' ? j.message
             : fallback.message,
-      details: eo.details ?? j.details,
+      details: eo.details ?? j.details ?? jurisdictionFallback,
       retryAfter,
       resetsAt,
     };
@@ -72,7 +79,7 @@ export function parseErrorBody(
   return {
     code: topCode ?? errStr ?? fallback.code,
     message: errStr && msg ? `${errStr}: ${msg}` : (msg ?? errStr ?? fallback.message),
-    details: j.details ?? j.usage,
+    details: j.details ?? j.usage ?? jurisdictionFallback,
     retryAfter,
     resetsAt,
   };
@@ -136,10 +143,40 @@ export function describeError(err: unknown): string {
     }
     case 403:
       return `${head} The account's plan or subscription does not allow this call (not a temporary error — do not retry). Tell the user which feature was refused; plans are compared at ${PRICING_URL}.`;
-    case 404:
+    case 404: {
+      // National 404s take three shapes, none of which point at lex_resolve
+      // or lex_search (both EU-only): the typed document-id miss (`details:
+      // {id, jurisdiction}`, via the jurisdiction fallback above), the
+      // citation-graph id guard (`{"error": "Document not found: <ID>"}`,
+      // no code/jurisdiction at all), and a country that is not live yet
+      // (falls through every route to the generic `apiNotFound` handler's
+      // "Unknown API endpoint" 404 — the jurisdiction path segment never
+      // matched, which for a country code can only mean it is unlaunched).
+      const isNational = (d && typeof d.jurisdiction === 'string')
+        || /^Document not found:/i.test(err.message)
+        || /Unknown API endpoint/i.test(err.message);
+      if (isNational) {
+        return `${head} Not retryable as-is. Either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents).`;
+      }
       return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title).`;
+    }
     case 409:
+      // National semantic search not yet enabled for a live country
+      // (nationalSemanticController.js unavailableError): a different
+      // country, not account state — do not say "tell the user to retry
+      // their account", point at the right tools instead.
+      if (err.code === 'NATIONAL_SEMANTIC_NOT_ENABLED') {
+        const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'this country';
+        return `${head} Semantic search is not available for ${jur} yet — check semanticSearch in lex_national_coverage's output before retrying. lex_list_national_documents and lex_get_national_document still work there. Not retryable; nothing was charged.`;
+      }
       return `${head} The account's current state does not allow this action; tell the user (it is not fixed by retrying).`;
+    case 503:
+      // National semantic index temporarily down (same source as 409 above).
+      if (err.code === 'NATIONAL_SEMANTIC_UNAVAILABLE') {
+        const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'This country';
+        return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
+      }
+      return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
     case 429: {
       const wait = err.retryAfterSeconds;
       const resetsAt = err.resetsAt ?? (d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined);

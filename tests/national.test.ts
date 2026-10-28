@@ -211,3 +211,92 @@ describe('a used-up national-law allowance (402 NATIONAL_ALLOWANCE_EXHAUSTED)', 
     expect(text).toMatch(/does not help/);
   });
 });
+
+describe('national semantic search: country-level errors (not account errors)', () => {
+  it('409 NATIONAL_SEMANTIC_NOT_ENABLED (legacy shape, top-level code/jurisdiction) points at the right tools, not lex_resolve/lex_search', async () => {
+    const { result } = await call('lex_national_semantic_case_law', { jurisdiction: 'at', query: 'Datenschutz' }, () => ({
+      status: 409,
+      body: {
+        error: 'National semantic search not enabled',
+        code: 'NATIONAL_SEMANTIC_NOT_ENABLED',
+        jurisdiction: 'AT',
+        message: 'Semantic search over Austria (AT) is not enabled yet. No credits were charged.',
+      },
+    }));
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text as string;
+    expect(text).toMatch(/not available for AT/);
+    expect(text).toMatch(/lex_national_coverage/);
+    expect(text).toMatch(/lex_list_national_documents/);
+    expect(text).toMatch(/lex_get_national_document/);
+    expect(text).not.toMatch(/lex_resolve/);
+    expect(text).not.toMatch(/lex_search\b/);
+    expect(text).toMatch(/nothing was charged/i);
+  });
+
+  it('503 NATIONAL_SEMANTIC_UNAVAILABLE names the country and says to retry with backoff', async () => {
+    const { result } = await call('lex_national_semantic_legislation', { jurisdiction: 'de', query: 'Datenschutz' }, () => ({
+      status: 503,
+      body: {
+        error: 'National semantic index unavailable',
+        code: 'NATIONAL_SEMANTIC_UNAVAILABLE',
+        jurisdiction: 'DE',
+        message: 'The Germany (DE) semantic index is temporarily unavailable. No credits were charged. Please try again later.',
+      },
+    }));
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text as string;
+    expect(text).toMatch(/DE'?s national semantic index is temporarily unavailable/);
+    expect(text).toMatch(/[Rr]etry later/);
+    expect(text).toMatch(/backoff/);
+  });
+
+  it('a 409/503 without a national code falls back to the pre-existing generic text', async () => {
+    const conflict = await call('lex_list_national_documents', { jurisdiction: 'at' }, () => ({
+      status: 409, body: { error: 'conflict', message: 'some other 409' },
+    }));
+    expect(conflict.result.content[0].text).toMatch(/account's current state/);
+
+    const unavailable = await call('lex_list_national_documents', { jurisdiction: 'at' }, () => ({
+      status: 503, body: { error: 'maintenance', message: 'down for maintenance' },
+    }));
+    expect(unavailable.result.content[0].text).toMatch(/LexAPI had a server error/);
+  });
+});
+
+describe('national 404s point at the national tools, never lex_resolve/lex_search', () => {
+  it('a country that is not live yet: the generic "Unknown API endpoint" 404', async () => {
+    const { result } = await call('lex_get_national_document', { jurisdiction: 'es', id: 'ES-NOR-1' }, () => ({
+      status: 404,
+      body: {
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Unknown API endpoint: GET /api/v1/es/documents/ES-NOR-1. See https://lex-api.com/docs for the endpoint reference.' },
+      },
+    }));
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text as string;
+    expect(text).toMatch(/lex_national_coverage/);
+    expect(text).not.toMatch(/lex_resolve/);
+    expect(text).not.toMatch(/lex_search\b/);
+  });
+
+  it('an unknown id in a live country: the typed {id, jurisdiction} 404', async () => {
+    const { result } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-999999' }, () => ({
+      status: 404,
+      body: { error: 'Document not found', code: 'NOT_FOUND', id: 'AT-NOR-999999', jurisdiction: 'AT' },
+    }));
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text as string;
+    expect(text).toMatch(/lex_list_national_documents/);
+    expect(text).not.toMatch(/lex_resolve/);
+    expect(text).not.toMatch(/lex_search\b/);
+  });
+});
+
+describe('schema-level rejections (no network call)', () => {
+  it('lex_national_semantic_legislation rejects a 1-2 character query', () => {
+    const tool = byName.lex_national_semantic_legislation;
+    expect(() => z.object(tool.inputSchema).parse({ jurisdiction: 'at', query: 'ab' })).toThrow();
+    expect(() => z.object(tool.inputSchema).parse({ jurisdiction: 'at', query: 'abc' })).not.toThrow();
+  });
+});
