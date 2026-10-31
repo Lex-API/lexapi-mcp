@@ -29,7 +29,9 @@ describe('tool catalogue', () => {
       'lex_citation_network', 'lex_citation_path', 'lex_citation_stats', 'lex_cited_by', 'lex_cites',
       'lex_create_webhook', 'lex_delete_webhook', 'lex_document_versions', 'lex_export', 'lex_extract_citations',
       'lex_get_document', 'lex_get_document_by_url', 'lex_get_document_version', 'lex_get_documents_batch',
-      'lex_get_metadata', 'lex_get_webhook', 'lex_info', 'lex_list_webhooks', 'lex_recent_documents', 'lex_related',
+      'lex_get_metadata', 'lex_get_national_document', 'lex_get_webhook', 'lex_info', 'lex_list_national_documents',
+      'lex_list_webhooks', 'lex_national_coverage', 'lex_national_semantic_case_law',
+      'lex_national_semantic_legislation', 'lex_recent_documents', 'lex_related',
       'lex_resolve', 'lex_search', 'lex_semantic_case_law', 'lex_semantic_legislation', 'lex_test_webhook',
       'lex_update_webhook',
     ]);
@@ -460,6 +462,84 @@ describe('citation tools', () => {
     }));
     expect(e.calls[0].body).toEqual({ celexNumber: '32016R0679' });
     expect(e.data.citations).toEqual([{ celex: '31995L0046', type: 'repeal' }]);
+  });
+});
+
+describe('citation tools: includeNational + national ids', () => {
+  it('lex_cited_by accepts a national id and forwards includeNational', async () => {
+    const { calls, data } = await call('lex_cited_by', { celexNumber: 'at-nor-12345', includeNational: true }, () => ({
+      body: {
+        success: true, targetDocument: 'AT-NOR-12345', totalCitations: 0, limit: 50, offset: 0, citedBy: [],
+        includeNational: true,
+      },
+    }));
+    expect(calls[0].url.pathname).toBe('/api/v1/citations/cited-by/AT-NOR-12345');
+    expect(calls[0].url.searchParams.get('includeNational')).toBe('true');
+    expect(data.includeNational).toBe(true);
+  });
+
+  it('lex_cites, lex_citation_network, lex_related, lex_citation_stats all wire includeNational through and keep it in the output', async () => {
+    const cites = await call('lex_cites', { celexNumber: '32016R0679', includeNational: true }, () => ({
+      body: { success: true, sourceDocument: '32016R0679', cites: [], includeNational: true },
+    }));
+    expect(cites.calls[0].url.searchParams.get('includeNational')).toBe('true');
+    expect(cites.data.includeNational).toBe(true);
+
+    const network = await call('lex_citation_network', { celexNumber: '32016R0679', includeNational: false }, () => ({
+      body: { success: true, document: '32016R0679', network: { cites: [], citedBy: [] }, paging: {}, includeNational: false },
+    }));
+    expect(network.calls[0].url.searchParams.get('includeNational')).toBe('false');
+    expect(network.data.includeNational).toBe(false);
+
+    const related = await call('lex_related', { celexNumber: '32016R0679', includeNational: true }, () => ({
+      body: { success: true, celexNumber: '32016R0679', method: 'bibliographic-coupling', count: 0, related: [], includeNational: true },
+    }));
+    expect(related.calls[0].url.searchParams.get('includeNational')).toBe('true');
+    expect(related.data.includeNational).toBe(true);
+
+    const stats = await call('lex_citation_stats', { includeNational: true }, () => ({
+      body: { success: true, stats: { totalCitations: 0, mostCited: [], mostCiting: [] }, includeNational: true },
+    }));
+    expect(stats.calls[0].url.searchParams.get('includeNational')).toBe('true');
+    expect(stats.data.includeNational).toBe(true);
+  });
+
+  it('lex_citation_path accepts national ids on from/to and forwards includeNational', async () => {
+    const { calls, data } = await call('lex_citation_path', { from: 'AT-NOR-1', to: '32016R0679', includeNational: true }, () => ({
+      body: { success: true, from: 'AT-NOR-1', to: '32016R0679', found: false, maxDepth: 3, path: [], includeNational: true },
+    }));
+    expect(calls[0].url.pathname).toBe('/api/v1/citations/path/AT-NOR-1/32016R0679');
+    expect(calls[0].url.searchParams.get('includeNational')).toBe('true');
+    expect(data.includeNational).toBe(true);
+  });
+
+  it('is absent from the output when the response never carried it (EU-only accounts)', async () => {
+    const { data } = await call('lex_cited_by', { celexNumber: '32016R0679' }, () => ({
+      body: { success: true, targetDocument: '32016R0679', citedBy: [] },
+    }));
+    expect(data).not.toHaveProperty('includeNational');
+  });
+
+  it('below BUSINESS: 403 with an upgrade pointer (includeNational requested)', async () => {
+    const { result } = await call('lex_cites', { celexNumber: '32016R0679', includeNational: true }, () => ({
+      status: 403,
+      body: { error: 'National-law access requires a BUSINESS plan or higher', message: 'National documents in citation results are available on the BUSINESS, SCALE and ENTERPRISE plans.', upgradeUrl: '/pricing' },
+    }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/plan or subscription does not allow/);
+  });
+
+  it('a national id whose jurisdiction is not live: 404, guided to the national tools (not lex_resolve/lex_search)', async () => {
+    const { result } = await call('lex_cites', { celexNumber: 'es-nor-1' }, () => ({
+      status: 404,
+      body: { error: 'Document not found: ES-NOR-1' },
+    }));
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text as string;
+    expect(text).toMatch(/lex_national_coverage/);
+    expect(text).toMatch(/lex_list_national_documents/);
+    expect(text).not.toMatch(/lex_resolve/);
+    expect(text).not.toMatch(/lex_search\b/);
   });
 });
 
