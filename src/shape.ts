@@ -626,13 +626,23 @@ export function shapeNetwork(res: LexResponse<Json>): Obj {
 // National documents key on `id` (not `celex`) and always carry
 // `attribution` (per-source licence/attribution text) — never dropped by
 // compacting, since it is the legally required attribution for the source.
+//
+// Since API 2.8.0 (lex-api PR #335) every national response has ONE shape
+// for every jurisdiction: `documentKind` ('act' | 'decision'), a decision's
+// `decision: { court, chamber, caseNumbers, citedNorms }`, and a closed
+// `content` key set (lane extras only under `content.details` /
+// `articles[].details`). The tools present the same uniform fields
+// everywhere — `documentKind`, `court`, `chamber`, `caseNumbers`,
+// `citedNorms`, `dateOfDocument`, `ecli` — whatever the country, and never
+// read a source's raw keys (gericht, aktenzeichen, zaaknummer, …).
 
-export function shapeNationalSearchResult(r: unknown): Obj {
-  if (!isObj(r)) return {};
+/** The listing-summary fields (API 2.8.0 NationalDocumentSummary), compacted. */
+function nationalSummaryFields(r: Obj): Obj {
   return compact({
     id: r.id,
     jurisdiction: r.jurisdiction,
     language: r.language,
+    documentKind: r.documentKind,
     title: r.title,
     documentType: r.documentType,
     ecli: r.ecli,
@@ -645,6 +655,43 @@ export function shapeNationalSearchResult(r: unknown): Obj {
   });
 }
 
+export function shapeNationalSearchResult(r: unknown): Obj {
+  if (!isObj(r)) return {};
+  return nationalSummaryFields(r);
+}
+
+/** A decision's normalized case-law metadata (`document.decision`), flattened; {} for acts. */
+function nationalDecisionFields(decision: unknown): Obj {
+  if (!isObj(decision)) return {};
+  const citedNorms = Array.isArray(decision.citedNorms)
+    ? decision.citedNorms.filter(isObj).map((n) => compact({ text: n.text, documentId: n.documentId }))
+    : undefined;
+  return compact({
+    court: decision.court,
+    chamber: decision.chamber,
+    caseNumbers: decision.caseNumbers,
+    citedNorms,
+  });
+}
+
+/**
+ * One national article for the model: the uniform unit fields only. The
+ * unit's `details` (source unit ids, kinds) are dropped as noise; a unit the
+ * source publishes no text for keeps an explicit `text: null`.
+ */
+function shapeNationalArticle(a: unknown): unknown {
+  if (!isObj(a)) return a;
+  const out: Obj = compact({
+    number: a.number,
+    title: a.title,
+    section: a.section,
+    inForceFrom: a.inForceFrom,
+    inForceTo: a.inForceTo,
+  });
+  out.text = typeof a.text === 'string' ? a.text : null;
+  return out;
+}
+
 /** A full national document (from GET /{jur}/documents/{id}). */
 export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
   if (!isObj(doc)) return {};
@@ -652,25 +699,19 @@ export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
   // first, then set `content: null` (when that's the case) on the result
   // directly, never through another `compact` call, or the "no text" signal
   // would be lost (same pitfall shapeDocument's content:null branch avoids).
-  const out: Obj = compact({
-    id: doc.id,
-    jurisdiction: doc.jurisdiction,
-    language: doc.language,
-    title: doc.title,
-    documentType: doc.documentType,
-    ecli: doc.ecli,
-    eli: doc.eli,
-    dateOfDocument: doc.dateOfDocument,
-    version: doc.version,
-    fetchedAt: doc.fetchedAt,
-    validTo: doc.validTo,
-    inForce: doc.inForce,
-    textBasis: doc.textBasis,
-    // Required legal attribution for the source (RIS, gesetze-im-internet.de,
-    // Normattiva, Légifrance/Judilibre, the Rechtspraak open data, …): always
-    // kept, never dropped by compacting elsewhere.
-    attribution: doc.attribution,
-  });
+  const out: Obj = {
+    ...nationalSummaryFields(doc),
+    // Case-law metadata, same fields in every country; served also when the
+    // decision has no text. Absent for acts (`decision: null`).
+    ...nationalDecisionFields(doc.decision),
+    ...compact({
+      textBasis: doc.textBasis,
+      // Required legal attribution for the source (RIS, gesetze-im-internet.de,
+      // Normattiva, Légifrance/Judilibre, the Rechtspraak open data, …): always
+      // kept, never dropped by compacting elsewhere.
+      attribution: doc.attribution,
+    }),
+  };
   // A text-availability block that just says "available" is noise (mirrors
   // shapeMetadata); any other state (no text, why, which languages) is kept.
   const ta = doc.textAvailability;
@@ -679,31 +720,56 @@ export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
     out.content = null; // no text published — textAvailability says why
     return out;
   }
-  const { content, note } = shapeContent(doc.content, opts);
+  const c = isObj(doc.content) ? doc.content : undefined;
+  if (c) {
+    // The language facts of the text change how it must be read/cited —
+    // surfaced only when they say something beyond the document's language.
+    const langs = Array.isArray(c.textLanguages) ? c.textLanguages : [];
+    if (langs.length > 1 || (langs.length === 1 && langs[0] !== doc.language)) out.textLanguages = langs;
+    if (str(c.textLanguage)) out.textLanguage = c.textLanguage;
+    if (c.embeddedForeignText === true) out.embeddedForeignText = true;
+    if (isObj(c.repeal)) out.repeal = compact({ validTo: c.repeal.validTo, basis: c.repeal.basis, detectedAt: c.repeal.detectedAt });
+  }
+  const body = c
+    ? { fullText: c.fullText, articles: Array.isArray(c.articles) ? c.articles.map(shapeNationalArticle) : [] }
+    : doc.content;
+  const { content, note } = shapeContent(body, opts);
   if (content) out.content = content;
   if (note) out.note = note;
   return out;
 }
 
+/**
+ * A national case-law hit. `documentKind`, `title`, `ecli` and
+ * `dateOfDocument` come from the hit's `document` (LexAPI's own record, the
+ * same fields in every country — API 2.8.0), falling back to the index's
+ * own metadata; `court` / `caseNumbers` come from the index (a summary
+ * carries no decision block — lex_get_national_document has the normalized
+ * court, chamber, caseNumbers and citedNorms).
+ */
 export function shapeNationalCaseLawHit(r: unknown): Obj {
   if (!isObj(r)) return {};
   const md = isObj(r.metadata) ? r.metadata : {};
+  const d = isObj(r.document) ? r.document : {};
+  const caseNumber = str(r.case_number);
   const out: Obj = {
-    documentId: r.documentId ?? md.celex_id,
-    jurisdiction: r.jurisdiction,
+    documentId: r.documentId ?? d.id ?? md.celex_id,
+    jurisdiction: r.jurisdiction ?? d.jurisdiction,
+    documentKind: d.documentKind,
     score: round3(r.score),
-    case_name: r.case_name,
-    case_number: r.case_number,
-    ecli: r.ecli,
+    title: d.title ?? r.case_name,
+    documentType: d.documentType,
+    ecli: d.ecli ?? r.ecli,
+    dateOfDocument: d.dateOfDocument ?? r.decision_date,
     court: r.court,
-    decision_date: r.decision_date,
+    caseNumbers: caseNumber ? [caseNumber] : undefined,
     parties: r.parties,
     language: r.language && r.language !== 'en' ? r.language : undefined,
     summary: r.summary,
     snippet: r.summary ? undefined : r.snippet,
     text: r.text,
-    validTo: r.validTo,
-    inForce: r.inForce,
+    validTo: r.validTo ?? d.validTo,
+    inForce: r.inForce ?? d.inForce,
     // Required legal attribution for the source — always kept.
     attribution: r.attribution,
   };
@@ -726,13 +792,22 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
   });
 }
 
+/**
+ * A national legislation hit. The index fields (snake_case — the server's
+ * own names on this endpoint) are always sent since API 2.8.0, null when
+ * the index has nothing (compacted away here); `documentKind`, `title` and
+ * the act's validity come from the hit's `document` summary.
+ */
 export function shapeNationalLegislationHit(r: unknown): Obj {
   if (!isObj(r)) return {};
+  const d = isObj(r.document) ? r.document : {};
   return compact({
     law_id: r.law_id,
-    documentId: r.documentId,
-    jurisdiction: r.jurisdiction,
-    law_title: r.law_title,
+    documentId: r.documentId ?? d.id,
+    jurisdiction: r.jurisdiction ?? d.jurisdiction,
+    documentKind: d.documentKind,
+    law_title: r.law_title ?? d.title,
+    documentType: d.documentType,
     article_ref: r.article_ref,
     section: r.section,
     chapter: r.chapter,
@@ -740,10 +815,12 @@ export function shapeNationalLegislationHit(r: unknown): Obj {
     language: r.language,
     snippet: r.snippet,
     text: r.text,
-    // Our row's confirmed-repeal override, when it fired (snake_case —
-    // mirrors the server's own field names on this endpoint only).
+    // From the index (as of today), or our row's confirmed-repeal override
+    // toward false (with valid_to). null = unknown, dropped.
     in_force: r.in_force,
+    valid_from: r.valid_from,
     valid_to: r.valid_to,
+    law_type: r.law_type,
     // Required legal attribution for the source — always kept.
     attribution: r.attribution,
   });

@@ -607,7 +607,7 @@ export const tools: ToolDef[] = [
     name: 'lex_list_national_documents',
     title: 'Browse national documents',
     description:
-      'Browse a country\'s national documents by title/type, newest-first by document date. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page. Counts against the national-law allowance on lower plans (see allowance in the response). Paging: page only reaches the first 1,000 rows (a 400 past that) — pass this call\'s own nextCursor as cursor to page further, which works at any depth; omit page once you start using cursor.',
+      'Browse a country\'s national documents by title/type, newest-first by document date. documentKind ("act" | "decision") tells legislation from case law. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page. Counts against the national-law allowance on lower plans (see allowance in the response). Paging: page only reaches the first 1,000 rows (a 400 past that) — pass this call\'s own nextCursor as cursor to page further, which works at any depth; omit page once you start using cursor.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       q: z.string().trim().min(3).max(200).optional().describe('Title search, 3–200 characters.'),
@@ -651,7 +651,7 @@ export const tools: ToolDef[] = [
     name: 'lex_get_national_document',
     title: 'Fetch a national document',
     description:
-      'A national document by id, e.g. "AT-NOR-12345". content: null means the source publishes no machine-readable text for this id — see textAvailability for why. A document its source withdrew (a takedown, a pseudonymisation fix) is a distinct error instead — nothing of it is served, not even the title; do not retry, and drop any copy you were holding. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too) — a pool with fewer than 5 available 402s even though it only spends 1. Counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
+      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). content: null means the source publishes no machine-readable text for this id — see textAvailability for why. A document its source withdrew (a takedown, a pseudonymisation fix) is a distinct error instead — nothing of it is served, not even the title; do not retry, and drop any copy you were holding. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too) — a pool with fewer than 5 available 402s even though it only spends 1. Counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
@@ -672,7 +672,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. hyde is accepted for schema compatibility but is a no-op nationally (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is accepted for schema compatibility but is a no-op nationally (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),

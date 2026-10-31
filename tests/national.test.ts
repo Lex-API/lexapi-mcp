@@ -16,6 +16,46 @@ async function call(name: string, args: Record<string, unknown>, reply: Paramete
   return { result, calls, data: result.isError ? undefined : parseText(result) };
 }
 
+// ── API 2.8.0 fixtures (lex-api PR #335: one national shape for every
+// jurisdiction — every documented field present, null / [] when the source
+// has nothing; lane extras only under content.details / articles[].details).
+function summary(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'AT-NOR-1', jurisdiction: 'AT', language: 'de', documentKind: 'act',
+    title: 'Datenschutzgesetz', documentType: 'Bundesgesetz (konsolidiert)',
+    ecli: null, eli: 'https://www.ris.bka.gv.at/eli/bgbl/i/1999/165', dateOfDocument: null,
+    version: 1, fetchedAt: '2026-10-01T00:00:00.000Z', validTo: null, inForce: null,
+    ...overrides,
+  };
+}
+
+const EMPTY_CONTENT = {
+  fullText: '', articles: [], textLanguages: ['de'], textLanguage: null,
+  embeddedForeignText: false, repeal: null, source: {}, details: {},
+};
+
+const DE_DECISION = {
+  ...summary({
+    id: 'DE-JUD-BFH-KBRE202550123', jurisdiction: 'DE', documentKind: 'decision',
+    title: 'Kindergeld: Berücksichtigung eines volljährigen Kindes', documentType: 'Urteil',
+    ecli: 'ECLI:DE:BFH:2025:U.120625.IIIR27.24.0', eli: null, dateOfDocument: '2025-06-12',
+  }),
+  decision: {
+    court: 'BFH 3. Senat', chamber: null, caseNumbers: ['III R 27/24'],
+    citedNorms: [{ text: '§ 62 Abs 1a S 3 EStG 2009', documentId: null }],
+  },
+  content: {
+    ...EMPTY_CONTENT,
+    fullText: 'Tenor … Tatbestand … Entscheidungsgründe …',
+    source: { system: 'rechtsprechung-im-internet.de' },
+    // The source's own field names stay here — the tool must not read them.
+    details: { gericht: 'IGNORED raw court', aktenzeichen: 'IGNORED raw docket' },
+  },
+  textAvailability: { available: true },
+  attribution: 'Source: rechtsprechung-im-internet.de (BMJ).',
+  textBasis: null,
+};
+
 const NATIONAL_TOOLS = [
   'lex_national_coverage',
   'lex_list_national_documents',
@@ -77,7 +117,7 @@ describe('lex_list_national_documents', () => {
     }, () => ({
       body: {
         jurisdiction: 'AT', total: 1, page: 2, limit: 10, includeRepealed: false,
-        results: [{ id: 'AT-NOR-1', jurisdiction: 'AT', language: 'de', title: 'Datenschutzgesetz', documentType: 'Act', version: 1, fetchedAt: '2026-10-01T00:00:00.000Z' }],
+        results: [summary(), summary({ id: 'AT-JUD-2', documentKind: 'decision', title: null, documentType: 'Entscheidungstext (Justiz)', eli: null, dateOfDocument: '2026-09-30' })],
       },
       headers: { 'x-national-limit': '30', 'x-national-remaining': '29', 'x-national-reset': '2026-11-01T00:00:00.000Z' },
     }));
@@ -85,7 +125,11 @@ describe('lex_list_national_documents', () => {
     expect(calls[0].url.pathname).toBe('/api/v1/at/documents');
     expect(Object.fromEntries(calls[0].url.searchParams)).toEqual({ q: 'data protection', type: 'Act', page: '2', limit: '10' });
     expect(data.total).toBe(1);
-    expect(data.results[0]).toMatchObject({ id: 'AT-NOR-1', title: 'Datenschutzgesetz' });
+    expect(data.results[0]).toMatchObject({ id: 'AT-NOR-1', title: 'Datenschutzgesetz', documentKind: 'act' });
+    // null-filled summary fields are compacted away, never surfaced as null noise.
+    expect(data.results[0]).not.toHaveProperty('ecli');
+    expect(data.results[0]).not.toHaveProperty('validTo');
+    expect(data.results[1]).toMatchObject({ id: 'AT-JUD-2', documentKind: 'decision', dateOfDocument: '2026-09-30' });
     expect(data.allowance).toEqual({ limit: 30, remaining: 29, resetsAt: '2026-11-01T00:00:00.000Z' });
   });
 
@@ -176,11 +220,21 @@ describe('lex_get_national_document', () => {
     const { calls, data } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-1', language: 'de' }, () => ({
       body: {
         document: {
-          id: 'AT-NOR-1', jurisdiction: 'AT', language: 'de', title: 'Datenschutzgesetz', documentType: 'Act',
-          version: 2, fetchedAt: '2026-10-01T00:00:00.000Z', inForce: true,
-          content: { fullText: 'x'.repeat(200), articles: [{ id: 'art_1', number: 'Art. 1', content: 'y'.repeat(50) }], recitals: [], paragraphs: [], sections: [], tables: [], annexes: [] },
+          ...summary({ version: 2 }),
+          decision: null,
+          content: {
+            ...EMPTY_CONTENT,
+            fullText: 'x'.repeat(200),
+            articles: [
+              { number: '§ 1', title: 'Grundrecht auf Datenschutz', section: null, text: 'y'.repeat(50), inForceFrom: '2018-05-25', inForceTo: null, details: { norId: 'NOR40198753' } },
+              { number: 'Anl. 1', title: null, section: null, text: null, inForceFrom: null, inForceTo: null, details: { noHtmlRendition: true } },
+            ],
+            source: { system: 'RIS' },
+            details: { kundmachungsorgan: 'BGBl. I Nr. 165/1999' },
+          },
           textAvailability: { available: true },
           attribution: 'Data source: RIS, Bundeskanzleramt Österreich (data.bka.gv.at), CC BY 4.0.',
+          textBasis: null,
         },
       },
       headers: { 'x-national-limit': '30', 'x-national-remaining': '29', 'x-national-reset': '2026-11-01T00:00:00.000Z' },
@@ -189,17 +243,80 @@ describe('lex_get_national_document', () => {
     expect(calls[0].url.pathname).toBe('/api/v1/at/documents/AT-NOR-1');
     expect(Object.fromEntries(calls[0].url.searchParams)).toEqual({ language: 'de' });
     expect(data.id).toBe('AT-NOR-1');
+    expect(data.documentKind).toBe('act');
     expect(data.attribution).toMatch(/RIS/);
     expect(data.allowance.remaining).toBe(29);
+    // Acts carry no decision fields; null summary fields / textBasis are compacted away.
+    expect(data).not.toHaveProperty('court');
+    expect(data).not.toHaveProperty('caseNumbers');
+    expect(data).not.toHaveProperty('textBasis');
+    expect(data).not.toHaveProperty('textLanguages'); // just the document's own language
+    // Articles: the uniform unit fields; details dropped; a text-less unit keeps text: null.
+    expect(data.content.articles).toEqual([
+      { number: '§ 1', title: 'Grundrecht auf Datenschutz', inForceFrom: '2018-05-25', text: 'y'.repeat(50) },
+      { number: 'Anl. 1', text: null },
+    ]);
+  });
+
+  it('a decision: court, chamber, caseNumbers, citedNorms from `decision`, never from the source\'s raw keys', async () => {
+    const { data } = await call('lex_get_national_document', { jurisdiction: 'de', id: DE_DECISION.id }, () => ({
+      body: { document: DE_DECISION },
+    }));
+    expect(data).toMatchObject({
+      id: DE_DECISION.id,
+      documentKind: 'decision',
+      court: 'BFH 3. Senat',
+      caseNumbers: ['III R 27/24'],
+      citedNorms: [{ text: '§ 62 Abs 1a S 3 EStG 2009' }],
+      ecli: 'ECLI:DE:BFH:2025:U.120625.IIIR27.24.0',
+      dateOfDocument: '2025-06-12',
+    });
+    expect(data).not.toHaveProperty('chamber'); // null → compacted
+    expect(JSON.stringify(data)).not.toMatch(/IGNORED/);
+    expect(data.content.fullText).toMatch(/Tenor/);
+  });
+
+  it('a decision held without text still names its court and case number', async () => {
+    const { data } = await call('lex_get_national_document', { jurisdiction: 'de', id: DE_DECISION.id }, () => ({
+      body: { document: { ...DE_DECISION, content: null, textAvailability: { available: false, reason: 'unknown' } } },
+    }));
+    expect(data.content).toBeNull();
+    expect(data.court).toBe('BFH 3. Senat');
+    expect(data.caseNumbers).toEqual(['III R 27/24']);
+  });
+
+  it('surfaces text-language facts and a confirmed repeal from content', async () => {
+    const { data } = await call('lex_get_national_document', { jurisdiction: 'nl', id: 'NL-BWBV0001234' }, () => ({
+      body: {
+        document: {
+          ...summary({ id: 'NL-BWBV0001234', jurisdiction: 'NL', language: 'nl', validTo: '2024-12-31', inForce: false }),
+          decision: null,
+          content: {
+            ...EMPTY_CONTENT, fullText: 'Treaty text', textLanguages: ['en', 'nl'], embeddedForeignText: true,
+            repeal: { validTo: '2024-12-31', basis: 'vervallen', detectedAt: null },
+          },
+          textAvailability: { available: true },
+          attribution: 'Sources: Basiswettenbestand, KOOP — public domain (CC0).',
+          textBasis: null,
+        },
+      },
+    }));
+    expect(data.textLanguages).toEqual(['en', 'nl']);
+    expect(data.embeddedForeignText).toBe(true);
+    expect(data.repeal).toEqual({ validTo: '2024-12-31', basis: 'vervallen' });
+    expect(data).toMatchObject({ validTo: '2024-12-31', inForce: false });
   });
 
   it('a text-unavailable document keeps content: null and textAvailability', async () => {
     const { data } = await call('lex_get_national_document', { jurisdiction: 'nl', id: 'NL-1' }, () => ({
       body: {
         document: {
-          id: 'NL-1', jurisdiction: 'NL', title: 'Regeling X', content: null,
+          ...summary({ id: 'NL-1', jurisdiction: 'NL', language: 'nl', title: 'Regeling X', eli: null }),
+          decision: null,
+          content: null,
           textAvailability: { available: false, reason: 'unknown' },
           attribution: 'Sources: Basiswettenbestand, KOOP — public domain (CC0).',
+          textBasis: null,
         },
       },
     }));
@@ -218,7 +335,13 @@ describe('lex_national_semantic_case_law', () => {
         success: true, searchType: 'semantic-case-law', jurisdiction: 'AT', resultCount: 1, hyde: false,
         results: [{
           documentId: 'AT-JUD-OGH-1', jurisdiction: 'AT', score: 0.81, case_name: 'X v Y', court: 'OGH',
-          snippet: 'Der Oberste Gerichtshof …', attribution: 'Data source: RIS, Bundeskanzleramt Österreich.',
+          case_number: '6 Ob 123/24x', decision_date: '2024-01-01',
+          snippet: 'Der Oberste Gerichtshof …', metadata: { celex_id: 'AT-JUD-OGH-1' },
+          document: summary({
+            id: 'AT-JUD-OGH-1', documentKind: 'decision', title: null, documentType: 'Entscheidungstext (Justiz)',
+            ecli: 'ECLI:AT:OGH0002:2025:0060OB00123.24X.0115.000', eli: null, dateOfDocument: '2025-01-15',
+          }),
+          attribution: 'Data source: RIS, Bundeskanzleramt Österreich.',
         }],
         attribution: 'Data source: RIS, Bundeskanzleramt Österreich.',
       },
@@ -229,6 +352,18 @@ describe('lex_national_semantic_case_law', () => {
     expect(data.hyde).toBe(false);
     expect(data.results[0].documentId).toBe('AT-JUD-OGH-1');
     expect(data.results[0].attribution).toMatch(/RIS/);
+    // Uniform fields: documentKind/ecli/dateOfDocument from LexAPI's record (the hit's
+    // `document`, API 2.8.0) over the index's own; court/caseNumbers from the index.
+    expect(data.results[0]).toMatchObject({
+      documentKind: 'decision',
+      ecli: 'ECLI:AT:OGH0002:2025:0060OB00123.24X.0115.000',
+      dateOfDocument: '2025-01-15',
+      court: 'OGH',
+      caseNumbers: ['6 Ob 123/24x'],
+      title: 'X v Y',
+    });
+    expect(data.results[0]).not.toHaveProperty('case_number');
+    expect(data.results[0]).not.toHaveProperty('decision_date');
   });
 
   it('rejects case_number in filters (not available nationally)', () => {
@@ -246,13 +381,24 @@ describe('lex_national_semantic_legislation', () => {
     }, () => ({
       body: {
         success: true, searchType: 'semantic-legislation', jurisdiction: 'DE', resultCount: 1,
-        results: [{ law_id: 'DE-1', documentId: 'DE-1', jurisdiction: 'DE', article_ref: 'art_1', score: 0.7, snippet: 's', attribution: 'Source: gesetze-im-internet.de.' }],
+        results: [{
+          law_id: 'DE-1', documentId: 'DE-1', jurisdiction: 'DE', score: 0.7, snippet: 's',
+          // API 2.8.0: always present, null when the index has nothing.
+          law_title: 'Bundesdatenschutzgesetz', article_ref: '§ 1', section: null, language: 'de',
+          in_force: true, valid_from: null, valid_to: null, law_type: null,
+          document: summary({ id: 'DE-1', jurisdiction: 'DE', title: 'Bundesdatenschutzgesetz', documentType: 'Gesetz', eli: null }),
+          attribution: 'Source: gesetze-im-internet.de.',
+        }],
         attribution: 'Source: gesetze-im-internet.de.',
       },
     }));
     expect(calls[0].url.pathname).toBe('/api/v1/de/legislation/semantic');
     expect(calls[0].body).toMatchObject({ query: 'Datenschutz', limit: 10, filters: { inForce: true } });
-    expect(data.results[0]).toMatchObject({ law_id: 'DE-1', attribution: 'Source: gesetze-im-internet.de.' });
+    expect(data.results[0]).toMatchObject({
+      law_id: 'DE-1', attribution: 'Source: gesetze-im-internet.de.',
+      documentKind: 'act', article_ref: '§ 1', in_force: true, documentType: 'Gesetz',
+    });
+    for (const k of ['section', 'valid_from', 'valid_to', 'law_type']) expect(data.results[0]).not.toHaveProperty(k);
   });
 
   it('has no asOf parameter', () => {
