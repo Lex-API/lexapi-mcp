@@ -1,6 +1,5 @@
 # Multi-stage build for the hosted HTTP transport.
-# Coolify: point at github.com/Lex-API/lexapi-mcp, use this Dockerfile,
-# expose port 3000, health check on /health.
+# Exposes port 3000; health check on /health. See README "Hosting the HTTP server".
 
 FROM node:22-alpine AS builder
 WORKDIR /app

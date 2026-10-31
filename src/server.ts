@@ -122,6 +122,7 @@ export function readOnlyFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+/** API-key requests (stdio and hosted): LEXAPI_BASE_URL exactly as 0.3.0 read it. */
 export function clientFromEnv(apiKey: string, env: NodeJS.ProcessEnv = process.env): LexAPIClient {
   return new LexAPIClient({
     apiKey,

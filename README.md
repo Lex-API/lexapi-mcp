@@ -4,11 +4,39 @@
 
 Ask your assistant *"what does Article 17 GDPR require?"*, *"which acts amended REACH?"* or *"what were the own-funds requirements for banks in June 2019?"* — the model calls LexAPI and answers from the source text, with CELEX citations.
 
-You need a LexAPI API key. Create one for free at [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp) — the FREE plan includes 500 credits a month, no card required, enough to try the read tools.
+You need a LexAPI account. With the hosted server you just **sign in with LexAPI** from your MCP client; with the npm package (or if you prefer), use an API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). There is a FREE plan, no card required, with enough credits to try the read tools; current allowances are on [lex-api.com/pricing](https://lex-api.com/pricing?ref=npm-mcp).
 
-## Install
+## Connect to the hosted server (sign in with LexAPI)
 
-### Claude Desktop
+The server is hosted at **`https://mcp.lex-api.com/v1`** (Streamable HTTP). Add that URL to your client and sign in with your LexAPI account when it asks — no key to copy. You see a LexAPI consent page listing what the connection can do; calls are billed to your plan exactly like your own API key, and you can disconnect the app at any time under *Dashboard → Connected apps* (that revokes it immediately).
+
+### claude.ai and Claude Desktop
+
+*Settings → Connectors → Add custom connector*, name it `LexAPI`, URL `https://mcp.lex-api.com/v1`, then *Connect* and sign in. Connectors added on claude.ai are also available in Claude Desktop (same account).
+
+### Claude Code
+
+```bash
+claude mcp add --transport http lexapi https://mcp.lex-api.com/v1
+```
+
+Then run `/mcp` in Claude Code and choose *Authenticate* for `lexapi`; your browser opens the LexAPI sign-in.
+
+### Other MCP clients
+
+Any client that implements MCP authorization (OAuth 2.1 with protected-resource discovery) connects the same way: point it at `https://mcp.lex-api.com/v1`. The server answers an unauthenticated request with `401` and `WWW-Authenticate: Bearer … resource_metadata="https://mcp.lex-api.com/.well-known/oauth-protected-resource/v1"`; the client discovers LexAPI (`https://lex-api.com`) as the authorization server from there.
+
+### With an API key instead
+
+Clients without OAuth support — or scripts — send a key from the dashboard as `Authorization: Bearer lex_...` (or `x-api-key: lex_...`):
+
+```bash
+claude mcp add --transport http lexapi https://mcp.lex-api.com/v1 --header "Authorization: Bearer lex_..."
+```
+
+## Run it locally (npm, API key)
+
+### Claude Desktop (local)
 
 Add to `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`):
 
@@ -26,7 +54,7 @@ Add to `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claud
 
 Restart Claude Desktop.
 
-### Claude Code
+### Claude Code (local)
 
 ```bash
 claude mcp add lexapi --env LEXAPI_API_KEY=lex_... -- npx -y @lexapi/mcp
@@ -36,15 +64,7 @@ claude mcp add lexapi --env LEXAPI_API_KEY=lex_... -- npx -y @lexapi/mcp
 
 Run `npx -y @lexapi/mcp` with `LEXAPI_API_KEY` in the environment (Cursor: `~/.cursor/mcp.json`; VS Code: `.vscode/mcp.json`; same `command` / `args` / `env` shape as above).
 
-### Hosted server (no local install)
-
-The same tools are served over Streamable HTTP at `https://mcp.lex-api.com/v1`, authenticated with your key as `Authorization: Bearer lex_...` (or `x-api-key: lex_...`):
-
-```bash
-claude mcp add --transport http lexapi https://mcp.lex-api.com/v1 --header "Authorization: Bearer lex_..."
-```
-
-The npm package needs Node.js 20 or newer.
+The npm package needs Node.js 20 or newer. It uses an API key; signing in with LexAPI is a feature of the hosted server.
 
 ## Tools
 
@@ -102,7 +122,20 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `LEXAPI_TIMEOUT_MS` | `55000` | Deadline for one tool call towards LexAPI, retries included. Raise it only together with your MCP client's own tool timeout. |
 | `LEXAPI_MCP_ALLOWED_ORIGINS` | *(none)* | Hosted HTTP server only: browser `Origin`s allowed to call it (comma-separated, `*` for any). Requests without an `Origin` header (all non-browser clients) are always allowed. |
 
-The key is sent only as the `x-api-key` header to LexAPI; it is never logged or included in tool output. A key containing whitespace or control characters (e.g. a multi-line paste) is rejected at startup.
+The key is sent only as the `x-api-key` header to LexAPI; it is never logged or included in tool output. A `LEXAPI_API_KEY` containing whitespace or control characters (e.g. a multi-line paste) is rejected at startup.
+
+### Hosting the HTTP server
+
+`npm run start:http` (or the `Dockerfile`) runs the Streamable HTTP transport (`POST /v1`, `GET /health`). Self-hosted, it accepts LexAPI API keys (`Authorization: Bearer lex_…` or `x-api-key: lex_…`); a request without one gets `401`. A value that cannot be an API key (it contains a `.` or is longer than 8192 characters) is answered `401` and never forwarded.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `PORT` | `3000` | Listen port. |
+| `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | LexAPI REST base. |
+
+Sign in with LexAPI is a feature of the hosted server at `https://mcp.lex-api.com/v1`: it needs an OAuth client registered with LexAPI, so a self-hosted copy runs with API keys only. The OAuth-related settings in `src/oauth/config.ts` (`LEXAPI_OAUTH_*`, `LEXAPI_MCP_*`) are for that deployment; the server refuses to start if they are set incompletely.
+
+**`/health`** returns `status`, `name`, `version`, `tools` and `oauth` (whether sign-in is enabled). It never contains addresses, tokens or configuration values.
 
 **Timeouts.** MCP clients give up on a tool call after their own timeout (60 s by default in the official SDK; Claude Code: `MCP_TOOL_TIMEOUT`). A first, live EUR-Lex fetch can take longer. The server gives each tool call one 55 s deadline — retries and rate-limit waits included — and then returns a message the model can act on, instead of the client's generic timeout error. When the client sends a progress token, the server also sends a progress notification every 10 s; whether that keeps the call alive is up to the client (the official SDK only extends its timeout on progress when the caller opts into `resetTimeoutOnProgress`, and a server cannot detect that), so the deadline stays 55 s. If you raise your client's timeout, raise `LEXAPI_TIMEOUT_MS` to match. Cancelling a call aborts the request to LexAPI.
 
@@ -110,6 +143,8 @@ The key is sent only as the `x-api-key` header to LexAPI; it is never logged or 
 
 - **`LEXAPI_API_KEY is not set`** — the variable isn't reaching the spawned process; check the `env` block of your MCP client config.
 - **`LexAPI error 401`** — the key is wrong or revoked; create a new one at the dashboard.
+- **Hosted server: "LexAPI sign-in expired or was revoked"** — the connection was disconnected (for example from the dashboard); reconnect LexAPI in your client to sign in again.
+- **Hosted server: `403 Subscription inactive`** — the signed-in account's paid plan is not active; the same as with an API key.
 - **`LexAPI error 402 (CREDITS_EXHAUSTED)`** — the monthly credit pool is used up. The message gives the reset date; top-ups and upgrades are on the dashboard.
 - **`LexAPI error 429`** — the per-minute rate limit of your key (FREE: 15 per minute). Short waits are retried once automatically; otherwise the message says how long to wait.
 - **`LexAPI error 403`** — the plan doesn't include the feature (e.g. export below BUSINESS, or semantic search on a legacy pre-credits FREE plan).
@@ -127,7 +162,7 @@ node scripts/smoke-stdio.mjs   # stdio smoke test against a local mock API
 LEXAPI_API_KEY=lex_... node scripts/smoke-stdio.mjs --live   # against the real API (spends roughly 6–25 credits)
 ```
 
-`npm run start:http` runs the hosted Streamable HTTP transport (`POST /v1`, `GET /health`, port from `PORT`, default 3000); the `Dockerfile` builds it.
+`npm run start:http` runs the hosted Streamable HTTP transport (`POST /v1`, `GET /health`, port from `PORT`, default 3000; see *Hosting the HTTP server* above); the `Dockerfile` builds it. The OAuth tests run against a local mock authorization server (`tests/oauth-mock.ts`), no network.
 
 ## License
 

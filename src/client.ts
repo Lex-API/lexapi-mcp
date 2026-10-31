@@ -51,8 +51,26 @@ export interface LexResponse<T = Json> {
   headers: Partial<Record<KeptHeader, string>>;
 }
 
+/**
+ * How a request authenticates to LexAPI. The API-key credential sends
+ * `x-api-key`; the hosted server's OAuth credential (src/oauth/upstream.ts)
+ * sends `Authorization: Bearer <exchanged API token>` and no `x-api-key`.
+ */
+export interface UpstreamAuth {
+  /** Headers for one attempt (may exchange a token: throws its own typed errors). */
+  headers(ctx: { signal?: AbortSignal }): Promise<Record<string, string>> | Record<string, string>;
+  /**
+   * The API answered 401. Return 'retry' to send the request once more with
+   * fresh headers, an Error to fail with it, or undefined for the normal 401.
+   */
+  onUnauthorized?(info: { wwwAuthenticate: string | null; body: string }): Promise<'retry' | Error | undefined> | 'retry' | Error | undefined;
+}
+
 export interface LexAPIClientOptions {
-  apiKey: string;
+  /** API key (stdio, hosted API-key requests). Required unless `auth` is given. */
+  apiKey?: string;
+  /** Any other credential (hosted OAuth requests). Takes precedence over `apiKey`. */
+  auth?: UpstreamAuth;
   baseUrl?: string;
   /** Retries on transient failures (500/502/503, network errors, short 429s). Default 1. */
   maxRetries?: number;
@@ -81,8 +99,13 @@ interface RequestOptions {
   retry?: boolean;
 }
 
+function apiKeyAuth(key: string): UpstreamAuth {
+  const headers = { 'x-api-key': key };
+  return { headers: () => headers };
+}
+
 export class LexAPIClient {
-  private readonly apiKey: string;
+  private readonly auth: UpstreamAuth;
   private readonly baseUrl: string;
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
@@ -93,12 +116,16 @@ export class LexAPIClient {
   private readonly opts: LexAPIClientOptions;
 
   constructor(opts: LexAPIClientOptions) {
-    const key = (opts.apiKey ?? '').trim();
-    if (!key) throw new Error('LexAPI API key is missing.');
-    // Never include the key itself in this message.
-    if (!isWellFormedKey(key)) throw new Error('LexAPI API key contains whitespace or control characters — paste it again as a single line.');
+    if (opts.auth) {
+      this.auth = opts.auth;
+    } else {
+      const key = (opts.apiKey ?? '').trim();
+      if (!key) throw new Error('LexAPI API key is missing.');
+      // Never include the key itself in this message.
+      if (!isWellFormedKey(key)) throw new Error('LexAPI API key contains whitespace or control characters — paste it again as a single line.');
+      this.auth = apiKeyAuth(key);
+    }
     this.opts = opts;
-    this.apiKey = key;
     this.signal = opts.signal;
     this.now = opts.now ?? Date.now;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -121,6 +148,16 @@ export class LexAPIClient {
     return this.timeoutMs;
   }
 
+  private credentialHeaders(): Record<string, string> | Promise<Record<string, string>> {
+    if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
+    const h = this.auth.headers({ signal: this.signal });
+    if (!(h instanceof Promise)) return h;
+    return h.catch((err) => {
+      if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
+      throw err;
+    });
+  }
+
   /** Low-level request. Throws LexAPIError (HTTP error) or LexAPITransportError. */
   async request<T = Json>(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
@@ -137,12 +174,11 @@ export class LexAPIClient {
       }
     }
 
-    const headers: Record<string, string> = {
-      'x-api-key': this.apiKey,
+    const baseHeaders: Record<string, string> = {
       accept: opts.ndjson ? 'application/x-ndjson, application/json' : 'application/json',
       'user-agent': `lexapi-mcp/${PACKAGE_VERSION}`,
     };
-    if (opts.body !== undefined) headers['content-type'] = 'application/json';
+    if (opts.body !== undefined) baseHeaders['content-type'] = 'application/json';
 
     const canRetry = opts.retry !== false;
     // ONE deadline for the whole call — attempts, backoff and 429 sleeps all
@@ -152,10 +188,18 @@ export class LexAPIClient {
     const remaining = () => deadline - this.now();
     const canWait = (ms: number) => remaining() - ms >= MIN_ATTEMPT_MS;
     let attempt = 0;
+    let authRetried = false;
     for (;;) {
       if (remaining() <= 0) {
         throw new LexAPITransportError(`no response within ${Math.round(this.timeoutMs / 1000)} s`, true);
       }
+      // Per attempt: an OAuth credential re-exchanges after a 401. Its errors
+      // (exchange refused, AS unreachable) propagate as they are.
+      // An API key resolves synchronously (no extra tick before fetch).
+      const pending = this.credentialHeaders();
+      const credential = pending instanceof Promise ? await pending : pending;
+      if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
+      const headers: Record<string, string> = { ...baseHeaders, ...credential };
       let res: Response;
       const attemptSignal = combineSignals(this.signal, AbortSignal.timeout(Math.max(1, remaining())));
       try {
@@ -188,7 +232,24 @@ export class LexAPIClient {
         await discard(res);
         throw new LexAPITransportError('the request was cancelled by the client', false, true);
       }
-      // A used-up legacy quota (QUOTA_EXHAUSTED, lex-api #304) cannot succeed
+      if (res.status === 401 && this.auth.onUnauthorized) {
+        let peek = '';
+        try { peek = await res.clone().text(); } catch { /* unreadable body */ }
+        const verdict = await this.auth.onUnauthorized({ wwwAuthenticate: res.headers.get('www-authenticate'), body: peek });
+        // At most one credential retry per call, whatever the credential says.
+        if (verdict === 'retry' && !authRetried) {
+          attemptSignal.dispose();
+          await discard(res);
+          authRetried = true;
+          continue;
+        }
+        if (verdict instanceof Error) {
+          attemptSignal.dispose();
+          await discard(res);
+          throw verdict;
+        }
+      }
+      // A used-up legacy quota (QUOTA_EXHAUSTED) cannot succeed
       // before it refills, whatever its Retry-After says: never retried.
       if (res.status === 429 && canRetry && attempt < this.maxRetries && !(await isQuotaExhausted(res))) {
         const wait = retryAfterSeconds(res);
@@ -236,7 +297,7 @@ export class LexAPIClient {
           parsed.code,
           parsed.message,
           parsed.details,
-          // A quota 429 has no meaningful retry-after (SDK contract §1.2).
+          // A quota 429 has no meaningful retry-after.
           quota ? undefined : (retryAfterSeconds(res) ?? parsed.retryAfter),
           parsed.resetsAt,
         );
