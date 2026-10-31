@@ -74,6 +74,19 @@ export function parseErrorBody(
   const resetsAt = typeof j.resetsAt === 'string' ? j.resetsAt
     : usage && typeof usage.resetsAt === 'string' ? usage.resetsAt
       : undefined;
+  // National error bodies carry `jurisdiction` (and, for a withdrawn
+  // document, also `id` and `withdrawnAt`) as plain top-level siblings of
+  // `error`/`code`/`message`,
+  // never nested in `details` — the document-id 404, the 409
+  // NATIONAL_SEMANTIC_NOT_ENABLED and 503 NATIONAL_SEMANTIC_UNAVAILABLE
+  // bodies, the per-jurisdiction 403 tier gate, and the citation routes' 410
+  // DOCUMENT_WITHDRAWN all do this. Fall back to it only when nothing else
+  // supplied a details object, so it never shadows a real one.
+  const strayFields: Record<string, unknown> = {};
+  if (typeof j.jurisdiction === 'string') strayFields.jurisdiction = j.jurisdiction;
+  if (typeof j.id === 'string') strayFields.id = j.id;
+  if (typeof j.withdrawnAt === 'string') strayFields.withdrawnAt = j.withdrawnAt;
+  const jurisdictionFallback = Object.keys(strayFields).length ? strayFields : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
     const eo = e as Record<string, unknown>;
@@ -83,7 +96,7 @@ export function parseErrorBody(
         typeof eo.message === 'string' ? eo.message
           : typeof j.message === 'string' ? j.message
             : fallback.message,
-      details: eo.details ?? j.details,
+      details: eo.details ?? j.details ?? jurisdictionFallback,
       retryAfter,
       resetsAt,
     };
@@ -94,7 +107,7 @@ export function parseErrorBody(
   return {
     code: topCode ?? errStr ?? fallback.code,
     message: errStr && msg ? `${errStr}: ${msg}` : (msg ?? errStr ?? fallback.message),
-    details: j.details ?? j.usage,
+    details: j.details ?? j.usage ?? jurisdictionFallback,
     retryAfter,
     resetsAt,
   };
@@ -151,6 +164,17 @@ export function describeError(err: unknown): string {
     case 401:
       return `${head} The LexAPI API key is missing, wrong, or revoked. Ask the user to check the key configured for this MCP server (LEXAPI_API_KEY, or the Authorization header for the hosted server) or create a new one at ${DASHBOARD_URL}.`;
     case 402: {
+      // The monthly allowance of national-law calls for FREE/STARTER/
+      // PROFESSIONAL plans — a separate counter from the
+      // credit pool, so the usual "buy a top-up" advice does not apply.
+      if (err.code === 'NATIONAL_ALLOWANCE_EXHAUSTED') {
+        const parts: string[] = [];
+        if (d) {
+          if (typeof d.limit === 'number') parts.push(`the monthly allowance is ${d.limit} national-law calls`);
+          if (typeof d.resetsAt === 'string') parts.push(`it resets at ${d.resetsAt} (start of next UTC month)`);
+        }
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This is the account's monthly allowance of national-law calls on its plan, not the LexAPI credit pool — a top-up does not help. Tell the user: wait for the reset, or upgrade to BUSINESS or higher, which has no separate national-law limit (${DASHBOARD_URL}, plans: ${PRICING_URL}). Do not retry this call unchanged.`;
+      }
       const parts: string[] = [];
       if (d) {
         if (typeof d.weight === 'number') parts.push(`this call needs ${d.weight} credits`);
@@ -161,10 +185,44 @@ export function describeError(err: unknown): string {
     }
     case 403:
       return `${head} The account's plan or subscription does not allow this call (not a temporary error — do not retry). Tell the user which feature was refused; plans are compared at ${PRICING_URL}.`;
-    case 404:
+    case 404: {
+      // National 404s take three shapes, none of which point at lex_resolve
+      // or lex_search (both EU-only): the typed document-id miss (`details:
+      // {id, jurisdiction}`, via the jurisdiction fallback above), the
+      // citation-graph id guard (`{"error": "Document not found: <ID>"}`,
+      // no code/jurisdiction at all), and a country that is not live yet
+      // (falls through every route to the generic `apiNotFound` handler's
+      // "Unknown API endpoint" 404 — the jurisdiction path segment never
+      // matched, which for a country code can only mean it is unlaunched).
+      const isNational = (d && typeof d.jurisdiction === 'string')
+        || /^Document not found:/i.test(err.message)
+        || /Unknown API endpoint/i.test(err.message);
+      if (isNational) {
+        // "Unknown API endpoint" is the generic 404 for ANY unmatched route,
+        // not only an unlaunched country — these tools only ever build
+        // known routes, so that's the near-certain cause here, but the
+        // hedge keeps the message honest if that ever changes.
+        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents) — or the route itself is wrong.`;
+      }
       return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title).`;
+    }
     case 409:
+      // National semantic search not yet enabled for a live country
+      // (nationalSemanticController.js unavailableError): a different
+      // country, not account state — do not say "tell the user to retry
+      // their account", point at the right tools instead.
+      if (err.code === 'NATIONAL_SEMANTIC_NOT_ENABLED') {
+        const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'this country';
+        return `${head} Semantic search is not available for ${jur} yet — check semanticSearch in lex_national_coverage's output before retrying. lex_list_national_documents and lex_get_national_document still work there. Not retryable; nothing was charged.`;
+      }
       return `${head} The account's current state does not allow this action; tell the user (it is not fixed by retrying).`;
+    case 503:
+      // National semantic index temporarily down (same source as 409 above).
+      if (err.code === 'NATIONAL_SEMANTIC_UNAVAILABLE') {
+        const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'This country';
+        return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
+      }
+      return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
     case 429: {
       const wait = err.retryAfterSeconds;
       const resetsAt = err.resetsAt ?? (d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined);
@@ -182,6 +240,24 @@ export function describeError(err: unknown): string {
         return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — do not retry, tell the user. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
       }
       return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
+    }
+    case 410: {
+      // A national document its source withdrew — a
+      // takedown, a pseudonymisation fix, a robots.txt listing. Served
+      // nowhere: no title, no metadata, no text. Two shapes carry it: the
+      // typed envelope (lex_get_national_document, details nested) and the
+      // legacy shape (citation tools, id/jurisdiction/withdrawnAt as
+      // top-level siblings via the fallback above) — `d` covers either.
+      if (err.code === 'DOCUMENT_WITHDRAWN') {
+        const parts: string[] = [];
+        if (d) {
+          if (typeof d.id === 'string') parts.push(`id ${d.id}`);
+          if (typeof d.jurisdiction === 'string') parts.push(`jurisdiction ${d.jurisdiction}`);
+          if (typeof d.withdrawnAt === 'string') parts.push(`withdrawn ${d.withdrawnAt}`);
+        }
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This document was withdrawn by its source and LexAPI serves nothing of it — not even the title. Gone for good, not a temporary failure: do not retry. If you or the user were holding a cached copy, drop it — a withdrawal can be a legal takedown or a pseudonymisation fix, and keeping or re-deriving the content (including trying to identify who it was about) would defeat that. Nothing was charged.`;
+      }
+      return `${head} Gone. Not retryable; nothing was charged.`;
     }
     case 502:
       return `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;

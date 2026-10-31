@@ -77,9 +77,14 @@ describe('MCP protocol (in-memory)', () => {
 
     // N10: tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
     const listJson = JSON.stringify(listed);
-    // Tripwire with headroom: the first cut was ~39.6k characters (~10k tokens);
-    // fail if it creeps back towards that, not on every new sentence.
-    expect(listJson.length).toBeLessThan(38_000);
+    // Tripwire with headroom. v0.3.0's first cut was ~39.6k characters
+    // (~10k tokens), trimmed to ~36.4k; v0.4.0 (2026-10-28) added 5
+    // national-law tools (~7.5k, trimmed twice for size) plus `includeNational`
+    // on the 6 citation tools. Measured 46.43k at 064c008 (71 characters
+    // under the cap — no real headroom); trimmed in review to ~45.8k —
+    // fail if it creeps up from THAT without a reason, not on every new
+    // sentence.
+    expect(listJson.length).toBeLessThan(46_500);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for that date/);

@@ -83,17 +83,26 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_get_document_by_url` | A document from a pasted EUR-Lex URL. | 1 · 4 · 5 |
 | `lex_document_versions` | LexAPI's observed version history of a document. | 1 |
 | `lex_get_document_version` | One observed snapshot, by version number or date. | 1 |
-| `lex_cited_by` | Documents citing / amending / correcting / repealing an act. | 1 |
-| `lex_cites` | What a document cites. | 1 |
-| `lex_citation_network` | Both directions in one call. | 20 |
-| `lex_citation_path` | Shortest citation chain between two documents. | 20 |
-| `lex_related` | Documents citing the same acts (bibliographic coupling). | 20 |
-| `lex_citation_stats` | Citation graph totals and most-cited documents. | 20 |
+| `lex_cited_by` | Documents citing / amending / correcting / repealing an act. `includeNational` adds national neighbours (BUSINESS+). | 1 |
+| `lex_cites` | What a document cites. `includeNational` adds national neighbours (BUSINESS+). | 1 |
+| `lex_citation_network` | Both directions in one call. `includeNational` adds national neighbours (BUSINESS+). | 20 |
+| `lex_citation_path` | Shortest citation chain between two documents. `includeNational` follows national documents (BUSINESS+). | 20 |
+| `lex_related` | Documents citing the same acts (bibliographic coupling). `includeNational` considers national documents (BUSINESS+). | 20 |
+| `lex_citation_stats` | Citation graph totals and most-cited documents. `includeNational` counts national documents (BUSINESS+). | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
 | `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
+| `lex_national_coverage` | Which countries' national law LexAPI covers and what's live in each (sources, licences, attribution). Call first. | free |
+| `lex_list_national_documents` | Browse a country's national legislation/case law by title or type; cursor paging past the first 1,000 rows. | 3 per call |
+| `lex_get_national_document` | A national document by id. Always served from the corpus. | 5 → 1 |
+| `lex_national_semantic_case_law` | Semantic search over one country's case law. | 5 |
+| `lex_national_semantic_legislation` | Semantic search over one country's legislation. | 5 |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and for changes to watched acts (paid plans). The URL must be a public https URL (port 443/8443, no internal hosts or private addresses) — checked here as well as by the API. | free |
+
+### National law
+
+`lex_national_coverage`, `lex_list_national_documents`, `lex_get_national_document`, `lex_national_semantic_case_law` and `lex_national_semantic_legislation` cover member-state legislation and case law alongside the EU_LAW tools above. A country can be registered on LexAPI before it is made available to customers — always call `lex_national_coverage` first; the other tools answer an error for a country that isn't live yet. The citation-graph tools (`lex_cited_by`, `lex_cites`, `lex_citation_network`, `lex_citation_path`, `lex_related`, `lex_citation_stats`) accept national document ids directly (e.g. `"AT-NOR-12345"`) and an `includeNational` option to pull in national neighbours — BUSINESS, SCALE and ENTERPRISE only, 403 below that. National results have the same fields in every country (LexAPI API 2.8.0): `documentKind` (`act` | `decision`) everywhere, and on a decision `court`, `chamber`, `caseNumbers` and `citedNorms` — whatever the source calls them. Every national result carries `attribution` (the official source and its licence, e.g. RIS, gesetze-im-internet.de, Normattiva, Légifrance/Judilibre, the Rechtspraak open data) — show it to the user alongside anything quoted. On FREE/STARTER/PROFESSIONAL plans, national-law calls also draw from a separate monthly allowance (reported as `allowance` on each response); BUSINESS and higher have no separate limit. A document its source withdrew (a takedown, a pseudonymisation fix) answers a distinct error — nothing of it is served, not even the title; the model is told not to retry and to drop any cached copy.
 
 ### How results are shaped for models
 

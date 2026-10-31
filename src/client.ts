@@ -35,6 +35,11 @@ const KEPT_HEADERS = [
   'x-corpus-version',
   'x-export-total',
   'x-export-truncated',
+  // National-law monthly allowance for FREE/STARTER/PROFESSIONAL accounts;
+  // absent for BUSINESS and higher (no separate limit).
+  'x-national-limit',
+  'x-national-remaining',
+  'x-national-reset',
 ] as const;
 
 export type KeptHeader = (typeof KEPT_HEADERS)[number];
@@ -356,7 +361,24 @@ export class LexAPIClient {
     return this.request('GET', `/citations/path/${enc(from)}/${enc(to)}`, { query });
   }
   related(celex: string, query: Query) { return this.request('GET', `/citations/related/${enc(celex)}`, { query }); }
-  citationStats() { return this.request('GET', '/citations/stats'); }
+  citationStats(query: Query = {}) { return this.request('GET', '/citations/stats', { query }); }
+
+  // ── National law ─────────────────────────────────────────────────
+  // Jurisdiction codes are lower-cased on the wire (route pattern is
+  // registry-generated from lower-case codes).
+  nationalCoverage() { return this.request('GET', '/national/coverage'); }
+  getNationalDocument(jurisdiction: string, id: string, query: Query) {
+    return this.request('GET', `/${jurisdiction.toLowerCase()}/documents/${enc(id)}`, { query });
+  }
+  listNationalDocuments(jurisdiction: string, query: Query) {
+    return this.request('GET', `/${jurisdiction.toLowerCase()}/documents`, { query });
+  }
+  nationalSemanticCaseLaw(jurisdiction: string, body: Json) {
+    return this.request('POST', `/${jurisdiction.toLowerCase()}/search/semantic`, { body });
+  }
+  nationalSemanticLegislation(jurisdiction: string, body: Json) {
+    return this.request('POST', `/${jurisdiction.toLowerCase()}/legislation/semantic`, { body });
+  }
 
   // ── Webhooks ─────────────────────────────────────────────────────
   listWebhooks() { return this.request('GET', '/webhooks'); }
