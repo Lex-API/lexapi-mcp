@@ -96,7 +96,7 @@ const celexOrNationalId = (what = 'identifier') =>
 // unmatched path, same as EU_LAW.
 const jurisdiction = () => z.string().trim().regex(/^[A-Za-z]{2}$/, 'a two-letter country code, e.g. "at"')
   .transform((v) => v.toLowerCase())
-  .describe('ISO 3166-1 alpha-2 country code, e.g. "at". Check lex_national_coverage first — not yet live 404s.');
+  .describe('Two-letter country code, e.g. "at".');
 
 // The 24-code enum used to be repeated in ~10 tools (~3k tokens of tools/list).
 // A pattern + refine keeps the validation and lists the codes nowhere.
@@ -607,11 +607,11 @@ export const tools: ToolDef[] = [
     name: 'lex_list_national_documents',
     title: 'Browse national documents',
     description:
-      'Browse a country\'s national documents by title/type, newest-first by document date. documentKind ("act" | "decision") tells legislation from case law. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page. Counts against the national-law allowance on lower plans (see allowance in the response). Paging: page only reaches the first 1,000 rows (a 400 past that) — pass this call\'s own nextCursor as cursor to page further, which works at any depth; omit page once you start using cursor.',
+      'Browse a country\'s national documents by title/type, newest-first by document date. documentKind ("act" | "decision") tells legislation from case law. Not yet live 404s — check lex_national_coverage first. Cost: 3 credits flat, not per page; counts against the national-law allowance on lower plans (see allowance). Paging: page reaches only the first 1,000 rows; beyond, pass the previous nextCursor as cursor (any depth), without page.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       q: z.string().trim().min(3).max(200).optional().describe('Title search, 3–200 characters.'),
-      documentType: z.string().trim().min(1).max(100).optional().describe('Document type as stored for this country.'),
+      documentType: z.string().trim().min(1).max(200).optional().describe('Document type as stored for this country.'),
       page: z.number().int().min(1).optional().describe('1-based page, first 1,000 rows only. Omit when paging with cursor.'),
       cursor: z.string().trim().min(1).optional().describe('Opaque cursor from a previous call\'s nextCursor — pages past the first 1,000 rows. Do not combine with page.'),
       limit: z.number().int().min(1).max(100).default(20),
@@ -651,7 +651,7 @@ export const tools: ToolDef[] = [
     name: 'lex_get_national_document',
     title: 'Fetch a national document',
     description:
-      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). content: null means the source publishes no machine-readable text for this id — see textAvailability for why. A document its source withdrew (a takedown, a pseudonymisation fix) is a distinct error instead — nothing of it is served, not even the title; do not retry, and drop any copy you were holding. Corpus-only, never a live fetch. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too) — a pool with fewer than 5 available 402s even though it only spends 1. Counts against the national-law allowance on lower plans (see allowance). attribution names the source/licence — show it to the user.',
+      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; read on with view "full" and offset. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew is a distinct error: nothing of it is served; do not retry, drop any copy held. Not yet live 404s — check lex_national_coverage first. Cost: 5 reserved, settles at 1 (an unknown id too), so a pool under 5 402s. Counts against the national-law allowance on lower plans (see allowance). Show attribution (source/licence) to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
@@ -672,7 +672,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is accepted for schema compatibility but is a no-op nationally (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
@@ -748,7 +748,7 @@ export const tools: ToolDef[] = [
       citationType: z.enum(CITATION_TYPES).optional().describe('Only this edge type (e.g. "amendment" for the amending acts).'),
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per page.'),
       offset: z.number().int().min(0).default(0).describe('Paging offset, in edges.'),
-      includeNational: z.boolean().optional().describe('Also include national neighbours of live countries (BUSINESS+ only).'),
+      includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -768,7 +768,7 @@ export const tools: ToolDef[] = [
       citationType: z.enum(CITATION_TYPES).optional(),
       limit: z.number().int().min(1).max(500).default(50),
       offset: z.number().int().min(0).default(0),
-      includeNational: z.boolean().optional().describe('Also include national neighbours of live countries (BUSINESS+ only).'),
+      includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -788,7 +788,7 @@ export const tools: ToolDef[] = [
       citationType: z.enum(CITATION_TYPES).optional(),
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per direction.'),
       offset: z.number().int().min(0).default(0),
-      includeNational: z.boolean().optional().describe('Also include national neighbours of live countries (BUSINESS+ only).'),
+      includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -807,7 +807,7 @@ export const tools: ToolDef[] = [
       from: celexOrNationalId('Start identifier'),
       to: celexOrNationalId('Target identifier'),
       maxDepth: z.number().int().min(1).max(8).default(3).describe('Max hops.'),
-      includeNational: z.boolean().optional().describe('Also follow national documents of live countries (BUSINESS+ only).'),
+      includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -828,7 +828,7 @@ export const tools: ToolDef[] = [
     inputSchema: {
       celexNumber: celexOrNationalId(),
       limit: z.number().int().min(1).max(50).default(10),
-      includeNational: z.boolean().optional().describe('Also consider national documents of live countries (BUSINESS+ only).'),
+      includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -851,7 +851,7 @@ export const tools: ToolDef[] = [
     title: 'Citation graph statistics',
     description: 'Totals for the whole LexAPI citation graph plus the 10 most-cited and 10 most-citing documents. includeNational counts national documents too (BUSINESS+ only). Cost: 20 credits.',
     inputSchema: {
-      includeNational: z.boolean().optional().describe('Also count national documents of live countries (BUSINESS+ only).'),
+      includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
     annotations: READ,
     handler: async (a, client) => {

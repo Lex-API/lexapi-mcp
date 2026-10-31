@@ -139,6 +139,12 @@ export interface ContentOptions {
   include?: string[];
   /** Skip this many items (across parts, in order) — paging after truncation. In outline view: articles. */
   offset?: number;
+  /**
+   * The calling tool has no `articleId` / `include` parameters (the national
+   * document tool): the outline's reading hint then points at view "full" +
+   * offset, the only way that tool reads on.
+   */
+  noPartSelection?: boolean;
 }
 
 const PART_ORDER = ['articles', 'recitals', 'paragraphs', 'annexes', 'tables', 'sections', 'fullText'] as const;
@@ -233,7 +239,11 @@ function clipItem(item: Item, budget: number): unknown {
 }
 
 /** How to read on from an outline — only suggesting parts this document has. */
-function readingHint(content: Obj): string {
+function readingHint(content: Obj, opts?: ContentOptions): string {
+  if (opts?.noPartSelection) {
+    // No articleId / include on this tool — never suggest them.
+    return 'Read on: call again with view "full" (the body in order, up to maxChars); long bodies continue with the offset its note gives.';
+  }
   const has = (k: string) => Array.isArray(content[k]) && (content[k] as unknown[]).length > 0;
   const ways: string[] = [];
   if (has('articles')) ways.push(`one article with articleId (e.g. "${firstArticleId(content)}")`);
@@ -311,7 +321,7 @@ export function shapeContent(content: unknown, opts: ContentOptions): { content?
     const { outline, note } = outlineOf(content, opts.maxChars, offset);
     return {
       content: outline,
-      note: [`Outline only: the body is ${totalSize} characters (budget maxChars=${opts.maxChars}).`, note, readingHint(content)].filter(Boolean).join(' '),
+      note: [`Outline only: the body is ${totalSize} characters (budget maxChars=${opts.maxChars}).`, note, readingHint(content, opts)].filter(Boolean).join(' '),
     };
   }
 
@@ -733,7 +743,7 @@ export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
   const body = c
     ? { fullText: c.fullText, articles: Array.isArray(c.articles) ? c.articles.map(shapeNationalArticle) : [] }
     : doc.content;
-  const { content, note } = shapeContent(body, opts);
+  const { content, note } = shapeContent(body, { ...opts, noPartSelection: true });
   if (content) out.content = content;
   if (note) out.note = note;
   return out;

@@ -324,6 +324,37 @@ describe('lex_get_national_document', () => {
     expect(data.textAvailability).toEqual({ available: false, reason: 'unknown' });
     expect(data.attribution).toMatch(/CC0/);
   });
+
+  it('a large document is outlined with a reading hint this tool can follow (view "full" + offset, never articleId/include)', async () => {
+    const reply = () => ({
+      body: {
+        document: {
+          ...summary(),
+          decision: null,
+          content: {
+            ...EMPTY_CONTENT,
+            fullText: 'z'.repeat(5000),
+            articles: Array.from({ length: 40 }, (_, i) => ({
+              number: `§ ${i + 1}`, title: `Titel ${i + 1}`, section: null, text: 'w'.repeat(300),
+              inForceFrom: null, inForceTo: null, details: {},
+            })),
+          },
+          textAvailability: { available: true },
+          attribution: 'Data source: RIS.',
+          textBasis: null,
+        },
+      },
+    });
+    const { data } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-1', maxChars: 2000 }, reply);
+    expect(data.note).toMatch(/Outline only/);
+    expect(data.note).toMatch(/view "full"/);
+    expect(data.note).not.toMatch(/articleId|include/);
+    // The hint works: view "full" + the offset the next note gives pages through the articles.
+    const { data: full } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-1', maxChars: 2000, view: 'full' }, reply);
+    expect(full.content.articles[0]).toMatchObject({ number: '§ 1' });
+    expect(full.note).toMatch(/offset=\d+/);
+    expect(byName.lex_get_national_document.inputSchema).not.toHaveProperty('articleId');
+  });
 });
 
 describe('lex_national_semantic_case_law', () => {
