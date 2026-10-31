@@ -35,8 +35,8 @@ const KEPT_HEADERS = [
   'x-corpus-version',
   'x-export-total',
   'x-export-truncated',
-  // National-law monthly allowance for FREE/STARTER/PROFESSIONAL accounts
-  // (lex-api PR #306); absent for BUSINESS and higher (no separate limit).
+  // National-law monthly allowance for FREE/STARTER/PROFESSIONAL accounts;
+  // absent for BUSINESS and higher (no separate limit).
   'x-national-limit',
   'x-national-remaining',
   'x-national-reset',
@@ -303,8 +303,8 @@ export class LexAPIClient {
   citationStats(query: Query = {}) { return this.request('GET', '/citations/stats', { query }); }
 
   // ── National law ─────────────────────────────────────────────────
-  // Launching 2026-11-03. Jurisdiction codes are lower-cased on the wire
-  // (route pattern is registry-generated from lower-case codes).
+  // Jurisdiction codes are lower-cased on the wire (route pattern is
+  // registry-generated from lower-case codes).
   nationalCoverage() { return this.request('GET', '/national/coverage'); }
   getNationalDocument(jurisdiction: string, id: string, query: Query) {
     return this.request('GET', `/${jurisdiction.toLowerCase()}/documents/${enc(id)}`, { query });

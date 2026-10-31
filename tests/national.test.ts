@@ -16,9 +16,9 @@ async function call(name: string, args: Record<string, unknown>, reply: Paramete
   return { result, calls, data: result.isError ? undefined : parseText(result) };
 }
 
-// ── API 2.8.0 fixtures (lex-api PR #335: one national shape for every
-// jurisdiction — every documented field present, null / [] when the source
-// has nothing; lane extras only under content.details / articles[].details).
+// ── API 2.8.0 fixtures (one national shape for every jurisdiction —
+// every documented field present, null / [] when the source has nothing;
+// source extras only under content.details / articles[].details).
 function summary(overrides: Record<string, unknown> = {}) {
   return {
     id: 'AT-NOR-1', jurisdiction: 'AT', language: 'de', documentKind: 'act',
@@ -143,7 +143,7 @@ describe('lex_list_national_documents', () => {
     expect(data).not.toHaveProperty('allowance');
   });
 
-  it('cursor paging (lex-api PR #320): sends cursor instead of page, keeps nextCursor/hasMore/totalExact, and nextCursor: null is not dropped by compact', async () => {
+  it('cursor paging: sends cursor instead of page, keeps nextCursor/hasMore/totalExact, and nextCursor: null is not dropped by compact', async () => {
     const { calls, data } = await call('lex_list_national_documents', {
       jurisdiction: 'at', cursor: 'abc123', limit: 50,
     }, () => ({
@@ -174,7 +174,7 @@ describe('lex_list_national_documents', () => {
   });
 });
 
-describe('a national document its source withdrew (410 DOCUMENT_WITHDRAWN, lex-api PR #320)', () => {
+describe('a national document its source withdrew (410 DOCUMENT_WITHDRAWN)', () => {
   it('typed envelope on lex_get_national_document: not retryable, says to drop any copy', async () => {
     const { result } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-5' }, () => ({
       status: 410,

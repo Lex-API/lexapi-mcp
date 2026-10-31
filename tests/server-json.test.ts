@@ -1,8 +1,8 @@
 // Validates server.json against the constraints of the schema it declares
 // ($schema: https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json),
-// so a regression like the one review round 2 found (description over the
-// registry's 100-character limit — `mcp-publisher publish` would reject it)
-// fails CI instead of being caught by a human reviewer reading the file.
+// so a regression (description over the registry's 100-character limit —
+// `mcp-publisher publish` would reject it) fails CI instead of being
+// caught by a human reviewer reading the file.
 //
 // This is a local, hand-maintained mirror of the fields that have actually
 // bitten us, not the full JSON Schema (fetching it live would make this test

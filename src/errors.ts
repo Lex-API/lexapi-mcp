@@ -52,9 +52,9 @@ export function parseErrorBody(
   const resetsAt = typeof j.resetsAt === 'string' ? j.resetsAt
     : usage && typeof usage.resetsAt === 'string' ? usage.resetsAt
       : undefined;
-  // National error bodies (lex-api national-law lanes) carry `jurisdiction`
-  // (and, for a withdrawn document — lex-api PR #320 — also `id` and
-  // `withdrawnAt`) as plain top-level siblings of `error`/`code`/`message`,
+  // National error bodies carry `jurisdiction` (and, for a withdrawn
+  // document, also `id` and `withdrawnAt`) as plain top-level siblings of
+  // `error`/`code`/`message`,
   // never nested in `details` — the document-id 404, the 409
   // NATIONAL_SEMANTIC_NOT_ENABLED and 503 NATIONAL_SEMANTIC_UNAVAILABLE
   // bodies, the per-jurisdiction 403 tier gate, and the citation routes' 410
@@ -129,7 +129,7 @@ export function describeError(err: unknown): string {
       return `${head} The LexAPI API key is missing, wrong, or revoked. Ask the user to check the key configured for this MCP server (LEXAPI_API_KEY, or the Authorization header for the hosted server) or create a new one at ${DASHBOARD_URL}.`;
     case 402: {
       // The monthly allowance of national-law calls for FREE/STARTER/
-      // PROFESSIONAL plans (lex-api PR #306) — a separate counter from the
+      // PROFESSIONAL plans — a separate counter from the
       // credit pool, so the usual "buy a top-up" advice does not apply.
       if (err.code === 'NATIONAL_ALLOWANCE_EXHAUSTED') {
         const parts: string[] = [];
@@ -206,7 +206,7 @@ export function describeError(err: unknown): string {
       return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
     }
     case 410: {
-      // A national document its source withdrew (lex-api PR #320) — a
+      // A national document its source withdrew — a
       // takedown, a pseudonymisation fix, a robots.txt listing. Served
       // nowhere: no title, no metadata, no text. Two shapes carry it: the
       // typed envelope (lex_get_national_document, details nested) and the

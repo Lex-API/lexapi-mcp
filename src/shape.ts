@@ -63,7 +63,7 @@ export function creditNotice(body: unknown): string | undefined {
   return `LexAPI credit pool is low: ${remaining} of ${limit} credits left${reset ? ` (resets ${reset})` : ''}.`;
 }
 
-// ── National-law allowance (lex-api PR #306) ────────────────────────
+// ── National-law allowance ──────────────────────────────────────────
 /**
  * FREE/STARTER/PROFESSIONAL accounts get a monthly allowance of national
  * calls, separate from the credit pool; BUSINESS and higher have no
@@ -632,12 +632,12 @@ export function shapeNetwork(res: LexResponse<Json>): Obj {
   });
 }
 
-// ── National law (lex-api PR #306, launching 2026-11-03) ────────────
+// ── National law ─────────────────────────────────────────────────
 // National documents key on `id` (not `celex`) and always carry
 // `attribution` (per-source licence/attribution text) — never dropped by
 // compacting, since it is the legally required attribution for the source.
 //
-// Since API 2.8.0 (lex-api PR #335) every national response has ONE shape
+// Since API 2.8.0 every national response has ONE shape
 // for every jurisdiction: `documentKind` ('act' | 'decision'), a decision's
 // `decision: { court, chamber, caseNumbers, citedNorms }`, and a closed
 // `content` key set (lane extras only under `content.details` /
@@ -795,8 +795,9 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
     resultCount: results.length,
     results,
     hint: b.hint,
-    // The national index never rewrites (clausly answers hyde:false) — the
-    // request's hyde was accepted but did not cost the HyDE premium.
+    // The national index never rewrites (the response always answers
+    // hyde: false) — the request's hyde was accepted but did not cost the
+    // HyDE premium.
     hyde: b.hyde,
     attribution: b.attribution,
   });

@@ -89,7 +89,7 @@ const celexOrNationalId = (what = 'identifier') =>
     .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v),
       `${what} must be a CELEX number (e.g. 32016R0679) or a national document id (e.g. AT-NOR-12345)`)
     .describe(`${what}: a CELEX number, or (with includeNational) a national document id, e.g. "AT-NOR-12345".`);
-// National law (lex-api PR #306, launching 2026-11-03): jurisdiction codes
+// National law: jurisdiction codes
 // are not enumerated here — the server is the single source of truth for
 // which are registered and which are LIVE (lex_national_coverage), and the
 // set grows over time. A two-letter code that isn't live 404s like any
@@ -183,7 +183,7 @@ function withNotice(res: LexResponse<Json>, shaped: Record<string, unknown>): Re
   return notice ? { ...shaped, notice } : shaped;
 }
 
-/** Attach the national-law allowance (FREE/STARTER/PROFESSIONAL only — lex-api PR #306), when the response carried it. */
+/** Attach the national-law allowance (FREE/STARTER/PROFESSIONAL only), when the response carried it. */
 function withAllowance(res: LexResponse<Json>, shaped: Record<string, unknown>): Record<string, unknown> {
   const allowance = nationalAllowanceOf(res.headers);
   return allowance ? { ...shaped, allowance } : shaped;
@@ -583,7 +583,7 @@ export const tools: ToolDef[] = [
     },
   },
 
-  // ── National law (lex-api PR #306; launching 2026-11-03) ────────────
+  // ── National law ─────────────────────────────────────────────────
   // Member-state legislation and case law, alongside the EU_LAW corpus
   // above. A country can be registered on LexAPI before it is available to
   // customers, so every tool below except lex_national_coverage says to
