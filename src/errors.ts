@@ -3,7 +3,7 @@
 // LexAPI answers errors in two shapes (docs.md "Errors & retries"):
 //   typed:  { success: false, error: { code, message, details? } }
 //   legacy: { error: "slug or sentence", message?, details?, retryAfter?, upgradeUrl?, usage? }
-//           — from lex-api #304 on also a top-level `code` (e.g. RATE_LIMITED,
+//           — newer servers also send a top-level `code` (e.g. RATE_LIMITED,
 //           QUOTA_EXHAUSTED) and, on quota 429s, a top-level `resetsAt`.
 // We normalise both, then turn the status into a message that says what
 // happened AND what to do next — the model relays it to the user, so it has
@@ -37,6 +37,28 @@ export class LexAPITransportError extends Error {
   }
 }
 
+/**
+ * The hosted server's OAuth credential could not authenticate a call
+ * (token exchange refused / failed, or the API refused the exchanged
+ * token). `httpStatus` is what the MCP client is answered when the HTTP
+ * response is still uncommitted (src/oauth/upstream.ts); otherwise the
+ * model sees describeError's text as a tool error.
+ */
+export type UpstreamAuthKind = 'invalid_token' | 'config' | 'client_auth' | 'unavailable' | 'rate_limited' | 'upstream' | 'api_rejected';
+
+export class UpstreamAuthError extends Error {
+  constructor(
+    public readonly kind: UpstreamAuthKind,
+    public readonly httpStatus: number,
+    /** Token-free reason. */
+    public readonly description: string,
+    public readonly retryAfterSeconds?: number,
+  ) {
+    super(description);
+    this.name = 'UpstreamAuthError';
+  }
+}
+
 export function parseErrorBody(
   json: unknown,
   rawText: string,
@@ -46,7 +68,7 @@ export function parseErrorBody(
   if (!json || typeof json !== 'object' || Array.isArray(json)) return fallback;
   const j = json as Record<string, unknown>;
   const retryAfter = typeof j.retryAfter === 'number' ? j.retryAfter : undefined;
-  // A top-level string `code` (lex-api #304) beats the legacy `error` text.
+  // A top-level string `code` beats the legacy `error` text.
   const topCode = typeof j.code === 'string' && j.code ? j.code : undefined;
   const usage = j.usage && typeof j.usage === 'object' ? j.usage as Record<string, unknown> : undefined;
   const resetsAt = typeof j.resetsAt === 'string' ? j.resetsAt
@@ -99,6 +121,20 @@ export function describeError(err: unknown): string {
       ? `LexAPI did not answer in time (${err.message}). Live EUR-Lex fetches can take longer than an MCP client waits; the call is safe to retry once, and a repeat may be served from the LexAPI corpus. If it keeps timing out, narrow the request (fewer pages, a smaller limit) or raise the client's tool timeout (Claude Code: MCP_TOOL_TIMEOUT) and LEXAPI_TIMEOUT_MS.`
       : `Could not reach LexAPI (${err.message}). Check network access to lex-api.com (or LEXAPI_BASE_URL) and retry.`;
   }
+  if (err instanceof UpstreamAuthError) {
+    switch (err.kind) {
+      case 'invalid_token':
+        return `LexAPI sign-in expired or was revoked (${err.description}). The user must reconnect LexAPI in their MCP client (sign in again); retrying with the same sign-in will not help.`;
+      case 'rate_limited':
+        return `LexAPI sign-in is rate limited right now.${err.retryAfterSeconds !== undefined ? ` Wait ${err.retryAfterSeconds} s before calling again.` : ' Wait a little before calling again.'}`;
+      case 'upstream':
+        return `LexAPI sign-in could not be checked right now (${err.description}). Retry in a minute; if it persists, status is at https://lex-api.com/status.`;
+      case 'api_rejected':
+        return `LexAPI refused this connection's access (${err.description}). Ask the user to disconnect and reconnect LexAPI in their MCP client; if that does not help, contact support@lex-api.com.`;
+      default:
+        return `LexAPI sign-in is temporarily unavailable on this server (${err.kind}). This is not the user's fault and signing in again will not help; retry later or use an API key (https://lex-api.com/dashboard?ref=mcp).`;
+    }
+  }
   if (!(err instanceof LexAPIError)) {
     const message = err instanceof Error ? err.message : String(err);
     return `Tool execution failed: ${message}`;
@@ -132,7 +168,7 @@ export function describeError(err: unknown): string {
     case 429: {
       const wait = err.retryAfterSeconds;
       const resetsAt = err.resetsAt ?? (d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined);
-      // QUOTA_EXHAUSTED (lex-api #304) is a used-up legacy quota, whatever
+      // QUOTA_EXHAUSTED is a used-up legacy quota, whatever
       // else the response carries. Fallback for older servers: the per-minute
       // limiter sends Retry-After / retryAfter, the legacy quotas (daily
       // calls, monthly semantic searches) send neither — only usage.resetsAt.

@@ -8,13 +8,13 @@
     "url": "https://github.com/Lex-API/lexapi-mcp",
     "source": "github"
   },
-  "version": "0.3.0",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@lexapi/mcp",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -22,7 +22,7 @@
       "environmentVariables": [
         {
           "name": "LEXAPI_API_KEY",
-          "description": "LexAPI API key. Get one at https://lex-api.com/dashboard (FREE plan: 500 credits/month).",
+          "description": "LexAPI API key. Get one at https://lex-api.com/dashboard (FREE plan available; see https://lex-api.com/pricing).",
           "isRequired": true,
           "isSecret": true
         },
@@ -54,8 +54,8 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Bearer <your LexAPI API key>. Get one at https://lex-api.com/dashboard (FREE plan: 500 credits/month).",
-          "isRequired": true,
+          "description": "Optional. Leave unset to sign in with LexAPI (OAuth 2.1; the server's 401 points clients to https://mcp.lex-api.com/.well-known/oauth-protected-resource/v1). Or send \"Bearer <your LexAPI API key>\" from https://lex-api.com/dashboard (FREE plan available; see https://lex-api.com/pricing).",
+          "isRequired": false,
           "isSecret": true
         }
       ]
