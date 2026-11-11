@@ -57,6 +57,8 @@ describe('LexAPIClient request building', () => {
     await client.citationPath('A', 'B', {});
     await client.related('X', {});
     await client.citationStats();
+    await client.transposition('32016L0680');
+    await client.counterparts('AT-NOR-1');
     await client.listWebhooks();
     await client.getWebhook('w1');
     await client.webhookDeliveries('w1', {});
@@ -81,6 +83,8 @@ describe('LexAPIClient request building', () => {
       'GET /citations/path/A/B',
       'GET /citations/related/X',
       'GET /citations/stats',
+      'GET /citations/transposition/32016L0680',
+      'GET /citations/counterparts/AT-NOR-1',
       'GET /webhooks',
       'GET /webhooks/w1',
       'GET /webhooks/w1/deliveries',
