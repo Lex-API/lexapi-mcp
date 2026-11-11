@@ -172,10 +172,11 @@ const codeList = (d: string) => z.union([z.string(), z.array(z.string()).min(1).
 /** The edge filters shared by the graph tools (API 2.11.0). */
 const graphFilters = {
   citationType: csvOf(CITATION_TYPES, 'Only these edge types.').optional(),
-  provenance: csvOf(CITATION_PROVENANCES, 'Only these edge origins (cellar-nim: a notified measure, not a finding of transposition).').optional(),
+  provenance: csvOf(CITATION_PROVENANCES, 'Edge origins (cellar-nim: a notified measure, not a finding of transposition). The last three: 400 while no country is live.').optional(),
   jurisdictions: codeList('Neighbours in: "eu" and/or live national codes (national: BUSINESS+).').optional(),
   resolution: csvOf(CITATION_RESOLUTIONS, 'National edges: match method.').optional(),
 };
+const titleLanguage = lang('Title language (default en).').optional();
 const unresolved = z.boolean().optional()
   .describe('National id: add references that got no edge (100 shown).');
 
@@ -787,6 +788,7 @@ export const tools: ToolDef[] = [
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per page.'),
       offset: z.number().int().min(0).default(0).describe('Paging offset, in edges.'),
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -808,6 +810,7 @@ export const tools: ToolDef[] = [
       limit: z.number().int().min(1).max(500).default(50),
       offset: z.number().int().min(0).default(0),
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -829,6 +832,7 @@ export const tools: ToolDef[] = [
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per direction.'),
       offset: z.number().int().min(0).default(0),
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -849,6 +853,7 @@ export const tools: ToolDef[] = [
       maxDepth: z.number().int().min(1).max(8).default(3).describe('Max hops.'),
       ...graphFilters,
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -859,6 +864,7 @@ export const tools: ToolDef[] = [
         provenance: a.provenance,
         jurisdictions: a.jurisdictions,
         resolution: a.resolution,
+        language: a.language,
       });
       const b = stripEnvelope(res.body);
       if (Array.isArray(b.path)) {
@@ -878,6 +884,7 @@ export const tools: ToolDef[] = [
       limit: z.number().int().min(1).max(50).default(10),
       ...graphFilters,
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -888,6 +895,7 @@ export const tools: ToolDef[] = [
         provenance: a.provenance,
         jurisdictions: a.jurisdictions,
         resolution: a.resolution,
+        language: a.language,
       });
       const b = stripEnvelope(res.body, ['method']);
       if (Array.isArray(b.related)) {
@@ -920,19 +928,21 @@ export const tools: ToolDef[] = [
     name: 'lex_transposition',
     title: 'Notified national measures for an EU act',
     description:
-      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely — say so when presenting it (the result\'s note). Every plan. On BUSINESS+ it also says, for live countries only, which measures LexAPI holds (id, resolved) and adds documents whose national source records the relation (provenance "source"); below that those fields are absent. termsRequired: true = the account must accept the national-source terms in the dashboard first. Keep source.cellar.attribution with anything republished. Cost: 5 credits per call (each offset page too); not an EU act = 404, settles at 1.',
+      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely — say so when presenting it (the result\'s note). Every plan. On BUSINESS+ it also says, for live countries only, which measures LexAPI holds (id, resolved) and adds documents whose national source records the relation (provenance "source"); below that those fields are absent. termsRequired: true = the account must accept the national-source terms in the dashboard first. Keep source.cellar.attribution with anything republished. Output is bounded (limit, ~40,000 characters): page with the offset given in more. Cost: 5 credits per call (each offset page too); not an EU act = 404, settles at 1.',
     inputSchema: {
       celexNumber: celex('CELEX number of the EU act'),
       jurisdictions: codeList('Only these countries, e.g. ["es","cz"] (EL = Greece, UK = United Kingdom); default all 28.').optional(),
       resolvedOnly: z.boolean().optional().describe('Only measures resolved to a document LexAPI holds (BUSINESS+, live countries).'),
-      limit: z.number().int().min(1).max(2000).default(50).describe('Measures shown, across countries.'),
+      limit: z.number().int().min(1).max(200).default(50).describe('Measures shown, across countries.'),
       offset: z.number().int().min(0).default(0).describe('Skip this many measures (value given in the previous result\'s more).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
       const res = await client.transposition(normCelex(a.celexNumber), {
         jurisdictions: a.jurisdictions,
         resolvedOnly: a.resolvedOnly,
+        language: a.language,
       });
       return withNotice(res, shapeTransposition(res, a.limit ?? 50, a.offset ?? 0));
     },
@@ -942,16 +952,17 @@ export const tools: ToolDef[] = [
     name: 'lex_counterparts',
     title: 'Counterparts of a national act in other countries',
     description:
-      'A national document\'s counterparts in the other live countries, through the EU acts it transposes or implements (via), ranked: 1 = the national source records the relation; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned — check lex_national_coverage; a national id of a country not live 404s. A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Cost: 20 credits (each offset page too); a server timeout is refunded — narrow with jurisdictions.',
+      'A national document\'s counterparts in the other live countries, through the EU acts it transposes or implements (via), ranked: 1 = the national source records the relation; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned — check lex_national_coverage; a national id of a country not live 404s (nothing charged); any other 404 settles at 1 credit. A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts and ~40,000 characters): page with the offset given in more. Cost: 20 credits (each offset page too); a server timeout is refunded — narrow with jurisdictions.',
     inputSchema: {
       id: celexOrNationalId('National document id or EU act CELEX'),
       jurisdictions: codeList('Only these live countries, e.g. ["si","es"]; default every live one.').optional(),
-      limit: z.number().int().min(1).max(200).default(10).describe('Counterparts shown per EU act.'),
-      offset: z.number().int().min(0).default(0).describe('Skip this many EU acts (25 shown per call).'),
+      limit: z.number().int().min(1).max(50).default(10).describe('Counterparts shown per EU act.'),
+      offset: z.number().int().min(0).default(0).describe('Skip this many EU acts (value given in more).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
-      const res = await client.counterparts(normCelex(a.id), { jurisdictions: a.jurisdictions });
+      const res = await client.counterparts(normCelex(a.id), { jurisdictions: a.jurisdictions, language: a.language });
       return withNotice(res, shapeCounterparts(res, a.limit ?? 10, a.offset ?? 0, 25));
     },
   },

@@ -264,8 +264,11 @@ export class LexAPIClient {
       }
       // 500/502/503 are transient and refunded in full on credit plans.
       // 504 is NOT retried: it already means a 90 s upstream budget ran out.
+      // Nor is a 503 TIMEOUT: a server-side time budget ran out, and the
+      // same request would run out of it again.
       const backoff = 500 * 2 ** (attempt + 1);
-      if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)) {
+      if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)
+        && !(res.status === 503 && await isServerTimeout(res))) {
         attemptSignal.dispose();
         await discard(res);
         attempt++;
@@ -455,6 +458,17 @@ async function isQuotaExhausted(res: Response): Promise<boolean> {
   try {
     const j = safeJson(await res.clone().text());
     return !!j && typeof j === 'object' && (j as Record<string, unknown>).code === 'QUOTA_EXHAUSTED';
+  } catch {
+    return false;
+  }
+}
+
+async function isServerTimeout(res: Response): Promise<boolean> {
+  try {
+    const j = safeJson(await res.clone().text());
+    if (!j || typeof j !== 'object') return false;
+    const o = j as Record<string, unknown>;
+    return o.code === 'TIMEOUT' || o.partialReason === 'TIMEOUT';
   } catch {
     return false;
   }

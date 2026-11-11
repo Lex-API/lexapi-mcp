@@ -283,7 +283,8 @@ describe('lex_transposition', () => {
       ['SI', 2, []],
     ]);
     expect(first.data.shown).toEqual({ offset: 0, returned: 4, total: 9 });
-    expect(first.data.more).toBe('Measures 1–4 of 9 shown. Call again with offset 4 (another 5 credits), or narrow with jurisdictions.');
+    expect(first.data.more).toBe('Measures 1–4 of the 9 returned shown. Call again with offset 4 (another 5 credits), or narrow with jurisdictions.');
+    expect(first.data).not.toHaveProperty('truncatedNote');
 
     const second = await call('lex_transposition', { celexNumber: '32016L0680', limit: 4, offset: 4 }, () => ({ body }));
     expect(second.calls[0].url.searchParams.has('offset')).toBe(false); // applied here, not sent
@@ -306,7 +307,10 @@ describe('lex_transposition', () => {
   it('validates inputs', () => {
     expect(ok('lex_transposition', { celexNumber: '32016L0680', jurisdictions: ['el', 'uk', 'eu'] })).toBe(true);
     expect(ok('lex_transposition', { celexNumber: '32016L0680', jurisdictions: 'esp' })).toBe(false);
-    expect(ok('lex_transposition', { celexNumber: '32016L0680', limit: 2001 })).toBe(false);
+    expect(ok('lex_transposition', { celexNumber: '32016L0680', limit: 200 })).toBe(true);
+    expect(ok('lex_transposition', { celexNumber: '32016L0680', limit: 201 })).toBe(false);
+    expect(ok('lex_counterparts', { id: 'AT-NOR-1', limit: 50 })).toBe(true);
+    expect(ok('lex_counterparts', { id: 'AT-NOR-1', limit: 51 })).toBe(false);
     expect(ok('lex_transposition', { celexNumber: 'GDPR!' })).toBe(false);
   });
 
@@ -380,13 +384,13 @@ describe('lex_counterparts', () => {
       via: Array.from({ length: 30 }, (_, i) => via(`3201${String(i).padStart(2, '0')}L0001`, 15)),
       truncated: false,
     };
-    const first = await call('lex_counterparts', { id: 'AT-NOR-1' }, () => ({ body }));
+    const first = await call('lex_counterparts', { id: 'AT-NOR-1', limit: 5 }, () => ({ body }));
     expect(first.data.via).toHaveLength(25);
-    expect(first.data.via[0].counterparts).toHaveLength(10);
-    expect(first.data.via[0].more).toMatch(/5 more counterparts/);
+    expect(first.data.via[0].counterparts).toHaveLength(5);
+    expect(first.data.via[0].more).toMatch(/10 more counterparts/);
     expect(first.data.more).toBe('EU acts 1–25 of 30 shown. Call again with offset 25 (another 20 credits).');
 
-    const second = await call('lex_counterparts', { id: 'AT-NOR-1', offset: 25, limit: 200 }, () => ({ body }));
+    const second = await call('lex_counterparts', { id: 'AT-NOR-1', offset: 25, limit: 50 }, () => ({ body }));
     expect(second.data.via).toHaveLength(5);
     expect(second.data.via[0].euAct.celex).toBe('320125L0001');
     expect(second.data.via[0].counterparts).toHaveLength(15);
@@ -412,11 +416,12 @@ describe('lex_counterparts', () => {
     expect(text).toContain('https://lex-api.com/dashboard#terms');
   });
 
-  it('503 TIMEOUT: refunded, narrow with jurisdictions', async () => {
-    const { result, text } = await call('lex_counterparts', { id: 'AT-NOR-1' }, () => ({
+  it('503 TIMEOUT: not retried, refunded, narrow with jurisdictions', async () => {
+    const { result, text, calls } = await call('lex_counterparts', { id: 'AT-NOR-1' }, () => ({
       status: 503, body: { success: false, code: 'TIMEOUT', error: 'Counterparts lookup exceeded 20000ms', partial: true, partialReason: 'TIMEOUT', timeoutMs: 20000 },
     }));
     expect(result.isError).toBe(true);
+    expect(calls).toHaveLength(1); // the same request would run out of the same server budget
     expect(text).toMatch(/LexAPI error 503 \(TIMEOUT\)/);
     expect(text).toMatch(/nothing was charged/);
     expect(text).toMatch(/jurisdictions/);
@@ -427,6 +432,72 @@ describe('lex_counterparts', () => {
       status: 404, body: { success: false, code: 'NOT_FOUND', error: 'Document not found: ES-NOR-1' },
     }));
     expect(text).toMatch(/lex_national_coverage/);
+  });
+});
+
+describe('bounded output and the remaining review points', () => {
+  it('a 503 with partialReason TIMEOUT only is not retried either; any other 503 still is', async () => {
+    const t = await call('lex_counterparts', { id: 'AT-NOR-1' }, () => ({ status: 503, body: { success: false, error: 'slow', partialReason: 'TIMEOUT' } }));
+    expect(t.calls).toHaveLength(1);
+    const other = await call('lex_counterparts', { id: 'AT-NOR-1' }, () => ({ status: 503, body: { success: false, code: 'INTERNAL', error: 'down' } }));
+    expect(other.calls).toHaveLength(2);
+  });
+
+  it('transposition: a character budget stops the page early, and the next offset is exact', async () => {
+    const body = transpositionBody([]);
+    body.jurisdictions = [{
+      jurisdiction: 'DE', live: false, counts: { measures: 200, resolved: null },
+      measures: Array.from({ length: 200 }, (_, i) => measure({ reference: `DE-${i}`, title: 'T'.repeat(1000) })),
+    }];
+    const first = await call('lex_transposition', { celexNumber: '32016L0680', limit: 200 }, () => ({ body }));
+    const n = first.data.shown.returned;
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThan(200);
+    expect(first.text.length).toBeLessThan(45_000);
+    expect(first.data.more).toMatch(new RegExp(`offset ${n} `));
+    const next = await call('lex_transposition', { celexNumber: '32016L0680', limit: 200, offset: n }, () => ({ body }));
+    expect(next.data.jurisdictions[0].measures[0].reference).toBe(`DE-${n}`);
+  });
+
+  it('transposition: truncated upstream is said, with where the full numbers are', async () => {
+    const { data } = await call('lex_transposition', { celexNumber: '32016L0680' }, () => ({
+      body: transpositionBody([{ code: 'ES', n: 2 }], { truncated: true }),
+    }));
+    expect(data.truncated).toBe(true);
+    expect(data.truncatedNote).toMatch(/source\.cellar\.measures/);
+    expect(data.truncatedNote).toMatch(/jurisdictions/);
+  });
+
+  it('counterparts: worst case (25 acts x 50) stays within the character budget', async () => {
+    const body = {
+      success: true, document: { id: 'AT-NOR-1', celexNumber: 'AT-NOR-1', jurisdiction: 'AT' }, truncated: false,
+      via: Array.from({ length: 200 }, (_, i) => ({
+        euAct: { id: `X${i}`, celexNumber: `X${i}`, jurisdiction: 'EU', documentKind: 'act', title: 'A'.repeat(500), notifiedMeasures: 9 },
+        edge: null,
+        counterparts: Array.from({ length: 200 }, (_, j) => ({ jurisdiction: 'SI', id: `SI-${j}`, resolved: true, title: 'M'.repeat(500), citationType: 'transposition', provenance: 'cellar-nim', rank: 2 })),
+        truncated: true,
+      })),
+    };
+    const { data, text } = await call('lex_counterparts', { id: 'AT-NOR-1', limit: 50 }, () => ({ body }));
+    expect(text.length).toBeLessThan(60_000);
+    expect(data.via.length).toBeGreaterThanOrEqual(1);
+    expect(data.more).toMatch(new RegExp(`offset ${data.via.length} `));
+  });
+
+  it('forwards the title language on every citation tool that takes it', async () => {
+    const cases: Array<[string, Record<string, unknown>, unknown]> = [
+      ['lex_cited_by', { celexNumber: '32016L0680' }, { success: true, citedBy: [] }],
+      ['lex_cites', { celexNumber: '32016L0680' }, { success: true, cites: [] }],
+      ['lex_citation_network', { celexNumber: '32016L0680' }, { success: true, network: {}, paging: {} }],
+      ['lex_citation_path', { from: '32016L0680', to: '31995L0046' }, { success: true, found: false, path: [] }],
+      ['lex_related', { celexNumber: '32016L0680' }, { success: true, related: [] }],
+      ['lex_transposition', { celexNumber: '32016L0680' }, transpositionBody([])],
+      ['lex_counterparts', { id: 'AT-NOR-1' }, { success: true, via: [], truncated: false }],
+    ];
+    for (const [name, args, body] of cases) {
+      const { calls } = await call(name, { ...args, language: 'de' }, () => ({ body }));
+      expect(calls[0].url.searchParams.get('language'), name).toBe('de');
+    }
   });
 });
 

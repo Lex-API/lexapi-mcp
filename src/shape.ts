@@ -713,23 +713,38 @@ function shapeMeasure(m: Obj): Obj {
   });
 }
 
+/** Character budget of one transposition / counterparts result. */
+export const GRAPH_RESULT_BUDGET = 40_000;
+
 /**
  * The measures are bounded here (`limit` / `offset`, counted across
- * countries in the API's order); every country's `counts` is always kept.
+ * countries in the API's order, and a character budget: measures stop once
+ * it is spent, so the next offset is exact); every country's `counts` is
+ * always kept.
  */
-export function shapeTransposition(res: LexResponse<Json>, limit: number, offset: number): Obj {
+export function shapeTransposition(res: LexResponse<Json>, limit: number, offset: number, budget = GRAPH_RESULT_BUDGET): Obj {
   const b = res.body;
   const countries = (Array.isArray(b.jurisdictions) ? b.jurisdictions : []).filter(isObj);
   let index = 0;
   let returned = 0;
+  let used = 0;
+  let full = false;
   const jurisdictions = countries.map((c) => {
     const measures = (Array.isArray(c.measures) ? c.measures : []).filter(isObj);
     const shown: Obj[] = [];
     for (const m of measures) {
-      if (index >= offset && index < offset + limit) shown.push(shapeMeasure(m));
+      if (!full && index >= offset && index < offset + limit) {
+        const shaped = shapeMeasure(m);
+        const cost = size(shaped);
+        if (returned > 0 && used + cost > budget) full = true;
+        else {
+          shown.push(shaped);
+          returned++;
+          used += cost;
+        }
+      }
       index++;
     }
-    returned += shown.length;
     return compact({ jurisdiction: c.jurisdiction, live: c.live, counts: c.counts, measures: shown });
   });
   const total = index;
@@ -745,17 +760,23 @@ export function shapeTransposition(res: LexResponse<Json>, limit: number, offset
   });
   out.shown = { offset, returned, total };
   if (offset + returned < total) {
-    out.more = `Measures ${offset + 1}–${offset + returned} of ${total} shown. Call again with offset ${offset + returned} (another 5 credits), or narrow with jurisdictions.`;
+    out.more = `Measures ${offset + 1}–${offset + returned} of the ${total} returned shown. Call again with offset ${offset + returned} (another 5 credits), or narrow with jurisdictions.`;
+  }
+  if (b.truncated === true) {
+    out.truncatedNote = `The API returned only part of this act's measures (truncated: true), so ${total} is not the full number: see source.cellar.measures and each country's counts.measures. Narrow with jurisdictions to see the rest.`;
   }
   return out;
 }
 
-/** Counterparts: at most `acts` EU acts per call (from `offset`), at most `limit` counterparts per act. */
-export function shapeCounterparts(res: LexResponse<Json>, limit: number, offset: number, acts: number): Obj {
+/**
+ * Counterparts: at most `acts` EU acts per call (from `offset`), at most
+ * `limit` counterparts per act, and acts stop once the character budget is
+ * spent (the first one is always shown).
+ */
+export function shapeCounterparts(res: LexResponse<Json>, limit: number, offset: number, acts: number, budget = GRAPH_RESULT_BUDGET): Obj {
   const b = res.body;
   const via = (Array.isArray(b.via) ? b.via : []).filter(isObj);
-  const window = via.slice(offset, offset + acts);
-  const shapedVia = window.map((v) => {
+  const all = via.slice(offset, offset + acts).map((v) => {
     const act = isObj(v.euAct) ? v.euAct : {};
     const cps = (Array.isArray(v.counterparts) ? v.counterparts : []).filter(isObj);
     const entry: Obj = compact({
@@ -772,9 +793,18 @@ export function shapeCounterparts(res: LexResponse<Json>, limit: number, offset:
       })),
       truncated: v.truncated === true ? true : undefined,
     });
-    if (cps.length > limit) entry.more = `${cps.length - limit} more counterparts for this act not shown (raise limit, up to 200).`;
+    if (cps.length > limit) entry.more = `${cps.length - limit} more counterparts for this act not shown (raise limit, up to 50).`;
     return entry;
   });
+  const shapedVia: Obj[] = [];
+  let used = 0;
+  for (const entry of all) {
+    const cost = size(entry);
+    if (shapedVia.length > 0 && used + cost > budget) break;
+    shapedVia.push(entry);
+    used += cost;
+  }
+  const window = shapedVia;
   const out: Obj = compact({
     document: isObj(b.document) ? compact({ ...nodeFields(b.document), title: b.document.title }) : undefined,
     includeNational: b.includeNational,
