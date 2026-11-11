@@ -569,18 +569,54 @@ export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
 }
 
 // ── Citations ──────────────────────────────────────────────────────
+// Node identity (API 2.11.0): every node carries `id` (= `celexNumber`),
+// `jurisdiction` and `documentKind`. `jurisdiction` is kept only when it is
+// not EU, so EU-only answers stay as compact as before.
+export function nodeFields(n: Obj): Obj {
+  return compact({
+    celex: n.celexNumber ?? n.id,
+    jurisdiction: n.jurisdiction === 'EU' ? undefined : n.jurisdiction,
+    documentKind: n.documentKind,
+  });
+}
+
+function distinct(values: unknown[]): unknown[] {
+  return [...new Set(values.filter((v) => v !== undefined && v !== null && v !== ''))];
+}
+
 function shapeEdgeGroup(g: unknown): Obj {
   if (!isObj(g)) return {};
-  const edges = Array.isArray(g.citations) ? g.citations : [];
-  const types = [...new Set(edges.map((e) => (isObj(e) ? e.citationType : undefined)).filter(Boolean))];
-  const snippet = edges.map((e) => (isObj(e) ? str(e.contextSnippet) : undefined)).find(Boolean);
+  const edges = (Array.isArray(g.citations) ? g.citations : []).filter(isObj);
+  const snippet = edges.map((e) => str(e.contextSnippet)).find(Boolean);
   return compact({
-    celex: g.celexNumber,
+    ...nodeFields(g),
     title: g.title,
-    types,
+    types: distinct(edges.map((e) => e.citationType)),
+    provenance: distinct(edges.map((e) => e.provenance)),
+    resolution: distinct(edges.map((e) => e.resolution)),
     count: g.citationCount,
     context: truncate(snippet, 240),
   });
+}
+
+/** `unresolved=true` on a national id: at most this many references are shown. */
+export const UNRESOLVED_SHOWN = 100;
+
+/** The references a national document records that could not become an edge (bounded). */
+function unresolvedFields(b: Obj): Obj {
+  if (!Array.isArray(b.unresolved)) return {};
+  const all = b.unresolved.filter(isObj);
+  const out: Obj = {
+    unresolved: all.slice(0, UNRESOLVED_SHOWN).map((u) => compact({
+      kind: u.kind,
+      text: truncate(str(u.text), 200),
+      status: u.status,
+      targetId: u.targetId,
+    })),
+  };
+  if (typeof b.unresolvedTruncated === 'boolean') out.unresolvedTruncated = b.unresolvedTruncated;
+  if (all.length > UNRESOLVED_SHOWN) out.unresolvedNote = `${all.length - UNRESOLVED_SHOWN} more unresolved references not shown.`;
+  return out;
 }
 
 export function shapeCitedBy(res: LexResponse<Json>): Obj {
@@ -588,13 +624,15 @@ export function shapeCitedBy(res: LexResponse<Json>): Obj {
   return compact({
     target: b.targetDocument,
     totalCitations: b.totalCitations,
+    totalEdges: b.totalEdges,
+    countsSource: b.countsSource,
     limit: b.limit,
     offset: b.offset,
     citedBy: Array.isArray(b.citedBy) ? b.citedBy.map(shapeEdgeGroup) : [],
     relationSync: b.relationSync,
     // Present only when the caller's account can see at least one national
-    // jurisdiction (middleware/jurisdiction.js citationScopeFields) — absent
-    // entirely for everyone else, so EU-only responses are unchanged.
+    // jurisdiction — absent entirely for everyone else, so EU-only
+    // responses are unchanged.
     includeNational: b.includeNational,
   });
 }
@@ -604,16 +642,27 @@ export function shapeCites(res: LexResponse<Json>): Obj {
   return compact({
     source: b.sourceDocument,
     totalCitations: b.totalCitations,
+    totalEdges: b.totalEdges,
+    countsSource: b.countsSource,
     limit: b.limit,
     offset: b.offset,
     cites: Array.isArray(b.cites) ? b.cites.map(shapeEdgeGroup) : [],
     includeNational: b.includeNational,
+    ...unresolvedFields(b),
   });
 }
 
 function shapeNeighbour(n: unknown): Obj {
   if (!isObj(n)) return {};
-  return compact({ celex: n.celexNumber, title: n.title, types: n.types, count: n.count });
+  const details = (Array.isArray(n.edgeDetails) ? n.edgeDetails : []).filter(isObj);
+  return compact({
+    ...nodeFields(n),
+    title: n.title,
+    types: n.types,
+    count: n.count,
+    provenance: distinct(details.map((d) => d.provenance)),
+    resolution: distinct(details.map((d) => d.resolution)),
+  });
 }
 
 export function shapeNetwork(res: LexResponse<Json>): Obj {
@@ -629,7 +678,114 @@ export function shapeNetwork(res: LexResponse<Json>): Obj {
     message: b.message,
     relationSync: b.relationSync,
     includeNational: b.includeNational,
+    ...unresolvedFields(b),
   });
+}
+
+// ── Transposition and counterparts (API 2.11.0) ───────────────────
+// A notified measure is a notification, not a finding that the measure
+// transposes the act: the API's `note` is always carried through.
+
+function shapeMeasure(m: Obj): Obj {
+  const oj = isObj(m.officialJournal) ? compact(m.officialJournal) : undefined;
+  const cellar = isObj(m.cellar)
+    ? compact({
+      celex: m.cellar.celex,
+      dateDocument: m.cellar.dateDocument,
+      dateNotification: m.cellar.dateNotification,
+      entryIntoForce: m.cellar.entryIntoForce,
+    })
+    : undefined;
+  return compact({
+    id: m.id,
+    resolved: m.resolved,
+    resolution: m.resolution,
+    resolutionBasis: m.resolutionBasis,
+    provenance: m.provenance,
+    citationType: m.citationType,
+    title: truncate(str(m.title), 300),
+    typeAct: m.typeAct,
+    officialJournal: oj,
+    reference: m.reference,
+    eli: m.eli,
+    link: m.link,
+    cellar,
+  });
+}
+
+/**
+ * The measures are bounded here (`limit` / `offset`, counted across
+ * countries in the API's order); every country's `counts` is always kept.
+ */
+export function shapeTransposition(res: LexResponse<Json>, limit: number, offset: number): Obj {
+  const b = res.body;
+  const countries = (Array.isArray(b.jurisdictions) ? b.jurisdictions : []).filter(isObj);
+  let index = 0;
+  let returned = 0;
+  const jurisdictions = countries.map((c) => {
+    const measures = (Array.isArray(c.measures) ? c.measures : []).filter(isObj);
+    const shown: Obj[] = [];
+    for (const m of measures) {
+      if (index >= offset && index < offset + limit) shown.push(shapeMeasure(m));
+      index++;
+    }
+    returned += shown.length;
+    return compact({ jurisdiction: c.jurisdiction, live: c.live, counts: c.counts, measures: shown });
+  });
+  const total = index;
+  const doc = isObj(b.document) ? compact({ ...nodeFields(b.document), title: b.document.title }) : undefined;
+  const out: Obj = compact({
+    document: doc,
+    note: b.note,
+    includeNational: b.includeNational,
+    termsRequired: b.termsRequired,
+    source: b.source,
+    truncated: b.truncated,
+    jurisdictions,
+  });
+  out.shown = { offset, returned, total };
+  if (offset + returned < total) {
+    out.more = `Measures ${offset + 1}–${offset + returned} of ${total} shown. Call again with offset ${offset + returned} (another 5 credits), or narrow with jurisdictions.`;
+  }
+  return out;
+}
+
+/** Counterparts: at most `acts` EU acts per call (from `offset`), at most `limit` counterparts per act. */
+export function shapeCounterparts(res: LexResponse<Json>, limit: number, offset: number, acts: number): Obj {
+  const b = res.body;
+  const via = (Array.isArray(b.via) ? b.via : []).filter(isObj);
+  const window = via.slice(offset, offset + acts);
+  const shapedVia = window.map((v) => {
+    const act = isObj(v.euAct) ? v.euAct : {};
+    const cps = (Array.isArray(v.counterparts) ? v.counterparts : []).filter(isObj);
+    const entry: Obj = compact({
+      euAct: compact({ ...nodeFields(act), title: truncate(str(act.title), 300), notifiedMeasures: act.notifiedMeasures }),
+      edge: isObj(v.edge) ? compact(v.edge) : undefined,
+      counterparts: cps.slice(0, limit).map((c) => compact({
+        jurisdiction: c.jurisdiction,
+        id: c.id,
+        resolved: c.resolved,
+        title: truncate(str(c.title), 200),
+        citationType: c.citationType,
+        provenance: c.provenance,
+        rank: c.rank,
+      })),
+      truncated: v.truncated === true ? true : undefined,
+    });
+    if (cps.length > limit) entry.more = `${cps.length - limit} more counterparts for this act not shown (raise limit, up to 200).`;
+    return entry;
+  });
+  const out: Obj = compact({
+    document: isObj(b.document) ? compact({ ...nodeFields(b.document), title: b.document.title }) : undefined,
+    includeNational: b.includeNational,
+    truncated: b.truncated,
+    via: shapedVia,
+  });
+  out.note = 'Rank 2 and 3 counterparts are measures a member state notified to the Commission: a notification is not a finding that the measure transposes the act, or transposes it completely.';
+  if (offset + window.length < via.length) {
+    out.more = `EU acts ${offset + 1}–${offset + window.length} of ${via.length} shown. Call again with offset ${offset + window.length} (another 20 credits).`;
+  }
+  return out;
 }
 
 // ── National law ─────────────────────────────────────────────────

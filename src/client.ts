@@ -362,6 +362,12 @@ export class LexAPIClient {
   }
   related(celex: string, query: Query) { return this.request('GET', `/citations/related/${enc(celex)}`, { query }); }
   citationStats(query: Query = {}) { return this.request('GET', '/citations/stats', { query }); }
+  transposition(celex: string, query: Query = {}) {
+    return this.request('GET', `/citations/transposition/${enc(celex)}`, { query });
+  }
+  counterparts(id: string, query: Query = {}) {
+    return this.request('GET', `/citations/counterparts/${enc(id)}`, { query });
+  }
 
   // ── National law ─────────────────────────────────────────────────
   // Jurisdiction codes are lower-cased on the wire (route pattern is

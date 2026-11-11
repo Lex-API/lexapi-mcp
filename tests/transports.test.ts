@@ -83,8 +83,10 @@ describe('MCP protocol (in-memory)', () => {
     // on the 6 citation tools. Measured 46.43k at 064c008 (71 characters
     // under the cap — no real headroom); trimmed in review to ~45.8k —
     // fail if it creeps up from THAT without a reason, not on every new
-    // sentence.
-    expect(listJson.length).toBeLessThan(46_500);
+    // sentence. v0.5.0 added lex_transposition and lex_counterparts
+    // (~3.6k) and the four edge filters on the five graph tools (~4.3k,
+    // each filter's values listed once, in its enum): measured 54.3k.
+    expect(listJson.length).toBeLessThan(55_000);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for that date/);
