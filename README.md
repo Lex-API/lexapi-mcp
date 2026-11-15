@@ -166,7 +166,7 @@ LEXAPI_API_KEY=lex_... node scripts/smoke-stdio.mjs --live   # against the real 
 
 ## Training data
 
-Using LexAPI content to train or evaluate models needs a separate licence ([Terms §6](https://lex-api.com/terms?ref=npm-mcp#acceptable-use)). [Arieta Data](https://data.arietalabs.com/?ref=lexapi-mcp), a sister product from Arieta Labs, licenses the same corpus as datasets for training, retrieval and evaluation.
+Using LexAPI content to train or evaluate models needs a separate licence ([Terms §6](https://lex-api.com/terms?ref=npm-mcp#acceptable-use)). [Arieta Data](https://data.arietalabs.com/?ref=npm-mcp), a sister product from Arieta Labs, licenses the same corpus as datasets for training, retrieval and evaluation.
 
 ## License
 
