@@ -3,7 +3,9 @@ import { z } from 'zod';
 
 import { runTool } from '../src/server.js';
 import { tools, type ToolDef } from '../src/tools.js';
-import { clientWith, parseText } from './helpers.js';
+import { LexAPIClient } from '../src/client.js';
+import { describeError, LexAPIError } from '../src/errors.js';
+import { clientWith, mockFetch, parseText } from './helpers.js';
 
 const byName = Object.fromEntries(tools.map((t) => [t.name, t])) as Record<string, ToolDef>;
 
@@ -46,22 +48,55 @@ const UNREACHABLE_422 = {
 
 const EMPTY = { success: true, jurisdiction: 'CZ', resultCount: 0, results: [] };
 
+const CASE_LAW_HIT = {
+  documentId: 'AT-JUD-OGH-1', jurisdiction: 'AT', score: 0.81, court: 'OGH', snippet: 'Der Oberste Gerichtshof …',
+  metadata: { celex_id: 'AT-JUD-OGH-1' },
+  document: { id: 'AT-JUD-OGH-1', jurisdiction: 'AT', documentKind: 'decision', title: null, documentType: 'Entscheidungstext (Justiz)' },
+  attribution: 'Source: RIS.',
+};
+
+const LEGISLATION_HIT = {
+  law_id: 'DE-1', documentId: 'DE-1', jurisdiction: 'DE', score: 0.7, snippet: 's',
+  law_title: 'Bundesdatenschutzgesetz', article_ref: '§ 1', section: null, language: 'de',
+  in_force: true, valid_from: null, valid_to: null, law_type: null,
+  document: { id: 'DE-1', jurisdiction: 'DE', documentKind: 'act', title: 'Bundesdatenschutzgesetz', documentType: 'Gesetz' },
+  attribution: 'Source: gesetze-im-internet.de.',
+};
+
+/** A client on a fake clock: each sleep advances it. */
+function clockedClient(handler: Parameters<typeof mockFetch>[0], timeoutMs: number) {
+  let t = 0;
+  const m = mockFetch(handler);
+  const sleeps: number[] = [];
+  const client = new LexAPIClient({
+    apiKey: 'lex_test_secret_key',
+    baseUrl: 'https://api.example.test/api/v1',
+    fetch: m.fetch,
+    timeoutMs,
+    now: () => t,
+    sleep: async (ms) => { sleeps.push(ms); t += ms; },
+  });
+  return { client, calls: m.calls, sleeps };
+}
+
 describe('partial national semantic answers', () => {
   it('case law keeps partial / partialReason / hint', async () => {
     const { data } = await call('lex_national_semantic_case_law', { jurisdiction: 'at', query: 'Datenschutz' }, () => ({
-      body: { ...EMPTY, jurisdiction: 'AT', partial: true, partialReason: 'SEARCH_INCOMPLETE', hint: 'A retry may return a complete answer.' },
+      body: { ...EMPTY, jurisdiction: 'AT', resultCount: 1, results: [CASE_LAW_HIT], partial: true, partialReason: 'SEARCH_INCOMPLETE', hint: 'A retry may return a complete answer.' },
     }));
     expect(data.partial).toBe(true);
     expect(data.partialReason).toBe('SEARCH_INCOMPLETE');
     expect(data.hint).toMatch(/retry/);
+    expect(data.results).toHaveLength(1);
   });
 
   it('legislation keeps partial / partialReason; a complete answer has neither', async () => {
     const partial = await call('lex_national_semantic_legislation', { jurisdiction: 'de', query: 'Haftung' }, () => ({
-      body: { ...EMPTY, jurisdiction: 'DE', partial: true, partialReason: 'SEARCH_INCOMPLETE' },
+      body: { ...EMPTY, jurisdiction: 'DE', resultCount: 1, results: [LEGISLATION_HIT], partial: true, partialReason: 'SEARCH_INCOMPLETE' },
     }));
     expect(partial.data.partial).toBe(true);
     expect(partial.data.partialReason).toBe('SEARCH_INCOMPLETE');
+    expect(partial.data.results).toHaveLength(1);
 
     const complete = await call('lex_national_semantic_legislation', { jurisdiction: 'de', query: 'Haftung' }, () => ({ body: EMPTY }));
     expect(complete.data.partial).toBeUndefined();
@@ -78,7 +113,7 @@ describe('partial national semantic answers', () => {
 
 describe('503 NATIONAL_SEMANTIC_UNAVAILABLE + SEARCH_INCOMPLETE', () => {
   it('is retried once after Retry-After, and is not a rate-limit message', async () => {
-    const { result, calls, sleeps, data } = await call('lex_national_semantic_case_law', { jurisdiction: 'cz', query: 'náhrada škody' }, (_c, n) =>
+    const { result, calls, sleeps, data } = await call('lex_national_semantic_case_law', { jurisdiction: 'cz', query: 'liability for damage' }, (_c, n) =>
       n === 1 ? { status: 503, body: INCOMPLETE_503, headers: { 'retry-after': '10' } } : { body: EMPTY });
     expect(result.isError).toBeFalsy();
     expect(calls).toHaveLength(2);
@@ -86,20 +121,55 @@ describe('503 NATIONAL_SEMANTIC_UNAVAILABLE + SEARCH_INCOMPLETE', () => {
     expect(data.jurisdiction).toBe('CZ');
   });
 
-  it('when it keeps coming back: says NOT "no matches", gives the wait, never a rate limit', async () => {
-    const { result, calls, text } = await call('lex_national_semantic_case_law', { jurisdiction: 'cz', query: 'náhrada škody' }, () => ({
+  it('when it keeps coming back: retried once only, says NOT "no matches", gives the wait, never a rate limit', async () => {
+    const { result, calls, text } = await call('lex_national_semantic_case_law', { jurisdiction: 'cz', query: 'liability for damage' }, () => ({
       status: 503, body: INCOMPLETE_503, headers: { 'retry-after': '10' },
     }));
     expect(result.isError).toBe(true);
-    expect(calls.length).toBeGreaterThan(1);
+    expect(calls).toHaveLength(2);
     expect(text).toMatch(/LexAPI error 503 \(NATIONAL_SEMANTIC_UNAVAILABLE\)/);
     expect(text).toMatch(/NOT a "no matches" answer/);
     expect(text).toMatch(/Retry in 10 s/);
     expect(text).not.toMatch(/rate limit/i);
   });
 
+  it('falls back to the body retryAfter when the header is missing', async () => {
+    const { result, calls, sleeps } = await call('lex_national_semantic_case_law', { jurisdiction: 'cz', query: 'liability for damage' }, (_c, n) =>
+      n === 1 ? { status: 503, body: { ...INCOMPLETE_503, retryAfter: 3 } } : { body: EMPTY });
+    expect(result.isError).toBeFalsy();
+    expect(calls).toHaveLength(2);
+    expect(sleeps).toEqual([3_000]);
+  });
+
+  it('a wait above 10 s is not slept on; the message still gives it', async () => {
+    const { result, calls, sleeps, text } = await call('lex_national_semantic_case_law', { jurisdiction: 'cz', query: 'liability for damage' }, (_c, n) =>
+      n === 1 ? { status: 503, body: { ...INCOMPLETE_503, retryAfter: 30 }, headers: { 'retry-after': '30' } } : { body: EMPTY });
+    expect(result.isError).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+    expect(text).toMatch(/Retry in 30 s/);
+  });
+
+  it('is not retried when too little of the deadline would be left after the wait', async () => {
+    // 20 s deadline − 10 s wait leaves 10 s: below the minimum for a full attempt.
+    const { client, calls, sleeps } = clockedClient((_c, n) =>
+      n === 1 ? { status: 503, body: INCOMPLETE_503, headers: { 'retry-after': '10' } } : { body: EMPTY }, 20_000);
+    const err = await client.nationalSemanticCaseLaw('CZ', { query: 'liability for damage' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LexAPIError);
+    expect(calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+    expect(describeError(err)).toMatch(/Retry in 10 s/);
+
+    // With a longer deadline the same answer is retried once.
+    const ok = clockedClient((_c, n) =>
+      n === 1 ? { status: 503, body: INCOMPLETE_503, headers: { 'retry-after': '10' } } : { body: EMPTY }, 55_000);
+    await ok.client.nationalSemanticCaseLaw('CZ', { query: 'liability for damage' });
+    expect(ok.calls).toHaveLength(2);
+    expect(ok.sleeps).toEqual([10_000]);
+  });
+
   it('without a wait (repeatedly incomplete): not retried, says to try later or rephrase', async () => {
-    const { result, calls, sleeps, text } = await call('lex_national_semantic_legislation', { jurisdiction: 'cz', query: 'náhrada škody' }, (_c, n) =>
+    const { result, calls, sleeps, text } = await call('lex_national_semantic_legislation', { jurisdiction: 'cz', query: 'liability for damage' }, (_c, n) =>
       n === 1 ? { status: 503, body: REPEATED_503 } : { body: EMPTY });
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(1);

@@ -19,8 +19,18 @@ const KEY_RE = /^[\x21-\x7e]+$/;
 export function isWellFormedKey(key: string): boolean {
   return KEY_RE.test(key);
 }
-/** A 429 whose Retry-After is longer than this is returned to the model instead of slept on. */
+/**
+ * A 429 (or an incomplete national search 503) whose Retry-After is longer
+ * than this is returned to the model instead of slept on. Waits up to and
+ * including this value are slept on.
+ */
 const MAX_RETRY_AFTER_SLEEP_S = 10;
+/**
+ * An incomplete national search 503 is retried only when at least this much
+ * of the call's deadline is left after the wait: a search that could not
+ * complete needs a full attempt, not the minimum one.
+ */
+const MIN_INCOMPLETE_RETRY_REMAINING_MS = 15_000;
 
 /** Response headers worth surfacing to a model; everything else is dropped. */
 const KEPT_HEADERS = [
@@ -189,6 +199,7 @@ export class LexAPIClient {
     const canWait = (ms: number) => remaining() - ms >= MIN_ATTEMPT_MS;
     let attempt = 0;
     let authRetried = false;
+    let incompleteRetried = false;
     for (;;) {
       if (remaining() <= 0) {
         throw new LexAPITransportError(`no response within ${Math.round(this.timeoutMs / 1000)} s`, true);
@@ -263,16 +274,20 @@ export class LexAPIClient {
         }
       }
       // An incomplete national semantic search (503, partialReason
-      // SEARCH_INCOMPLETE) is retried only after the wait it names; without
-      // one the same search has repeatedly come back incomplete, so it is
-      // not retried at all.
-      if (res.status === 503 && await isIncompleteSearch(res)) {
-        const wait = retryAfterSeconds(res);
+      // SEARCH_INCOMPLETE) is retried at most once per call, only after the
+      // wait it names (Retry-After header, else the body's retryAfter) and
+      // only with enough of the deadline left; without a wait the same
+      // search has repeatedly come back incomplete, so it is not retried.
+      const incomplete = res.status === 503 ? await incompleteSearch(res) : undefined;
+      if (incomplete) {
+        const wait = retryAfterSeconds(res) ?? incomplete.retryAfter;
         const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
-        if (canRetry && attempt < this.maxRetries && wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S && canWait(waitMs)) {
+        if (canRetry && !incompleteRetried && attempt < this.maxRetries && wait !== undefined
+          && wait <= MAX_RETRY_AFTER_SLEEP_S && remaining() - waitMs >= MIN_INCOMPLETE_RETRY_REMAINING_MS) {
           attemptSignal.dispose();
           await discard(res);
           attempt++;
+          incompleteRetried = true;
           await this.sleep(waitMs);
           continue;
         }
@@ -479,12 +494,17 @@ async function isQuotaExhausted(res: Response): Promise<boolean> {
   }
 }
 
-async function isIncompleteSearch(res: Response): Promise<boolean> {
+/** Peeks a 503 body for `partialReason: "SEARCH_INCOMPLETE"`; returns its `retryAfter` (seconds) when set. */
+async function incompleteSearch(res: Response): Promise<{ retryAfter?: number } | undefined> {
   try {
     const j = safeJson(await res.clone().text());
-    return !!j && typeof j === 'object' && (j as Record<string, unknown>).partialReason === 'SEARCH_INCOMPLETE';
+    if (!j || typeof j !== 'object') return undefined;
+    const o = j as Record<string, unknown>;
+    if (o.partialReason !== 'SEARCH_INCOMPLETE') return undefined;
+    const ra = o.retryAfter;
+    return typeof ra === 'number' && Number.isFinite(ra) && ra >= 0 ? { retryAfter: Math.ceil(ra) } : {};
   } catch {
-    return false;
+    return undefined;
   }
 }
 

@@ -16,11 +16,11 @@ Brings the citation-graph tools in line with LexAPI API 2.11.0 (transposition, c
 - `describeError`: a legacy-shape `400 INVALID_PARAMS` now shows `param` and `allowed`; `403 NATIONAL_TERMS_NOT_ACCEPTED` points at the one-time acceptance in the dashboard (`acceptUrl`); a `503 TIMEOUT` (counterparts) says it was refunded and to narrow with `jurisdictions`.
 - `lex_national_semantic_case_law` / `lex_national_semantic_legislation` keep `partial` / `partialReason` (`SEARCH_INCOMPLETE`): the national index could not complete the search, so results may be incomplete; both descriptions say so.
 - `describeError`: `422 NATIONAL_SEMANTIC_FILTER_UNREACHABLE` says the index cannot search that slice completely, that it is not a "no matches" answer, and to rephrase the query or change the filters (not retryable as is); a `503 NATIONAL_SEMANTIC_UNAVAILABLE` with `partialReason: "SEARCH_INCOMPLETE"` says it is not a "no matches" answer and gives the wait, or — without one — to try later or rephrase.
-- `lex_resolve`'s description explains `resolvedVia` (incl. `eli-cellar`) and `verified`, which are passed through when the API sends them.
+- `lex_resolve`'s description explains `resolvedVia` (incl. `eli-cellar`) and `verified` (passed through when the API sends them); it suggests checking the CELEX only for an unverified `eli` answer.
 
 ### Changed
 - A `503` whose body says `TIMEOUT` (a server-side time budget ran out) is no longer retried automatically; other 503s are retried as before.
-- A `503` with `partialReason: "SEARCH_INCOMPLETE"` is retried only after its `Retry-After` (at most 10 s, within the call's deadline); without one it is not retried. Other 503s are retried as before, and a 503 is never described as a rate limit.
+- A `503` with `partialReason: "SEARCH_INCOMPLETE"` is retried at most once, only after its wait (`Retry-After`, else the body's `retryAfter`; at most 10 s) and only when at least 15 s of the call's deadline is left after it; without a wait it is not retried. Other 503s are retried as before, and a 503 is never described as a rate limit.
 - `lex_national_coverage`'s description mentions the `citationGraph` measurements it returns.
 
 ## 0.4.0 — unreleased
