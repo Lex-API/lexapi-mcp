@@ -262,18 +262,34 @@ export class LexAPIClient {
           continue;
         }
       }
-      // 500/502/503 are transient and refunded in full on credit plans.
-      // 504 is NOT retried: it already means a 90 s upstream budget ran out.
-      // Nor is a 503 TIMEOUT: a server-side time budget ran out, and the
-      // same request would run out of it again.
-      const backoff = 500 * 2 ** (attempt + 1);
-      if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)
-        && !(res.status === 503 && await isServerTimeout(res))) {
-        attemptSignal.dispose();
-        await discard(res);
-        attempt++;
-        await this.sleep(backoff);
-        continue;
+      // An incomplete national semantic search (503, partialReason
+      // SEARCH_INCOMPLETE) is retried only after the wait it names; without
+      // one the same search has repeatedly come back incomplete, so it is
+      // not retried at all.
+      if (res.status === 503 && await isIncompleteSearch(res)) {
+        const wait = retryAfterSeconds(res);
+        const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
+        if (canRetry && attempt < this.maxRetries && wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S && canWait(waitMs)) {
+          attemptSignal.dispose();
+          await discard(res);
+          attempt++;
+          await this.sleep(waitMs);
+          continue;
+        }
+      } else {
+        // 500/502/503 are transient and refunded in full on credit plans.
+        // 504 is NOT retried: it already means a 90 s upstream budget ran out.
+        // Nor is a 503 TIMEOUT: a server-side time budget ran out, and the
+        // same request would run out of it again.
+        const backoff = 500 * 2 ** (attempt + 1);
+        if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)
+          && !(res.status === 503 && await isServerTimeout(res))) {
+          attemptSignal.dispose();
+          await discard(res);
+          attempt++;
+          await this.sleep(backoff);
+          continue;
+        }
       }
 
       let text: string;
@@ -458,6 +474,15 @@ async function isQuotaExhausted(res: Response): Promise<boolean> {
   try {
     const j = safeJson(await res.clone().text());
     return !!j && typeof j === 'object' && (j as Record<string, unknown>).code === 'QUOTA_EXHAUSTED';
+  } catch {
+    return false;
+  }
+}
+
+async function isIncompleteSearch(res: Response): Promise<boolean> {
+  try {
+    const j = safeJson(await res.clone().text());
+    return !!j && typeof j === 'object' && (j as Record<string, unknown>).partialReason === 'SEARCH_INCOMPLETE';
   } catch {
     return false;
   }

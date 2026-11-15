@@ -981,6 +981,10 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
     resultCount: results.length,
     results,
     hint: b.hint,
+    // Present when the national index could not complete the search: the
+    // results may be missing better matches (the hint says what may help).
+    partial: b.partial,
+    partialReason: b.partialReason,
     // The national index never rewrites (the response always answers
     // hyde: false) — the request's hyde was accepted but did not cost the
     // HyDE premium.
@@ -1031,6 +1035,8 @@ export function shapeNationalLegislation(res: LexResponse<Json>): Obj {
     resultCount: results.length,
     results,
     hint: b.hint,
+    partial: b.partial,
+    partialReason: b.partialReason,
     attribution: b.attribution,
   });
 }
