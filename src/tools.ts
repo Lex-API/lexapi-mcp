@@ -349,7 +349,7 @@ export const tools: ToolDef[] = [
     name: 'lex_resolve',
     title: 'Resolve a legal identifier to CELEX',
     description:
-      'Turn a pasted EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. Cost: 1 credit. ECLIs resolve only for case law already in the LexAPI corpus (404 otherwise). resolvedVia says how: celex / url (read off the identifier), ecli-corpus / eli-corpus (corpus lookup), eli-cellar (Publications Office register), eli (derived from the ELI pattern only). verified: false means no lookup confirmed the CELEX (always so for CELEX and URL inputs); only with resolvedVia "eli" may that CELEX not exist — check it with lex_get_document before relying on it.',
+      'Turn a pasted EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. Cost: 1 credit. ECLIs resolve only for case law already in the LexAPI corpus (404 otherwise). resolvedVia says how: celex / url (read off the identifier), ecli-corpus / eli-corpus (corpus lookup), eli-cellar (Publications Office register), eli (derived from the ELI pattern only). verified: false is normal for CELEX and URL inputs (they are not looked up, so a mistyped CELEX also comes back); with resolvedVia "eli" the mapping itself is a guess — check it with lex_get_document before relying on it.',
     inputSchema: {
       identifier: z.string().trim().min(3).max(2000).describe('CELEX, EUR-Lex URL, ELI URI or ECLI.'),
     },
