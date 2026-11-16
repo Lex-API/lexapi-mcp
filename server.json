@@ -54,8 +54,8 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Optional. Leave unset to sign in with LexAPI (OAuth 2.1; the server's 401 points clients to https://mcp.lex-api.com/.well-known/oauth-protected-resource/v1). Or send \"Bearer <your LexAPI API key>\" from https://lex-api.com/dashboard (FREE plan available; see https://lex-api.com/pricing).",
-          "isRequired": false,
+          "description": "\"Bearer <your LexAPI API key>\" from https://lex-api.com/dashboard (FREE plan available; see https://lex-api.com/pricing). Sign in with LexAPI is not enabled yet.",
+          "isRequired": true,
           "isSecret": true
         }
       ]

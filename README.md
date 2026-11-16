@@ -4,35 +4,25 @@
 
 Ask your assistant *"what does Article 17 GDPR require?"*, *"which acts amended REACH?"* or *"what were the own-funds requirements for banks in June 2019?"* — the model calls LexAPI and answers from the source text, with CELEX citations.
 
-You need a LexAPI account. With the hosted server you just **sign in with LexAPI** from your MCP client; with the npm package (or if you prefer), use an API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). There is a FREE plan, no card required, with enough credits to try the read tools; current allowances are on [lex-api.com/pricing](https://lex-api.com/pricing?ref=npm-mcp).
+You need a LexAPI account and an API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp) — for the hosted server and for the npm package alike. There is a FREE plan, no card required, with enough credits to try the read tools; current allowances are on [lex-api.com/pricing](https://lex-api.com/pricing?ref=npm-mcp).
 
-## Connect to the hosted server (sign in with LexAPI)
+## Connect to the hosted server (API key)
 
-The server is hosted at **`https://mcp.lex-api.com/v1`** (Streamable HTTP). Add that URL to your client and sign in with your LexAPI account when it asks — no key to copy. You see a LexAPI consent page listing what the connection can do; calls are billed to your plan exactly like your own API key, and you can disconnect the app at any time under *Dashboard → Connected apps* (that revokes it immediately).
-
-### claude.ai and Claude Desktop
-
-*Settings → Connectors → Add custom connector*, name it `LexAPI`, URL `https://mcp.lex-api.com/v1`, then *Connect* and sign in. Connectors added on claude.ai are also available in Claude Desktop (same account).
+The server is hosted at **`https://mcp.lex-api.com/v1`** (Streamable HTTP). Send your key as `Authorization: Bearer lex_...` (or `x-api-key: lex_...`); a request without one gets `401`. Calls are billed to your plan exactly like any other use of the key.
 
 ### Claude Code
 
 ```bash
-claude mcp add --transport http lexapi https://mcp.lex-api.com/v1
+claude mcp add --transport http lexapi https://mcp.lex-api.com/v1 --header "Authorization: Bearer lex_..."
 ```
-
-Then run `/mcp` in Claude Code and choose *Authenticate* for `lexapi`; your browser opens the LexAPI sign-in.
 
 ### Other MCP clients
 
-Any client that implements MCP authorization (OAuth 2.1 with protected-resource discovery) connects the same way: point it at `https://mcp.lex-api.com/v1`. The server answers an unauthenticated request with `401` and `WWW-Authenticate: Bearer … resource_metadata="https://mcp.lex-api.com/.well-known/oauth-protected-resource/v1"`; the client discovers LexAPI (`https://lex-api.com`) as the authorization server from there.
+Any client that can send a custom header on a Streamable HTTP connection: point it at `https://mcp.lex-api.com/v1` with the `Authorization: Bearer lex_...` header. Clients that cannot set headers can run the npm package locally instead (below).
 
-### With an API key instead
+### Sign in with LexAPI (not yet enabled)
 
-Clients without OAuth support — or scripts — send a key from the dashboard as `Authorization: Bearer lex_...` (or `x-api-key: lex_...`):
-
-```bash
-claude mcp add --transport http lexapi https://mcp.lex-api.com/v1 --header "Authorization: Bearer lex_..."
-```
+Signing in with your LexAPI account from the MCP client (OAuth 2.1, no key to copy) is coming but is not enabled on the hosted server yet; `/health` reports `"oauth": false` until it is. Until then, connect with an API key as above.
 
 ## Run it locally (npm, API key)
 
@@ -64,7 +54,7 @@ claude mcp add lexapi --env LEXAPI_API_KEY=lex_... -- npx -y @lexapi/mcp
 
 Run `npx -y @lexapi/mcp` with `LEXAPI_API_KEY` in the environment (Cursor: `~/.cursor/mcp.json`; VS Code: `.vscode/mcp.json`; same `command` / `args` / `env` shape as above).
 
-The npm package needs Node.js 20 or newer. It uses an API key; signing in with LexAPI is a feature of the hosted server.
+The npm package needs Node.js 20 or newer. It uses an API key.
 
 ## Tools
 
@@ -139,7 +129,7 @@ The key is sent only as the `x-api-key` header to LexAPI; it is never logged or 
 | `PORT` | `3000` | Listen port. |
 | `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | LexAPI REST base. |
 
-Sign in with LexAPI is a feature of the hosted server at `https://mcp.lex-api.com/v1`: it needs an OAuth client registered with LexAPI, so a self-hosted copy runs with API keys only. The OAuth-related settings in `src/oauth/config.ts` (`LEXAPI_OAUTH_*`, `LEXAPI_MCP_*`) are for that deployment; the server refuses to start if they are set incompletely.
+Sign in with LexAPI (not yet enabled on the hosted server at `https://mcp.lex-api.com/v1`) needs an OAuth client registered with LexAPI, so a self-hosted copy runs with API keys only. The OAuth-related settings in `src/oauth/config.ts` (`LEXAPI_OAUTH_*`, `LEXAPI_MCP_*`) are for that deployment; the server refuses to start if they are set incompletely.
 
 **`/health`** returns `status`, `name`, `version`, `tools` and `oauth` (whether sign-in is enabled). It never contains addresses, tokens or configuration values.
 
@@ -149,8 +139,7 @@ Sign in with LexAPI is a feature of the hosted server at `https://mcp.lex-api.co
 
 - **`LEXAPI_API_KEY is not set`** — the variable isn't reaching the spawned process; check the `env` block of your MCP client config.
 - **`LexAPI error 401`** — the key is wrong or revoked; create a new one at the dashboard.
-- **Hosted server: "LexAPI sign-in expired or was revoked"** — the connection was disconnected (for example from the dashboard); reconnect LexAPI in your client to sign in again.
-- **Hosted server: `403 Subscription inactive`** — the signed-in account's paid plan is not active; the same as with an API key.
+- **Hosted server: `403 Subscription inactive`** — the account's paid plan is not active.
 - **`LexAPI error 402 (CREDITS_EXHAUSTED)`** — the monthly credit pool is used up. The message gives the reset date; top-ups and upgrades are on the dashboard.
 - **`LexAPI error 429`** — the per-minute rate limit of your key (FREE: 15 per minute). Short waits are retried once automatically; otherwise the message says how long to wait.
 - **`LexAPI error 403`** — the plan doesn't include the feature (e.g. export below BUSINESS, or semantic search on a legacy pre-credits FREE plan).

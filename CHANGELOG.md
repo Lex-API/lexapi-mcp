@@ -22,6 +22,7 @@ Brings the citation-graph tools in line with LexAPI API 2.11.0 (transposition, c
 - A `503` whose body says `TIMEOUT` (a server-side time budget ran out) is no longer retried automatically; other 503s are retried as before.
 - A `503` with `partialReason: "SEARCH_INCOMPLETE"` is retried at most once, only after its wait (`Retry-After`, else the body's `retryAfter`; at most 10 s) and only when at least 15 s of the call's deadline is left after it; without a wait it is not retried. Other 503s are retried as before, and a 503 is never described as a rate limit.
 - `lex_national_coverage`'s description mentions the `citationGraph` measurements it returns.
+- README and `server.json`: the hosted server is connected with an API key; Sign in with LexAPI is not enabled on it yet (`/health` reports `"oauth": false`). The remote's `Authorization` header is marked required again.
 
 ## 0.4.0 — unreleased
 
