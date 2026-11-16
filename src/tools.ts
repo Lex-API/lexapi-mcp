@@ -780,7 +780,7 @@ export const tools: ToolDef[] = [
     name: 'lex_cited_by',
     title: 'Documents citing a CELEX',
     description:
-      'Inbound citations: documents that cite, amend, correct, repeal, implement, transpose or are based on this act, with the edge type and its provenance. For legislation, amendment / corrigendum / repeal edges are refreshed on read from the Publications Office; relationSync.status "pending" or "skipped" means the stored edges were served. Other edge types cover documents LexAPI has extracted. totalEdges is the full count for paging with offset. includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
+      'Inbound citations: documents that cite, amend, correct, repeal, implement, transpose or are based on this act, with the edge type and its provenance. For legislation, amendment / corrigendum / repeal edges are refreshed on read from the Publications Office when stale; relationSync.status "pending" or "skipped" means the stored edges were served and may be incomplete. Other edge types cover only documents LexAPI has extracted. totalEdges is the full count for paging with offset. includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
     inputSchema: {
       celexNumber: celexOrNationalId(),
       ...graphFilters,
@@ -992,7 +992,7 @@ export const tools: ToolDef[] = [
     name: 'lex_export',
     title: 'Export corpus rows',
     description:
-      'Rows from the LexAPI corpus matching filters — e.g. regulations dated 2024 or documents whose text changed since a date. BUSINESS plans and above (403 otherwise). Cost: 1 credit per row returned, at least 1 per call: the call is admitted for 1 credit and up to limit rows are reserved; if the pool cannot cover that, 402 before returning anything (a smaller limit needs fewer credits). Unreturned rows are refunded. An export that fails part-way is reported as incomplete. Bulk export for ML training needs a separate licence (Terms §6).',
+      'Rows from the LexAPI corpus matching filters — e.g. regulations dated 2024 or documents whose text changed since a date. BUSINESS plans and above (403 otherwise). Cost: 1 credit per row returned, at least 1 per call: the call is admitted for 1 credit and up to limit rows are reserved; if the pool cannot cover that, 402 before returning anything (a smaller limit needs fewer credits). Credits reserved for rows not returned are refunded. An export that fails part-way is reported as incomplete. Bulk export for ML training needs a separate licence (Terms §6).',
     inputSchema: {
       documentType: z.array(z.string().min(1)).min(1).optional().describe('Stored document-type labels, matched exactly but ignoring case, e.g. ["Regulation","Directive"]: "regulation" matches Regulation, not Implementing regulation (use documentTypeCode for the family).'),
       documentTypeCode: z.array(z.string().min(1)).min(1).optional().describe('Type families by documentTypeCode, e.g. ["regulation"] — includes implementing and delegated regulations. Combined with documentType, both must match.'),
