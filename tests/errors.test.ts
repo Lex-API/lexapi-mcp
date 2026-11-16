@@ -40,7 +40,7 @@ describe('describeError — actionable messages', () => {
     expect(text).toMatch(/not retryable unchanged/);
   });
 
-  it('S1: legacy daily quota 429 without Retry-After → quota until resetsAt, no "wait a minute"', () => {
+  it('legacy daily quota 429 without Retry-After → quota until resetsAt, no "wait a minute"', () => {
     const t = describeError(new LexAPIError(429, 'Daily quota exceeded', 'Daily quota exceeded: You have used all 100 calls.', { current: 100, limit: 100, resetsAt: '2026-10-27T00:00:00.000Z' }));
     expect(t).toMatch(/daily call quota/);
     expect(t).toContain('until 2026-10-27T00:00:00.000Z');
@@ -49,14 +49,14 @@ describe('describeError — actionable messages', () => {
     expect(t).not.toContain('..');
   });
 
-  it('S1: legacy monthly semantic quota 429', () => {
+  it('legacy monthly semantic quota 429', () => {
     const t = describeError(new LexAPIError(429, 'Monthly semantic search quota exceeded', "Monthly semantic search quota exceeded: You've reached your monthly limit of 100 semantic searches.", { resetsAt: '2026-11-01T00:00:00.000Z' }));
     expect(t).toMatch(/monthly semantic-search quota/);
     expect(t).toContain('2026-11-01T00:00:00.000Z');
     expect(t).not.toContain('searches..');
   });
 
-  it('S1: per-minute 429 without any hint still says per-minute', () => {
+  it('per-minute 429 without any hint still says per-minute', () => {
     expect(describeError(new LexAPIError(429, 'Rate limit exceeded', 'Rate limit exceeded'))).toMatch(/Per-minute rate limit/);
   });
 

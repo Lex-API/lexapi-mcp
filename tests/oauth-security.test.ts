@@ -249,20 +249,20 @@ describe('refused exchanges cannot drain the shared exchange budget', () => {
     const { base } = await start();
     const before = as.seen.length;
     for (let i = 0; i < 31; i++) {
-      const t = as.mint({ sub: `r21_${i}`, gid: `g_r21_${i}` });
-      as.revoke(`g_r21_${i}`);
+      const t = as.mint({ sub: `rkd_${i}`, gid: `g_rkd_${i}` });
+      as.revoke(`g_rkd_${i}`);
       expect((await call(base, { authorization: `Bearer ${t}` })).status).toBe(401);
     }
     expect(tokenCalls(before)).toBe(31);
-    const innocent = await call(base, { authorization: `Bearer ${as.mint({ sub: 'r21_innocent', gid: 'g_r21_innocent' })}` });
+    const innocent = await call(base, { authorization: `Bearer ${as.mint({ sub: 'rkd_innocent', gid: 'g_rkd_innocent' })}` });
     expect(innocent.status).toBe(200);
     expect(innocent.json.result.isError).toBeFalsy();
-    expect(JSON.parse(innocent.json.result.content[0].text).service).toBe('user:r21_innocent');
+    expect(JSON.parse(innocent.json.result.content[0].text).service).toBe('user:rkd_innocent');
     // The flood is still throttled: refused accounts get no further exchange from that address.
     const mark = as.seen.length;
     for (let j = 0; j < 5; j++) {
-      const t = as.mint({ sub: 'r21_0', gid: `g_r21_0_${j}` });
-      as.revoke(`g_r21_0_${j}`);
+      const t = as.mint({ sub: 'rkd_0', gid: `g_rkd_0_${j}` });
+      as.revoke(`g_rkd_0_${j}`);
       const r = await call(base, { authorization: `Bearer ${t}` });
       expect(r.json.result.content[0].text).toMatch(/rate limited/);
     }
@@ -734,7 +734,7 @@ describe('verify(): unknown kid while the issuer is failing → 503, not 401', (
 describe('cache ordering, proxy hops, throttle recovery, /health disclosure', () => {
   it('local signature verification precedes ANY cache lookup — a victim’s header.payload with a forged signature never reaches their API token', async () => {
     const { base, http } = await start();
-    const victim = as.mint({ sub: 'r20_victim', gid: 'g_r20_victim' });
+    const victim = as.mint({ sub: 'rvk_victim', gid: 'g_rvk_victim' });
     const [h, p] = victim.split('.');
     const forged = `${h}.${p}.${Buffer.alloc(64, 7).toString('base64url')}`;
     // Forged first: refused locally, nothing cached either way.
@@ -745,7 +745,7 @@ describe('cache ordering, proxy hops, throttle recovery, /health disclosure', ()
     expect(http.oauth!.exchanger.negativeSize).toBe(0);
     // The victim signs in: their API token is now cached under subjectKey(header.payload).
     const ok = await call(base, { authorization: `Bearer ${victim}` });
-    expect(JSON.parse(ok.json.result.content[0].text).service).toBe('user:r20_victim');
+    expect(JSON.parse(ok.json.result.content[0].text).service).toBe('user:rvk_victim');
     expect(http.oauth!.exchanger.size).toBe(1);
     const mark = as.seen.length;
     for (const sig of [Buffer.alloc(64, 7), Buffer.alloc(64, 0xff)]) {
@@ -761,7 +761,7 @@ describe('cache ordering, proxy hops, throttle recovery, /health disclosure', ()
     const { base, http } = await start({ LEXAPI_MCP_TRUST_PROXY_HOPS: '2' });
     expect(http.clientAddressMode).toBe('X-Forwarded-For, entry 2 from the right (LEXAPI_MCP_TRUST_PROXY_HOPS=2)');
     const before = logSpy.mock.calls.length;
-    for (let i = 0; i < 3; i++) await call(base, { authorization: `Bearer ${as.mint({ sub: `r22_${i}` })}`, 'x-forwarded-for': '198.51.100.77' });
+    for (let i = 0; i < 3; i++) await call(base, { authorization: `Bearer ${as.mint({ sub: `xff_${i}` })}`, 'x-forwarded-for': '198.51.100.77' });
     const warnings = logSpy.mock.calls.slice(before).flat().map(String).filter((l: string) => /X-Forwarded-For has 1 entry but LEXAPI_MCP_TRUST_PROXY_HOPS=2/.test(l));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).not.toContain('198.51.100.77');
@@ -799,16 +799,16 @@ describe('cache ordering, proxy hops, throttle recovery, /health disclosure', ()
       expect(got.every((g) => /\./.test(g))).toBe(true);
       expect(requests - n).toBe(4);
     };
-    await episode('r23_first');
+    await episode('eps_first');
     t += 60_000;
-    await episode('r23_second');
+    await episode('eps_second');
     expect(ex.stats().backoffSeconds).toBe(0);
   });
 
   it('/health never carries configuration values or secrets; traffic counters only behind LEXAPI_MCP_HEALTH_TOKEN', async () => {
     const { base, http } = await start();
     const cfg = http.oauth!.cfg;
-    await call(base, { authorization: `Bearer ${as.mint({ sub: 'r24' })}` });
+    await call(base, { authorization: `Bearer ${as.mint({ sub: 'hdr' })}` });
     const forbidden = [CLIENT_SECRET, HEALTH_TOKEN, cfg.issuer, cfg.clientId, cfg.resource, cfg.apiBase, cfg.tokenEndpoint, cfg.jwksUri, 'clientSecret', 'issuer'];
     const pubText = await fetch(`${base}/health`).then((x) => x.text());
     const opText = await fetch(`${base}/health`, { headers: { authorization: `Bearer ${HEALTH_TOKEN}` } }).then((x) => x.text());
@@ -841,10 +841,10 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
     const { base, http } = await start();
     const before = as.seen.length;
     const answers = [];
-    for (let i = 0; i < 100; i++) answers.push(await call(base, { authorization: `Bearer ${as.mint({ sub: 'r31_minter', gid: 'g_r31_minter' })}` }));
+    for (let i = 0; i < 100; i++) answers.push(await call(base, { authorization: `Bearer ${as.mint({ sub: 'exg_minter', gid: 'g_exg_minter' })}` }));
     expect(tokenCalls(before)).toBe(LIMITS.exchangesPerSubPerMin);
     expect(LIMITS.exchangesPerSubPerMin).toBe(20);
-    for (const ok of answers.slice(0, 20)) expect(JSON.parse(ok.json.result.content[0].text).service).toBe('user:r31_minter');
+    for (const ok of answers.slice(0, 20)) expect(JSON.parse(ok.json.result.content[0].text).service).toBe('user:exg_minter');
     for (const r of answers.slice(20)) {
       expect(r.status).toBe(200);
       expect(r.www).toBeNull();
@@ -852,32 +852,32 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
       expect(r.json.result.content[0].text).toMatch(/rate limited right now\. Wait \d+ s before calling again/);
     }
     // Another user from the same address is not affected.
-    const other = await call(base, { authorization: `Bearer ${as.mint({ sub: 'r31_bystander', gid: 'g_r31_bystander' })}` });
-    expect(JSON.parse(other.json.result.content[0].text).service).toBe('user:r31_bystander');
+    const other = await call(base, { authorization: `Bearer ${as.mint({ sub: 'exg_bystander', gid: 'g_exg_bystander' })}` });
+    expect(JSON.parse(other.json.result.content[0].text).service).toBe('user:exg_bystander');
     expect(http.oauth!.exchanger.stats().locallyLimited).toBe(80);
   });
 
   it('the cap counts refused exchanges too, ignores cached tokens, and frees up after the minute', async () => {
     let t = 7_000_000;
     const ex = exchanger({ now: () => t, limits: { exchangesPerSubPerMin: 5, refusedPerSubPer10Min: 1_000 } });
-    const caller = { sub: 'r31_cap', ip: '192.0.2.31' };
-    const good = as.mint({ sub: 'r31_cap', gid: 'g_r31_cap' });
+    const caller = { sub: 'exg_cap', ip: '192.0.2.31' };
+    const good = as.mint({ sub: 'exg_cap', gid: 'g_exg_cap' });
     const apiToken = await ex.getApiToken(good, expOf(good), undefined, caller);
     for (let i = 0; i < 4; i++) {
-      const r = revoked('r31_cap', `g_r31_cap_rev_${i}`);
+      const r = revoked('exg_cap', `g_exg_cap_rev_${i}`);
       await expect(ex.getApiToken(r, expOf(r), undefined, caller)).rejects.toMatchObject({ kind: 'invalid_token' });
     }
     expect(ex.exchanges).toBe(5);
     // Cap reached: a sixth new token is held back locally, with the time left in the window.
     t += 15_000;
-    const sixth = as.mint({ sub: 'r31_cap', gid: 'g_r31_cap' });
+    const sixth = as.mint({ sub: 'exg_cap', gid: 'g_exg_cap' });
     await expect(ex.getApiToken(sixth, expOf(sixth), undefined, caller)).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 45 });
     expect(ex.exchanges).toBe(5);
     // Cached and negative-cached tokens still answer, and never count.
     for (let i = 0; i < 10; i++) expect(await ex.getApiToken(good, expOf(good), undefined, caller)).toBe(apiToken);
     // The cap is per user: another account carries on.
-    const other = as.mint({ sub: 'r31_cap_other' });
-    expect(await ex.getApiToken(other, expOf(other), undefined, { sub: 'r31_cap_other', ip: '192.0.2.31' })).toMatch(/\./);
+    const other = as.mint({ sub: 'exg_cap_other' });
+    expect(await ex.getApiToken(other, expOf(other), undefined, { sub: 'exg_cap_other', ip: '192.0.2.31' })).toMatch(/\./);
     // A new minute: exchanges resume.
     t += 45_000;
     expect(await ex.getApiToken(sixth, expOf(sixth), undefined, caller)).toMatch(/\./);
@@ -890,7 +890,7 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
       const { base } = await start({ LEXAPI_MCP_EXCHANGES_PER_USER_PER_MIN: '3' });
       const before = as.seen.length;
       for (let a = 0; a < 5; a++) {
-        for (let i = 0; i < 10; i++) await call(base, { authorization: `Bearer ${revoked(`r31_flood_${a}`, `g_r31_flood_${a}_${i}`)}`, 'x-forwarded-for': `192.0.2.${a}` });
+        for (let i = 0; i < 10; i++) await call(base, { authorization: `Bearer ${revoked(`exg_flood_${a}`, `g_exg_flood_${a}_${i}`)}`, 'x-forwarded-for': `192.0.2.${a}` });
       }
       expect(tokenCalls(before)).toBe(5 * 3);
     } finally {
@@ -910,55 +910,55 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
   it('a per-user limit (429 temporarily_unavailable + Retry-After for ONE user) backs off that user only; other users keep exchanging', async () => {
     let t = 8_000_000;
     const ex = exchanger({ now: () => t });
-    as.userLimited.set('r31_busy', { status: 429, body: { error: 'temporarily_unavailable', error_description: 'Too many token exchanges for this account. Retry after 30 s.' }, headers: { 'retry-after': '30' } });
+    as.userLimited.set('exg_busy', { status: 429, body: { error: 'temporarily_unavailable', error_description: 'Too many token exchanges for this account. Retry after 30 s.' }, headers: { 'retry-after': '30' } });
     try {
-      const busy = { sub: 'r31_busy', ip: '192.0.2.40' };
-      const a = as.mint({ sub: 'r31_busy' });
+      const busy = { sub: 'exg_busy', ip: '192.0.2.40' };
+      const a = as.mint({ sub: 'exg_busy' });
       await expect(ex.getApiToken(a, expOf(a), undefined, busy)).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 30 });
       const sent = ex.exchanges;
       // That user's next new token waits it out without a request…
       t += 10_000;
-      const b = as.mint({ sub: 'r31_busy' });
+      const b = as.mint({ sub: 'exg_busy' });
       await expect(ex.getApiToken(b, expOf(b), undefined, busy)).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 20 });
       expect(ex.exchanges).toBe(sent);
       // …while everyone else exchanges normally (no global backoff).
       for (let i = 0; i < 5; i++) {
-        const o = as.mint({ sub: `r31_free_${i}` });
-        expect(await ex.getApiToken(o, expOf(o), undefined, { sub: `r31_free_${i}`, ip: '192.0.2.40' })).toMatch(/\./);
+        const o = as.mint({ sub: `exg_free_${i}` });
+        expect(await ex.getApiToken(o, expOf(o), undefined, { sub: `exg_free_${i}`, ip: '192.0.2.40' })).toMatch(/\./);
       }
       expect(ex.exchanges).toBe(sent + 5);
       expect(ex.stats()).toMatchObject({ backoffSeconds: 0, usersBackingOff: 1 });
       // Limit lifted and the wait over: the user is back, and their backoff is cleared.
-      as.userLimited.delete('r31_busy');
+      as.userLimited.delete('exg_busy');
       t += 20_000;
       expect(await ex.getApiToken(b, expOf(b), undefined, busy)).toMatch(/\./);
       expect(ex.stats().usersBackingOff).toBe(0);
       // Recovery reset the user's backoff: a later slow-down starts from the minimum again (1 s, not 2 s).
-      as.userLimited.set('r31_busy', { status: 429, body: { error: 'temporarily_unavailable' } });
-      const c = as.mint({ sub: 'r31_busy' });
+      as.userLimited.set('exg_busy', { status: 429, body: { error: 'temporarily_unavailable' } });
+      const c = as.mint({ sub: 'exg_busy' });
       await expect(ex.getApiToken(c, expOf(c), undefined, busy)).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 1 });
     } finally {
-      as.userLimited.delete('r31_busy');
+      as.userLimited.delete('exg_busy');
     }
   });
 
   it('…over HTTP: the limited user gets a tool error with the wait (no re-auth); a 503 temporarily_unavailable for one user is per-user too', async () => {
     const { base } = await start();
-    as.userLimited.set('r31_http_busy', { status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '12' } });
-    as.userLimited.set('r31_http_503', { status: 503, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '4' } });
+    as.userLimited.set('exg_http_busy', { status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '12' } });
+    as.userLimited.set('exg_http_503', { status: 503, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '4' } });
     try {
-      const r = await call(base, { authorization: `Bearer ${as.mint({ sub: 'r31_http_busy' })}` });
+      const r = await call(base, { authorization: `Bearer ${as.mint({ sub: 'exg_http_busy' })}` });
       expect(r.status).toBe(200);
       expect(r.www).toBeNull();
       expect(r.json.result.content[0].text).toMatch(/Wait 12 s/);
-      const u = await call(base, { authorization: `Bearer ${as.mint({ sub: 'r31_http_503' })}` });
+      const u = await call(base, { authorization: `Bearer ${as.mint({ sub: 'exg_http_503' })}` });
       expect(u.status).toBe(503);
       expect(u.www).toBeNull();
-      const ok = await call(base, { authorization: `Bearer ${as.mint({ sub: 'r31_http_free' })}` });
-      expect(JSON.parse(ok.json.result.content[0].text).service).toBe('user:r31_http_free');
+      const ok = await call(base, { authorization: `Bearer ${as.mint({ sub: 'exg_http_free' })}` });
+      expect(JSON.parse(ok.json.result.content[0].text).service).toBe('user:exg_http_free');
     } finally {
-      as.userLimited.delete('r31_http_busy');
-      as.userLimited.delete('r31_http_503');
+      as.userLimited.delete('exg_http_busy');
+      as.userLimited.delete('exg_http_503');
     }
   });
 
@@ -970,20 +970,20 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
     expect(LIMITS.slowDownGlobalAfterUsers).toBe(3);
     for (let i = 0; i < 2; i++) {
       as.tokenOverrides.push({ status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '20' } });
-      const a = as.mint({ sub: `r31_spread_${i}` });
-      await expect(ex.getApiToken(a, expOf(a), undefined, { sub: `r31_spread_${i}` })).rejects.toMatchObject({ kind: 'rate_limited' });
+      const a = as.mint({ sub: `exg_spread_${i}` });
+      await expect(ex.getApiToken(a, expOf(a), undefined, { sub: `exg_spread_${i}` })).rejects.toMatchObject({ kind: 'rate_limited' });
     }
     // Two users: still per-user, a third user exchanges (and is slowed down too).
     expect(ex.stats().backoffSeconds).toBe(0);
     as.tokenOverrides.push({ status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '20' } });
-    const c = as.mint({ sub: 'r31_spread_2' });
-    await expect(ex.getApiToken(c, expOf(c), undefined, { sub: 'r31_spread_2' })).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 20 });
+    const c = as.mint({ sub: 'exg_spread_2' });
+    await expect(ex.getApiToken(c, expOf(c), undefined, { sub: 'exg_spread_2' })).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 20 });
     expect(ex.stats().backoffSeconds).toBe(20);
     // Global now: nobody's new exchange is sent.
     const n = requests;
     for (let i = 0; i < 5; i++) {
-      const o = as.mint({ sub: `r31_spread_other_${i}` });
-      await expect(ex.getApiToken(o, expOf(o), undefined, { sub: `r31_spread_other_${i}` })).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 20 });
+      const o = as.mint({ sub: `exg_spread_other_${i}` });
+      await expect(ex.getApiToken(o, expOf(o), undefined, { sub: `exg_spread_other_${i}` })).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 20 });
     }
     expect(requests).toBe(n);
   });
@@ -993,8 +993,8 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
     const ex = exchanger({ now: () => t });
     for (let i = 0; i < 4; i++) {
       as.tokenOverrides.push({ status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '1' } });
-      const a = as.mint({ sub: `r31_apart_${i}` });
-      await expect(ex.getApiToken(a, expOf(a), undefined, { sub: `r31_apart_${i}` })).rejects.toMatchObject({ kind: 'rate_limited' });
+      const a = as.mint({ sub: `exg_apart_${i}` });
+      await expect(ex.getApiToken(a, expOf(a), undefined, { sub: `exg_apart_${i}` })).rejects.toMatchObject({ kind: 'rate_limited' });
       expect(ex.stats().backoffSeconds).toBe(0);
       t += 61_000;
     }
@@ -1004,30 +1004,30 @@ describe('every new exchange of a user is capped, and per-user slow-downs stay p
     const t = 9_800_000;
     const ex = exchanger({ now: () => t });
     as.tokenOverrides.push({ status: 401, body: { error: 'invalid_client' } });
-    const a = as.mint({ sub: 'r31_lock_a' });
-    await expect(ex.getApiToken(a, expOf(a), undefined, { sub: 'r31_lock_a' })).rejects.toMatchObject({ kind: 'client_auth' });
+    const a = as.mint({ sub: 'exg_lock_a' });
+    await expect(ex.getApiToken(a, expOf(a), undefined, { sub: 'exg_lock_a' })).rejects.toMatchObject({ kind: 'client_auth' });
     as.tokenOverrides.push({ status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '120' } });
-    const b = as.mint({ sub: 'r31_lock_b' });
-    await expect(ex.getApiToken(b, expOf(b), undefined, { sub: 'r31_lock_b' })).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 120 });
+    const b = as.mint({ sub: 'exg_lock_b' });
+    await expect(ex.getApiToken(b, expOf(b), undefined, { sub: 'exg_lock_b' })).rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 120 });
     expect(ex.stats().backoffSeconds).toBe(120);
     const sent = ex.exchanges;
-    const c = as.mint({ sub: 'r31_lock_c' });
-    await expect(ex.getApiToken(c, expOf(c), undefined, { sub: 'r31_lock_c' })).rejects.toMatchObject({ kind: 'rate_limited' });
+    const c = as.mint({ sub: 'exg_lock_c' });
+    await expect(ex.getApiToken(c, expOf(c), undefined, { sub: 'exg_lock_c' })).rejects.toMatchObject({ kind: 'rate_limited' });
     expect(ex.exchanges).toBe(sent);
   });
 
   it('a user slowed down twice in a row waits longer the second time (backoff doubles, Retry-After is the floor)', async () => {
     let t = 9_900_000;
     const ex = exchanger({ now: () => t });
-    as.userLimited.set('r31_twice', { status: 429, body: { error: 'temporarily_unavailable' } });
+    as.userLimited.set('exg_twice', { status: 429, body: { error: 'temporarily_unavailable' } });
     try {
-      const caller = { sub: 'r31_twice' };
-      const a = as.mint({ sub: 'r31_twice' });
+      const caller = { sub: 'exg_twice' };
+      const a = as.mint({ sub: 'exg_twice' });
       await expect(ex.getApiToken(a, expOf(a), undefined, caller)).rejects.toMatchObject({ retryAfterSeconds: 1 });
       t += 1_000;
       await expect(ex.getApiToken(a, expOf(a), undefined, caller)).rejects.toMatchObject({ retryAfterSeconds: 2 });
     } finally {
-      as.userLimited.delete('r31_twice');
+      as.userLimited.delete('exg_twice');
     }
   });
 });
@@ -1036,16 +1036,16 @@ describe('per-user slow-down bounds', () => {
   it('per-user slow-down state is bounded (oldest dropped first)', async () => {
     const t = 9_950_000;
     const ex = exchanger({ now: () => t, maxEntries: 2, limits: { slowDownGlobalAfterUsers: 100 } });
-    for (let i = 0; i < 3; i++) as.userLimited.set(`r31_bound_${i}`, { status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '60' } });
+    for (let i = 0; i < 3; i++) as.userLimited.set(`exg_bound_${i}`, { status: 429, body: { error: 'temporarily_unavailable' }, headers: { 'retry-after': '60' } });
     try {
       for (let i = 0; i < 3; i++) {
-        const a = as.mint({ sub: `r31_bound_${i}` });
-        await expect(ex.getApiToken(a, expOf(a), undefined, { sub: `r31_bound_${i}` })).rejects.toMatchObject({ kind: 'rate_limited' });
+        const a = as.mint({ sub: `exg_bound_${i}` });
+        await expect(ex.getApiToken(a, expOf(a), undefined, { sub: `exg_bound_${i}` })).rejects.toMatchObject({ kind: 'rate_limited' });
       }
       expect(ex.stats().usersBackingOff).toBe(2);
       expect(ex.stats().backoffSeconds).toBe(0);
     } finally {
-      for (let i = 0; i < 3; i++) as.userLimited.delete(`r31_bound_${i}`);
+      for (let i = 0; i < 3; i++) as.userLimited.delete(`exg_bound_${i}`);
     }
   });
 });

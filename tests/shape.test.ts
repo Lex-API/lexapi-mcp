@@ -38,7 +38,7 @@ describe('shapeContent', () => {
     expect(r.content).toEqual({ fullText: 'a\n\nb\n\nc' });
   });
 
-  it('N5: a single item longer than the budget is split into parts that offset can page through', () => {
+  it('a single item longer than the budget is split into parts that offset can page through', () => {
     const big = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join('\n'); // ~44k chars
     const doc = { annexes: [{ title: 'Annex I', content: big }] };
     const first = shapeContent(doc, { view: 'full', maxChars: 5000 });
@@ -61,13 +61,13 @@ describe('shapeContent', () => {
     expect(last!.content).toContain('line 4999');
   });
 
-  it('N5: a fullText without blank lines is paged, not clipped', () => {
+  it('a fullText without blank lines is paged, not clipped', () => {
     const r = shapeContent({ fullText: 'w '.repeat(30_000) }, { view: 'full', maxChars: 10_000 });
     expect(r.note).toMatch(/offset=1/);
     expect(r.note).not.toMatch(/was cut/);
   });
 
-  it('N4: the outline hint only suggests parts the document has', () => {
+  it('the outline hint only suggests parts the document has', () => {
     const judgment = shapeContent({ paragraphs: Array.from({ length: 200 }, (_, i) => ({ number: i + 1, text: 'p'.repeat(500) })) }, { maxChars: 5000 });
     expect(judgment.note).toMatch(/include \["paragraphs"\]/);
     expect(judgment.note).not.toMatch(/articleId/);
@@ -75,7 +75,7 @@ describe('shapeContent', () => {
     expect(textOnly.note).toMatch(/include \["fullText"\]/);
   });
 
-  it('N4: the outline article list is bounded by maxChars and paged by offset', () => {
+  it('the outline article list is bounded by maxChars and paged by offset', () => {
     const content = { articles: Array.from({ length: 600 }, (_, i) => ({ id: `art_${i + 1}`, number: `Article ${i + 1}`, title: `A rather long article title number ${i + 1}`, content: 'c'.repeat(300) })) };
     const r = shapeContent(content, { view: 'outline', maxChars: 10_000 });
     expect(JSON.stringify(r.content).length).toBeLessThanOrEqual(10_000);

@@ -218,10 +218,9 @@ export function describeError(err: unknown): string {
       return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title).`;
     }
     case 409:
-      // National semantic search not yet enabled for a live country
-      // (nationalSemanticController.js unavailableError): a different
-      // country, not account state — do not say "tell the user to retry
-      // their account", point at the right tools instead.
+      // National semantic search not yet enabled for a live country: a
+      // property of the country, not account state — do not say "tell the
+      // user to retry their account", point at the right tools instead.
       if (err.code === 'NATIONAL_SEMANTIC_NOT_ENABLED') {
         const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'this country';
         return `${head} Semantic search is not available for ${jur} yet — check semanticSearch in lex_national_coverage's output before retrying. lex_list_national_documents and lex_get_national_document still work there. Not retryable; nothing was charged.`;

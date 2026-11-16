@@ -123,14 +123,14 @@ describe('LexAPIClient request building', () => {
     expect(() => new LexAPIClient({ apiKey: '  ' })).toThrow(/API key is missing/);
   });
 
-  it('S4: rejects a malformed key without echoing it', () => {
+  it('rejects a malformed key without echoing it', () => {
     let msg = '';
     try { new LexAPIClient({ apiKey: 'lex_SECRET123\nlex_other' }); } catch (e) { msg = (e as Error).message; }
     expect(msg).toMatch(/whitespace or control characters/);
     expect(msg).not.toContain('SECRET123');
   });
 
-  it('S4: never forwards the runtime error text (undici quotes header values)', async () => {
+  it('never forwards the runtime error text (undici quotes header values)', async () => {
     const client = new LexAPIClient({
       apiKey: 'lex_ok',
       fetch: (async () => { throw new TypeError('Headers.append: "lex_ok_SECRET" is an invalid header value.'); }) as typeof fetch,
@@ -147,7 +147,7 @@ describe('LexAPIClient request building', () => {
     expect(describeError(await refused.info().catch((e) => e))).toMatch(/network error ECONNREFUSED/);
   });
 
-  it('S3: the call signal aborts the upstream request and is not retried', async () => {
+  it('the call signal aborts the upstream request and is not retried', async () => {
     const ctl = new AbortController();
     let calls = 0;
     const base = new LexAPIClient({
@@ -166,14 +166,14 @@ describe('LexAPIClient request building', () => {
     expect(calls).toBe(1);
   });
 
-  it('S3: default timeout stays under the 60 s MCP client default; forCall overrides it', () => {
+  it('default timeout stays under the 60 s MCP client default; forCall overrides it', () => {
     const c = new LexAPIClient({ apiKey: 'lex_ok' });
     expect(c.timeout).toBeLessThan(60_000);
     expect(c.forCall({ timeoutMs: 120_000 }).timeout).toBe(120_000);
   });
 });
 
-describe('F3: one deadline per call', () => {
+describe('one deadline per call', () => {
   it('no 429 sleep when it would end past the deadline', async () => {
     let t = 0;
     const sleeps: number[] = [];
@@ -229,7 +229,7 @@ describe('F3: one deadline per call', () => {
   });
 });
 
-describe('F6: combineSignals fallback (Node < 20.3, no AbortSignal.any)', () => {
+describe('combineSignals fallback (Node < 20.3, no AbortSignal.any)', () => {
   it('removes its listeners when disposed', () => {
     const any = (AbortSignal as any).any;
     (AbortSignal as any).any = undefined;
