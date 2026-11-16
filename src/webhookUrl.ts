@@ -1,5 +1,5 @@
 // Client-side mirror of the DNS-free half of LexAPI's webhook egress guard
-// (eurlex-parser server/utils/safeOutboundUrl.js, checkUrlSyntax). Defence in
+// (URL syntax checks). Defence in
 // depth only: the API is authoritative and also checks every resolved
 // address at send time. This lets a model hear "not allowed" before a call
 // instead of after one.

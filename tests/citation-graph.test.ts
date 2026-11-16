@@ -435,7 +435,7 @@ describe('lex_counterparts', () => {
   });
 });
 
-describe('bounded output and the remaining review points', () => {
+describe('bounded output and retries', () => {
   it('a 503 with partialReason TIMEOUT only is not retried either; any other 503 still is', async () => {
     const t = await call('lex_counterparts', { id: 'AT-NOR-1' }, () => ({ status: 503, body: { success: false, error: 'slow', partialReason: 'TIMEOUT' } }));
     expect(t.calls).toHaveLength(1);

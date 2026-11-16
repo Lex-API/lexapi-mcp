@@ -43,7 +43,7 @@ describe('tool catalogue', () => {
     expect(ro).not.toContain('lex_update_webhook');
     expect(ro).not.toContain('lex_delete_webhook');
     expect(ro).not.toContain('lex_test_webhook');
-    expect(ro).not.toContain('lex_extract_citations'); // N8: writes to the shared graph
+    expect(ro).not.toContain('lex_extract_citations'); // writes to the shared graph
     expect(ro).toContain('lex_list_webhooks');
     expect(ro).toHaveLength(tools.length - 5);
   });
@@ -62,7 +62,7 @@ describe('tool catalogue', () => {
     }
   });
 
-  it('every description states its cost or that it is free (N7: including webhook writes)', () => {
+  it('every description states its cost or that it is free (including webhook writes)', () => {
     for (const t of tools) {
       expect(t.description, t.name).toMatch(/[Cc]ost|[Ff]ree/);
     }
@@ -248,7 +248,7 @@ describe('lex_get_documents_batch / lex_get_metadata / lex_get_document_by_url',
     expect(data.documents[0].content.articles[0]).toHaveProperty('content');
   });
 
-  it('N6: batch output stays within the shared maxChars budget', async () => {
+  it('batch output stays within the shared maxChars budget', async () => {
     const docs = Array.from({ length: 40 }, (_, i) => fakeDocument(20, 2000, { celex: `3201${i}R0001` }));
     const { data } = await call('lex_get_documents_batch', { celexNumbers: docs.map((d) => d.celex), include: ['articles'], maxChars: 20_000 }, () => ({
       body: { success: true, documents: docs, errors: [] },
@@ -348,7 +348,7 @@ describe('lex_semantic_legislation', () => {
     expect(data).not.toHaveProperty('asOfCaveat');
   });
 
-  it('S2: groups unresolved hits by reason class with per-class guidance', async () => {
+  it('groups unresolved hits by reason class with per-class guidance', async () => {
     const hit = (law_id: string, asOfReason: string) => ({ law_id, article_ref: 'art_1', score: 0.7, asOf: '2019-06-01', asOfResolved: false, asOfReason });
     const { data } = await call('lex_semantic_legislation', { query: 'x', asOf: '2019-06-01' }, () => ({
       body: {
@@ -373,7 +373,7 @@ describe('lex_semantic_legislation', () => {
     expect(data).not.toHaveProperty('citing');
   });
 
-  it('S2: only the classes present are reported', async () => {
+  it('only the classes present are reported', async () => {
     const { data } = await call('lex_semantic_legislation', { query: 'x', asOf: '2001-01-01' }, () => ({
       body: { success: true, asOf: '2001-01-01', results: [{ law_id: '32016R0679', article_ref: 'art_17', asOf: '2001-01-01', asOfResolved: false, asOfReason: 'no_longer_in_force' }] },
     }));
@@ -643,8 +643,8 @@ describe('webhook tools', () => {
   });
 });
 
-describe('review round 2', () => {
-  it('F4: webhook URLs must be public https (mirrors the API egress guard)', () => {
+describe('webhook URLs and export filters', () => {
+  it('webhook URLs must be public https (mirrors the API egress guard)', () => {
     const create = z.object(byName.lex_create_webhook.inputSchema);
     const ok = (url: string) => create.safeParse({ name: 'n', url, watchCelex: ['32006R1907'] }).success;
     expect(ok('https://hooks.acme.io/lexapi')).toBe(true);
@@ -654,7 +654,7 @@ describe('review round 2', () => {
       'http://hooks.acme.io/x', 'http://10.0.0.5/x', 'http://localhost:6379/', 'https://localhost/x',
       'https://10.0.0.5/x', 'https://127.0.0.1/', 'https://169.254.169.254/latest/meta-data', 'https://192.168.1.10/',
       'https://[::1]/', 'https://[::ffff:127.0.0.1]/', 'https://[fd00::1]/', 'https://[64:ff9b::a00:1]/',
-      'https://redis/', 'https://qdrant:443/', 'https://db.internal/x', 'https://printer.local/',
+      'https://redis/', 'https://search:443/', 'https://db.internal/x', 'https://printer.local/',
       'https://hooks.acme.io:6379/', 'https://user:pw@hooks.acme.io/', 'https://2130706433/', 'not a url',
     ]) expect(ok(bad), bad).toBe(false);
     const update = z.object(byName.lex_update_webhook.inputSchema);
@@ -662,7 +662,7 @@ describe('review round 2', () => {
     expect(update.safeParse({ id: 'w1', status: 'PAUSED' }).success).toBe(true);
   });
 
-  it('F5 (API 2.3.0): lex_export sends dateFrom/dateTo, changedSince and documentTypeCode', async () => {
+  it('API 2.3.0: lex_export sends dateFrom/dateTo, changedSince and documentTypeCode', async () => {
     const { calls } = await call('lex_export', {
       dateFrom: '2024-01-01', dateTo: '2024-12-31', changedSince: '2026-05-11', documentTypeCode: ['regulation'],
     }, () => ({ raw: '{"_meta":{}}\n{"_done":{"written":0}}', headers: { 'content-type': 'application/x-ndjson' } }));
@@ -671,7 +671,7 @@ describe('review round 2', () => {
     });
   });
 
-  it('F5: timestamps need a timezone; dates must be YYYY-MM-DD', () => {
+  it('timestamps need a timezone; dates must be YYYY-MM-DD', () => {
     const s = z.object(byName.lex_export.inputSchema);
     expect(s.safeParse({ changedSince: '2026-05-11T10:00:00Z' }).success).toBe(true);
     expect(s.safeParse({ fetchedSince: '2026-05-11T10:00:00+02:00' }).success).toBe(true);
@@ -679,9 +679,9 @@ describe('review round 2', () => {
     expect(s.safeParse({ dateFrom: '01/02/2024' }).success).toBe(false);
   });
 
-  it('F5 (review): the timestamp/date schema accepts exactly what the API accepts', () => {
+  it('the timestamp/date schema accepts exactly what the API accepts', () => {
     const s = z.object(byName.lex_export.inputSchema);
-    // Verdicts of lex-api's parseIsoTimestamp (exportController, #303 head).
+    // Verdicts of the API's own timestamp parser.
     const accepted = [
       '2026-05-11', '2026-05-11T10:00Z', '2026-05-11T10:00:00Z', '2026-05-11T10:00:00.123456789Z',
       '2026-05-11T10:00:00+0200', '2026-05-11T10:00:00-02:00', '2026-05-11T23:59:59.5+23:59',
@@ -707,15 +707,15 @@ describe('review round 2', () => {
   });
 });
 
-describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
-  it('N3: cited-by no longer claims completeness; points at relationSync', () => {
+describe('descriptions', () => {
+  it('cited-by no longer claims completeness; points at relationSync', () => {
     const d = byName.lex_cited_by.description;
     expect(d).not.toMatch(/are complete/);
     expect(d).toMatch(/relationSync/);
     expect(d).toMatch(/refreshed on read/);
   });
 
-  it('N9 (API 2.3.0): export billing is stated exactly; documentType is a case-insensitive exact label', () => {
+  it('API 2.3.0: export billing is stated exactly; documentType is a case-insensitive exact label', () => {
     const t = byName.lex_export;
     expect(t.description).toMatch(/1 credit per row returned, at least 1 per call/);
     expect(t.description).toMatch(/admitted for 1 credit/);
@@ -731,7 +731,7 @@ describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
     expect((byName.lex_update_webhook.inputSchema.url as any).description).toMatch(/public https URL/);
   });
 
-  it('N10: languages are validated without repeating the 24-code enum', () => {
+  it('languages are validated without repeating the 24-code enum', () => {
     const s = z.object(byName.lex_get_document.inputSchema);
     expect(s.safeParse({ celexNumber: '32016R0679', language: 'hu' }).success).toBe(true);
     expect(s.safeParse({ celexNumber: '32016R0679', language: 'xx' }).success).toBe(false);

@@ -1,5 +1,5 @@
-// Export failure endings (SDK contract §1.8, lex-api #303) and the
-// QUOTA_EXHAUSTED code (§1.2/§1.3, lex-api #304).
+// Export failure endings (SDK contract §1.8) and the
+// QUOTA_EXHAUSTED code (§1.2/§1.3).
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 

@@ -35,7 +35,7 @@ export const LANGUAGES = [
   'el', 'et', 'fi', 'ga', 'hr', 'hu', 'lt', 'lv', 'mt', 'sk', 'sl', 'sv',
 ] as const;
 
-/** Languages the semantic index holds (server/controllers/semanticController.js). */
+/** Languages the semantic index holds. */
 export const SEMANTIC_LANGUAGES = ['en', 'fr', 'de', 'es', 'it', 'sl', 'el', 'nl', 'pt', 'pl'] as const;
 
 export const DOCUMENT_TYPES = [
@@ -87,9 +87,8 @@ const celex = (what = 'CELEX number') =>
     .describe(`${what}, e.g. 32016R0679.`);
 
 // National-corpus ids (e.g. `AT-NOR-10001597`, `SI-JUD-UPRS-2025-I.U.727.2022.`):
-// a two-letter jurisdiction prefix, same as middleware/jurisdiction.js's
-// nationalIdParamGuard (`/^([A-Z]{2})-/`) uses to recognise them on the
-// citation graph. `includeNational`-aware citation tools accept either
+// a two-letter jurisdiction prefix, the same pattern (`/^([A-Z]{2})-/`) the
+// API uses to recognise them on the citation graph. `includeNational`-aware citation tools accept either
 // shape; document reads stay celex()-only (lex_get_national_document /
 // lex_list_national_documents cover national documents directly).
 const NATIONAL_ID_RE = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
@@ -118,8 +117,7 @@ const webhookUrl = (d: string) => z.string().trim().superRefine((v, ctx) => {
   const problem = webhookUrlProblem(v);
   if (problem) ctx.addIssue({ code: 'custom', message: problem });
 }).describe(d);
-// The export API's own checks (lex-api exportController parseIsoDate /
-// parseIsoTimestamp), mirrored exactly so the schema accepts what the server
+// The export API's own date/timestamp checks, mirrored exactly so the schema accepts what the server
 // accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
 // zone (Z, ±HH:MM or ±HHMM), seconds are optional, a fraction has 1–9 digits.
 const ISO_TS_RE = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2}))?$/;

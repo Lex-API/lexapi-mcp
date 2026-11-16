@@ -83,13 +83,13 @@ describe('MCP protocol (in-memory)', () => {
     expect(listed.find((t) => t.name === 'lex_update_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     expect(listed.find((t) => t.name === 'lex_delete_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
 
-    // N10: tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
+    // tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
     const listJson = JSON.stringify(listed);
     // Tripwire with headroom. v0.3.0's first cut was ~39.6k characters
     // (~10k tokens), trimmed to ~36.4k; v0.4.0 (2026-10-28) added 5
     // national-law tools (~7.5k, trimmed twice for size) plus `includeNational`
-    // on the 6 citation tools. Measured 46.43k at 064c008 (71 characters
-    // under the cap — no real headroom); trimmed in review to ~45.8k —
+    // on the 6 citation tools. Measured 46.43k (71 characters
+    // under the cap — no real headroom), then trimmed to ~45.8k —
     // fail if it creeps up from THAT without a reason, not on every new
     // sentence. v0.5.0 added lex_transposition and lex_counterparts
     // (~3.6k) and the four edge filters on the five graph tools (~4.3k,
@@ -98,7 +98,7 @@ describe('MCP protocol (in-memory)', () => {
     // v0.5.1 adds annotations.title to every tool: measured 57.4k.
     expect(listJson.length).toBeLessThan(58_500);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
-    // N11: instructions cover reading a known article on a past date.
+    // instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);
 
     // Invalid arguments are rejected by the SDK before any HTTP call.
@@ -117,8 +117,8 @@ describe('MCP protocol (in-memory)', () => {
   });
 });
 
-describe('tool call plumbing (S3)', () => {
-  it('F2: sends progress heartbeats with a progress token, but keeps the 55 s timeout (the client may not reset on progress)', async () => {
+describe('tool call plumbing', () => {
+  it('sends progress heartbeats with a progress token, but keeps the 55 s timeout (the client may not reset on progress)', async () => {
     const sent: unknown[] = [];
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
@@ -166,7 +166,7 @@ describe('tool call plumbing (S3)', () => {
   });
 });
 
-describe('Origin validation (N2)', () => {
+describe('Origin validation', () => {
   it('allows no-Origin requests; browser origins only when listed', () => {
     expect(originAllowed(undefined, {})).toBe(true);
     expect(originAllowed('https://evil.example', {})).toBe(false);
@@ -191,7 +191,7 @@ describe('Streamable HTTP (hosted server)', () => {
     await new Promise<void>((r) => http.close(() => r()));
   });
 
-  it('N2: rejects a disallowed browser Origin with 403', async () => {
+  it('rejects a disallowed browser Origin with 403', async () => {
     const r = await fetch(`${base}/v1`, { method: 'POST', headers: { origin: 'https://evil.example', authorization: 'Bearer lex_good', 'content-type': 'application/json' }, body: '{}' });
     expect(r.status).toBe(403);
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
@@ -224,7 +224,7 @@ describe('Streamable HTTP (hosted server)', () => {
   });
 
   for (const mb of [1.2, 8]) {
-    it(`F1: a ${mb} MB body gets a 413 the client actually receives (5/5), not a reset`, async () => {
+    it(`a ${mb} MB body gets a 413 the client actually receives (5/5), not a reset`, async () => {
       const body = Buffer.alloc(Math.round(mb * 1_000_000), 0x20);
       for (let i = 0; i < 5; i++) {
         const r = await fetch(`${base}/v1`, { method: 'POST', headers: { authorization: 'Bearer lex_good', 'content-type': 'application/json' }, body });
@@ -235,7 +235,7 @@ describe('Streamable HTTP (hosted server)', () => {
     });
   }
 
-  it('F1: a chunked (no Content-Length) oversized body also gets its 413', async () => {
+  it('a chunked (no Content-Length) oversized body also gets its 413', async () => {
     const port = Number(new URL(base).port);
     const status = await new Promise<number>((resolve, reject) => {
       const req = httpRequest({ host: '127.0.0.1', port, path: '/v1', method: 'POST', headers: { authorization: 'Bearer lex_good', 'content-type': 'application/json', 'transfer-encoding': 'chunked' } }, (res) => {
@@ -250,7 +250,7 @@ describe('Streamable HTTP (hosted server)', () => {
     expect(status).toBe(413);
   });
 
-  it('N1: a 413 closes the connection so the next keep-alive request is not corrupted', async () => {
+  it('a 413 closes the connection so the next keep-alive request is not corrupted', async () => {
     const agent = new Agent({ keepAlive: true, maxSockets: 1 });
     const port = Number(new URL(base).port);
     const send = (path: string, method: string, body?: Buffer) => new Promise<{ status: number; conn: string | undefined }>((resolve, reject) => {
