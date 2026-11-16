@@ -197,7 +197,7 @@ describe('Streamable HTTP (hosted server)', () => {
     expect(r.headers.get('access-control-allow-origin')).toBeNull();
   });
 
-  it('S4/F6: a malformed key is a 401 that says "malformed" (not "missing"), never echoed', async () => {
+  it('a malformed key is a 401 that says "malformed" (not "missing"), never echoed', async () => {
     // Node's HTTP parser already answers 400 to control characters in a header,
     // so what reaches us is whitespace inside the value (a two-line paste).
     for (const headers of [{ 'x-api-key': 'lex_SECRET lex_other' }, { authorization: 'Bearer lex_SECRET lex_other' }] as Array<Record<string, string>>) {

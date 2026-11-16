@@ -808,7 +808,7 @@ describe('cache ordering, proxy hops, throttle recovery, /health disclosure', ()
   it('/health never carries configuration values or secrets; traffic counters only behind LEXAPI_MCP_HEALTH_TOKEN', async () => {
     const { base, http } = await start();
     const cfg = http.oauth!.cfg;
-    await call(base, { authorization: `Bearer ${as.mint({ sub: 'r24' })}` });
+    await call(base, { authorization: `Bearer ${as.mint({ sub: 'hdr' })}` });
     const forbidden = [CLIENT_SECRET, HEALTH_TOKEN, cfg.issuer, cfg.clientId, cfg.resource, cfg.apiBase, cfg.tokenEndpoint, cfg.jwksUri, 'clientSecret', 'issuer'];
     const pubText = await fetch(`${base}/health`).then((x) => x.text());
     const opText = await fetch(`${base}/health`, { headers: { authorization: `Bearer ${HEALTH_TOKEN}` } }).then((x) => x.text());

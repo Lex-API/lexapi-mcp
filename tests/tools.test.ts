@@ -231,7 +231,7 @@ describe('lex_get_document', () => {
 });
 
 describe('lex_get_documents_batch / lex_get_metadata / lex_get_document_by_url', () => {
-  it('B1: batch + articleId returns the article text, not an outline', async () => {
+  it('batch + articleId returns the article text, not an outline', async () => {
     const { data } = await call('lex_get_documents_batch', { celexNumbers: ['32016R0679', '32018R1725'], articleId: '5' }, () => ({
       body: { success: true, requested: 2, processed: 2, successful: 2, failed: 0, documents: [fakeDocument(1, 3000), fakeDocument(1, 3000, { celex: '32018R1725' })], errors: [] },
     }));
@@ -241,7 +241,7 @@ describe('lex_get_documents_batch / lex_get_metadata / lex_get_document_by_url',
     }
   });
 
-  it('B1: batch + include returns those parts', async () => {
+  it('batch + include returns those parts', async () => {
     const { data } = await call('lex_get_documents_batch', { celexNumbers: ['32016R0679'], include: ['articles'] }, () => ({
       body: { success: true, documents: [fakeDocument(3, 100)], errors: [] },
     }));

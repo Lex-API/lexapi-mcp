@@ -69,7 +69,7 @@ describe('server.json (MCP registry manifest)', () => {
     }
   });
 
-  it('description is at or under the registry\'s 100-character limit (the release blocker this test exists for)', () => {
+  it('description is at or under the registry\'s 100-character limit', () => {
     expect(serverJson.description.length).toBeLessThanOrEqual(100);
     expect(serverJson.description.length).toBeGreaterThan(0);
   });

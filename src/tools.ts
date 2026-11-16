@@ -1034,7 +1034,7 @@ export const tools: ToolDef[] = [
         else if (isObj(l) && Object.keys(l).length === 1 && '_error' in l) serverError = l._error;
         else rows.push(l);
       }
-      // SDK contract §1.8: complete only with a `_done` trailer that does not
+      // An export is complete only with a `_done` trailer that does not
       // say `complete: false`, and no `_error` line. Anything else is a
       // partial export that must not be presented as the result.
       if (done === undefined || (isObj(done) && done.complete === false) || serverError !== undefined) {

@@ -494,13 +494,13 @@ export function shapeLegislationHit(r: unknown): Obj {
     language: r.language,
     snippet: r.snippet,
     text: r.text,
-    // Consolidated-text labelling (#284 §6) — kept verbatim.
+    // Consolidated-text labelling — kept verbatim.
     consolidated: r.consolidated,
     consolidatedAsOf: r.consolidatedAsOf,
     baseCelex: r.baseCelex,
     consolidatedNote: r.consolidatedNote,
     baseAct: isObj(r.baseAct) ? compact({ ...r.baseAct, score: round3(r.baseAct.score) }) : undefined,
-    // asOf resolution (#284 §7).
+    // asOf resolution.
     asOf: r.asOf,
     asOfResolved: r.asOfResolved,
     asOfReason: r.asOfReason,
