@@ -433,10 +433,10 @@ export class TokenExchanger {
   }
 
   /** Hold every new exchange back (a global slow-down). */
-  private backOff(kind: SlowDownKind, retryAfterS: number | undefined): void {
+  private backOff(kind: SlowDownKind, retryAfterS: number | undefined, now: number = this.now()): void {
     const t = this.throttle;
     t.consecutive += 1;
-    t.until = this.now() + this.holdMs(t.consecutive, retryAfterS);
+    t.until = now + this.holdMs(t.consecutive, retryAfterS);
     t.kind = kind;
   }
 
@@ -468,7 +468,7 @@ export class TokenExchanger {
       global = this.slowedSubs.size >= this.limits.slowDownGlobalAfterUsers;
     }
     if (global) {
-      this.backOff(kind, retryAfterS);
+      this.backOff(kind, retryAfterS, now);
       return { waitS: Math.ceil((this.throttle.until - now) / 1000), global };
     }
     const sub = caller.sub!;

@@ -12,6 +12,7 @@ import {
   shapeCitedBy,
   shapeCites,
   shapeContent,
+  shapeCounterparts,
   shapeDocument,
   shapeLegislation,
   shapeMetadata,
@@ -22,6 +23,8 @@ import {
   shapeNetwork,
   shapeRecent,
   shapeSearch,
+  shapeTransposition,
+  nodeFields,
   stripEnvelope,
   type View,
 } from './shape.js';
@@ -62,8 +65,14 @@ export const SUBDOMAINS = [
 ] as const;
 
 export const CITATION_TYPES = [
-  'reference', 'amendment', 'repeal', 'corrigendum', 'implementation', 'legal-basis', 'proposal',
+  'reference', 'amendment', 'repeal', 'corrigendum', 'implementation', 'legal-basis', 'proposal', 'transposition',
 ] as const;
+
+/** Where an edge comes from (API 2.11.0 CitationProvenance). */
+export const CITATION_PROVENANCES = ['notice', 'cellar', 'notice+cellar', 'cellar-nim', 'source', 'resolver'] as const;
+
+/** How a national edge's target was identified (API 2.11.0 CitationResolution). */
+export const CITATION_RESOLUTIONS = ['id', 'key', 'abbreviation', 'text-pattern'] as const;
 
 const CONTENT_PARTS = ['metadata', 'fullText', 'articles', 'recitals', 'paragraphs', 'sections', 'tables', 'annexes'] as const;
 
@@ -140,6 +149,36 @@ const oneOrMany = <T extends readonly [string, ...string[]]>(values: T, d: strin
     .refine((v) => (Array.isArray(v) ? v : [v]).every((x) => set.has(x)), `allowed: ${values.join(', ')}`)
     .describe(`${d} One or a list of: ${values.join(', ')}.`);
 };
+
+// A list filter sent comma-separated: an array, one value, or "a,b".
+const splitList = (v: string | string[]) =>
+  (Array.isArray(v) ? v : v.split(',')).map((x) => x.trim()).filter(Boolean);
+// The values are listed once, in the array's enum; a plain string ("a,b")
+// is accepted too and checked against the same set.
+const csvOf = <T extends readonly [string, ...string[]]>(values: T, d: string) => {
+  const set = new Set<string>(values);
+  return z.union([z.string(), z.array(z.enum(values)).min(1)])
+    .transform(splitList)
+    .refine((v) => v.length > 0 && v.every((x) => set.has(x)), `allowed: ${values.join(', ')}`)
+    .describe(d);
+};
+// Two-letter codes (lower-cased), e.g. ["eu","at"]. Which national codes
+// are live is the server's call (lex_national_coverage), not listed here.
+const codeList = (d: string) => z.union([z.string(), z.array(z.string()).min(1).max(30)])
+  .transform((v) => splitList(v).map((x) => x.toLowerCase()))
+  .refine((v) => v.length > 0 && v.length <= 30 && v.every((x) => /^[a-z]{2}$/.test(x)), 'two-letter codes, e.g. ["eu","at"]')
+  .describe(d);
+
+/** The edge filters shared by the graph tools (API 2.11.0). */
+const graphFilters = {
+  citationType: csvOf(CITATION_TYPES, 'Only these edge types.').optional(),
+  provenance: csvOf(CITATION_PROVENANCES, 'Edge origins (cellar-nim: a notified measure, not a finding of transposition). The last three: 400 while no country is live.').optional(),
+  jurisdictions: codeList('Neighbours in: "eu" and/or live national codes (national: BUSINESS+).').optional(),
+  resolution: csvOf(CITATION_RESOLUTIONS, 'National edges: match method.').optional(),
+};
+const titleLanguage = lang('Title language (default en).').optional();
+const unresolved = z.boolean().optional()
+  .describe('National id: add references that got no edge (100 shown).');
 
 const view = z.enum(['auto', 'outline', 'full']).default('auto').describe(
   'auto: the body if it fits maxChars, else an outline. full: body up to maxChars, then offset to continue.',
@@ -594,7 +633,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_coverage',
     title: 'National-law coverage',
     description:
-      "Countries with national-law coverage: live status, legislation/case-law coverage (counts, dates, courts), semantic-search availability, and sources with licence/attribution. Call this before any other national tool. Free.",
+      "Countries with national-law coverage: live status, legislation/case-law coverage (counts, dates, courts), semantic-search availability, citation-graph measurements (citationGraph: methods, rates, floors; null = not measured), and sources with licence/attribution. Call this before any other national tool. Free.",
     inputSchema: {},
     annotations: READ,
     handler: async (_a, client) => {
@@ -742,13 +781,14 @@ export const tools: ToolDef[] = [
     name: 'lex_cited_by',
     title: 'Documents citing a CELEX',
     description:
-      'Inbound citations: documents that cite, amend, correct, repeal, implement or are based on this act, with the edge type. For legislation, amendment / corrigendum / repeal edges are read from the Publications Office (Cellar) and refreshed on read when older than 7 days; if that refresh does not finish in ~2.5 s, relationSync.status is "pending" (or "skipped") and the stored edges are served — check relationSync before calling the list complete. Other edge types cover only documents LexAPI has extracted. includeNational adds national neighbours (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
+      'Inbound citations: documents that cite, amend, correct, repeal, implement, transpose or are based on this act, with the edge type and its provenance. For legislation, amendment / corrigendum / repeal edges are read from the Publications Office (Cellar) and refreshed on read when older than 7 days; if that refresh does not finish in ~2.5 s, relationSync.status is "pending" (or "skipped") and the stored edges are served — check relationSync before calling the list complete. Other edge types cover only documents LexAPI has extracted. Page until offset + limit >= totalEdges. includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
     inputSchema: {
       celexNumber: celexOrNationalId(),
-      citationType: z.enum(CITATION_TYPES).optional().describe('Only this edge type (e.g. "amendment" for the amending acts).'),
+      ...graphFilters,
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per page.'),
       offset: z.number().int().min(0).default(0).describe('Paging offset, in edges.'),
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -762,13 +802,15 @@ export const tools: ToolDef[] = [
     name: 'lex_cites',
     title: 'Documents a CELEX cites',
     description:
-      'Outbound citations: what this document references, amends, repeals, implements or is based on, with the edge type. Only populated for documents whose citations were extracted (lex_extract_citations). includeNational adds national neighbours (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
+      'Outbound citations: what this document references, amends, repeals, implements, transposes or is based on, with the edge type and its provenance. Only populated for documents whose citations were extracted (lex_extract_citations). includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
     inputSchema: {
       celexNumber: celexOrNationalId(),
-      citationType: z.enum(CITATION_TYPES).optional(),
+      ...graphFilters,
+      unresolved,
       limit: z.number().int().min(1).max(500).default(50),
       offset: z.number().int().min(0).default(0),
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -782,13 +824,15 @@ export const tools: ToolDef[] = [
     name: 'lex_citation_network',
     title: 'Citation neighbourhood of a CELEX',
     description:
-      'Both directions at once — documents this one cites and documents citing it — deduplicated, with edge types per neighbour; paging.citesTotal / citedByTotal give the full counts. includeNational adds national neighbours (BUSINESS+ only; also accepts a national id). Cost: 20 credits (prefer lex_cited_by / lex_cites at 1 credit when one direction is enough).',
+      'Both directions at once — documents this one cites and documents citing it — deduplicated, with edge types and provenance per neighbour; paging.citesTotal / citedByTotal give the full counts. includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id). Cost: 20 credits, refunded on a partial (timeout) answer (prefer lex_cited_by / lex_cites at 1 credit when one direction is enough).',
     inputSchema: {
       celexNumber: celexOrNationalId(),
-      citationType: z.enum(CITATION_TYPES).optional(),
+      ...graphFilters,
+      unresolved,
       limit: z.number().int().min(1).max(500).default(50).describe('Edges per direction.'),
       offset: z.number().int().min(0).default(0),
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
@@ -802,19 +846,29 @@ export const tools: ToolDef[] = [
     name: 'lex_citation_path',
     title: 'Citation path between two documents',
     description:
-      'Shortest chain of outbound citations from one document to another (e.g. how a judgment reaches a directive). found: false is a normal answer, not an error. includeNational follows national documents too (BUSINESS+ only; from/to also accept a national id). Cost: 20 credits.',
+      'Shortest chain of outbound citations from one document to another (e.g. how a judgment reaches a directive), optionally over filtered edges only. found: false is a normal answer, not an error. includeNational follows national documents of live countries too (BUSINESS+ only; from/to also accept a national id). Cost: 20 credits.',
     inputSchema: {
       from: celexOrNationalId('Start identifier'),
       to: celexOrNationalId('Target identifier'),
       maxDepth: z.number().int().min(1).max(8).default(3).describe('Max hops.'),
+      ...graphFilters,
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
-      const res = await client.citationPath(normCelex(a.from), normCelex(a.to), { maxDepth: a.maxDepth, includeNational: a.includeNational });
+      const res = await client.citationPath(normCelex(a.from), normCelex(a.to), {
+        maxDepth: a.maxDepth,
+        includeNational: a.includeNational,
+        citationType: a.citationType,
+        provenance: a.provenance,
+        jurisdictions: a.jurisdictions,
+        resolution: a.resolution,
+        language: a.language,
+      });
       const b = stripEnvelope(res.body);
       if (Array.isArray(b.path)) {
-        b.path = b.path.map((n) => (isObj(n) ? compact({ celex: n.celexNumber, title: n.title }) : n));
+        b.path = b.path.map((n) => (isObj(n) ? compact({ ...nodeFields(n), title: n.title }) : n));
       }
       return withNotice(res, compact(b));
     },
@@ -824,19 +878,29 @@ export const tools: ToolDef[] = [
     name: 'lex_related',
     title: 'Documents related by shared citations',
     description:
-      'Documents that cite the most of the same acts as this one (bibliographic coupling) — "what else deals with this". Needs the seed\'s outbound citations (lex_extract_citations). includeNational considers national documents too (BUSINESS+ only; also accepts a national id). Cost: 20 credits.',
+      'Documents that cite the most of the same acts as this one (bibliographic coupling) — "what else deals with this"; the edge filters narrow which shared citations count. Needs the seed\'s outbound citations (lex_extract_citations). includeNational considers national documents of live countries too (BUSINESS+ only; also accepts a national id). Cost: 20 credits.',
     inputSchema: {
       celexNumber: celexOrNationalId(),
       limit: z.number().int().min(1).max(50).default(10),
+      ...graphFilters,
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
+      language: titleLanguage,
     },
     annotations: READ,
     handler: async (a, client) => {
-      const res = await client.related(normCelex(a.celexNumber), { limit: a.limit, includeNational: a.includeNational });
+      const res = await client.related(normCelex(a.celexNumber), {
+        limit: a.limit,
+        includeNational: a.includeNational,
+        citationType: a.citationType,
+        provenance: a.provenance,
+        jurisdictions: a.jurisdictions,
+        resolution: a.resolution,
+        language: a.language,
+      });
       const b = stripEnvelope(res.body, ['method']);
       if (Array.isArray(b.related)) {
         b.related = b.related.map((r) => (isObj(r) ? compact({
-          celex: r.celexNumber,
+          ...nodeFields(r),
           title: r.title,
           sharedCount: r.sharedCount,
           sharedTargets: Array.isArray(r.sharedTargets) ? (r.sharedTargets as unknown[]).slice(0, 10) : undefined,
@@ -849,7 +913,7 @@ export const tools: ToolDef[] = [
   {
     name: 'lex_citation_stats',
     title: 'Citation graph statistics',
-    description: 'Totals for the whole LexAPI citation graph plus the 10 most-cited and 10 most-citing documents. includeNational counts national documents too (BUSINESS+ only). Cost: 20 credits.',
+    description: 'Totals for the whole LexAPI citation graph plus the 10 most-cited and 10 most-citing documents. includeNational counts national documents of live countries too and adds byJurisdiction, byProvenance and transposition (notified measures, and how many LexAPI holds) — BUSINESS+ only. Cost: 20 credits.',
     inputSchema: {
       includeNational: z.boolean().optional().describe('Add national documents (BUSINESS+ only).'),
     },
@@ -857,6 +921,49 @@ export const tools: ToolDef[] = [
     handler: async (a, client) => {
       const res = await client.citationStats({ includeNational: a.includeNational });
       return withNotice(res, stripEnvelope(res.body));
+    },
+  },
+
+  {
+    name: 'lex_transposition',
+    title: 'Notified national measures for an EU act',
+    description:
+      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely — say so when presenting it (the result\'s note). Every plan. On BUSINESS+ it also says, for live countries only, which measures LexAPI holds (id, resolved) and adds documents whose national source records the relation (provenance "source"); below that those fields are absent. termsRequired: true = the account must accept the national-source terms in the dashboard first. Keep source.cellar.attribution with anything republished. Output is bounded (limit, ~40,000 characters): page with the offset given in more. Cost: 5 credits per call (each offset page too); not an EU act = 404, settles at 1.',
+    inputSchema: {
+      celexNumber: celex('CELEX number of the EU act'),
+      jurisdictions: codeList('Only these countries, e.g. ["es","cz"] (EL = Greece, UK = United Kingdom); default all 28.').optional(),
+      resolvedOnly: z.boolean().optional().describe('Only measures resolved to a document LexAPI holds (BUSINESS+, live countries).'),
+      limit: z.number().int().min(1).max(200).default(50).describe('Measures shown, across countries.'),
+      offset: z.number().int().min(0).default(0).describe('Skip this many measures (value given in the previous result\'s more).'),
+      language: titleLanguage,
+    },
+    annotations: READ,
+    handler: async (a, client) => {
+      const res = await client.transposition(normCelex(a.celexNumber), {
+        jurisdictions: a.jurisdictions,
+        resolvedOnly: a.resolvedOnly,
+        language: a.language,
+      });
+      return withNotice(res, shapeTransposition(res, a.limit ?? 50, a.offset ?? 0));
+    },
+  },
+
+  {
+    name: 'lex_counterparts',
+    title: 'Counterparts of a national act in other countries',
+    description:
+      'A national document\'s counterparts in the other live countries, through the EU acts it transposes or implements (via), ranked: 1 = the national source records the relation; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned — check lex_national_coverage; a national id of a country not live 404s (nothing charged); any other 404 settles at 1 credit. A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts and ~40,000 characters): page with the offset given in more. Cost: 20 credits (each offset page too); a server timeout is refunded — narrow with jurisdictions.',
+    inputSchema: {
+      id: celexOrNationalId('National document id or EU act CELEX'),
+      jurisdictions: codeList('Only these live countries, e.g. ["si","es"]; default every live one.').optional(),
+      limit: z.number().int().min(1).max(50).default(10).describe('Counterparts shown per EU act.'),
+      offset: z.number().int().min(0).default(0).describe('Skip this many EU acts (value given in more).'),
+      language: titleLanguage,
+    },
+    annotations: READ,
+    handler: async (a, client) => {
+      const res = await client.counterparts(normCelex(a.id), { jurisdictions: a.jurisdictions, language: a.language });
+      return withNotice(res, shapeCounterparts(res, a.limit ?? 10, a.offset ?? 0, 25));
     },
   },
 

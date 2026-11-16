@@ -86,6 +86,11 @@ export function parseErrorBody(
   if (typeof j.jurisdiction === 'string') strayFields.jurisdiction = j.jurisdiction;
   if (typeof j.id === 'string') strayFields.id = j.id;
   if (typeof j.withdrawnAt === 'string') strayFields.withdrawnAt = j.withdrawnAt;
+  // The citation routes' legacy 400 INVALID_PARAMS names the parameter and
+  // its allowed values at the top level; the national-terms 403 its acceptUrl.
+  if (typeof j.param === 'string') strayFields.param = j.param;
+  if (Array.isArray(j.allowed)) strayFields.allowed = j.allowed;
+  if (typeof j.acceptUrl === 'string') strayFields.acceptUrl = j.acceptUrl;
   const jurisdictionFallback = Object.keys(strayFields).length ? strayFields : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
@@ -184,6 +189,10 @@ export function describeError(err: unknown): string {
       return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} The account's monthly LexAPI credit pool is exhausted. Tell the user: they can wait for the reset, buy a top-up pack or upgrade at ${DASHBOARD_URL} (plans: ${PRICING_URL}). Cheaper calls may still succeed (e.g. lex_resolve or lex_cites cost 1 credit); do not retry this call unchanged.`;
     }
     case 403:
+      if (err.code === 'NATIONAL_TERMS_NOT_ACCEPTED') {
+        const url = d && typeof d.acceptUrl === 'string' ? ` (${d.acceptUrl})` : '';
+        return `${head} The account must accept the national-source terms once in the LexAPI dashboard${url} before national documents are served. Tell the user; retrying before that will not help. Nothing was charged.`;
+      }
       return `${head} The account's plan or subscription does not allow this call (not a temporary error — do not retry). Tell the user which feature was refused; plans are compared at ${PRICING_URL}.`;
     case 404: {
       // National 404s take three shapes, none of which point at lex_resolve
@@ -221,6 +230,10 @@ export function describeError(err: unknown): string {
       if (err.code === 'NATIONAL_SEMANTIC_UNAVAILABLE') {
         const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'This country';
         return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
+      }
+      // lex_counterparts past its server-side budget (legacy shape, refunded).
+      if (err.code === 'TIMEOUT') {
+        return `${head} The lookup ran out of its server-side time budget; nothing was charged. Narrow it with jurisdictions, or retry later.`;
       }
       return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
     case 429: {
