@@ -590,7 +590,7 @@ export const tools: ToolDef[] = [
     name: 'lex_semantic_case_law',
     title: 'Semantic search over EU case law',
     description:
-      'Find CJEU / General Court judgments, orders and AG opinions by meaning. Returns cases with celex (feed to lex_get_document), case number, ECLI, court, date, score and a summary. hyde: true rewrites short keyword-style queries for better recall (15 credits instead of 5, +1–3 s; refunded to 5 if it falls back). Cost: 5 credits.',
+      'Find CJEU / General Court judgments, orders and AG opinions by meaning. Returns cases with celex (the id works with lex_get_document), case number, ECLI, court, date, score and a summary. hyde: true rewrites short keyword-style queries for better recall (15 credits instead of 5, +1–3 s; refunded to 5 if it falls back). Cost: 5 credits.',
     inputSchema: {
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
       limit: z.number().int().min(1).max(100).default(10).describe('Max cases (plan cap: FREE 10, STARTER 20, PROFESSIONAL 50, higher 100). One result per case.'),

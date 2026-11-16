@@ -180,7 +180,7 @@ export function describeError(err: unknown): string {
           if (typeof d.limit === 'number') parts.push(`the monthly allowance is ${d.limit} national-law calls`);
           if (typeof d.resetsAt === 'string') parts.push(`it resets at ${d.resetsAt} (start of next UTC month)`);
         }
-        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This is the account's monthly allowance of national-law calls on its plan, not the LexAPI credit pool — a top-up does not help. It resets as stated, or BUSINESS and higher plans have no separate national-law limit (${DASHBOARD_URL}, plans: ${PRICING_URL}). Not retryable unchanged.`;
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This is the account's monthly allowance of national-law calls on its plan, not the LexAPI credit pool — a top-up does not help. The allowance resets at the start of each UTC month; BUSINESS and higher plans have no separate national-law limit (${DASHBOARD_URL}, plans: ${PRICING_URL}). Not retryable unchanged.`;
       }
       const parts: string[] = [];
       if (d) {
