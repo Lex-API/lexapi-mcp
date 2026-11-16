@@ -97,7 +97,7 @@ export function consolidatedLabel(celex: unknown): Obj | undefined {
     consolidated: true,
     consolidatedAsOf: c.date,
     baseCelex: c.base,
-    consolidatedNote: `Consolidated text (the act with its amendments integrated, as of ${c.date}) — a documentation tool, not the authentic text. Cite the act as published in the Official Journal (${c.base}) and its amending acts.`,
+    consolidatedNote: `Consolidated text (the act with its amendments integrated, as of ${c.date}) — a documentation tool, not the authentic text. The authentic act is ${c.base} as published in the Official Journal, together with its amending acts.`,
   };
 }
 

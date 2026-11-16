@@ -286,7 +286,7 @@ export function describeError(err: unknown): string {
           if (typeof d.jurisdiction === 'string') parts.push(`jurisdiction ${d.jurisdiction}`);
           if (typeof d.withdrawnAt === 'string') parts.push(`withdrawn ${d.withdrawnAt}`);
         }
-        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This document was withdrawn by its source and LexAPI serves nothing of it — not even the title. Gone for good, not a temporary failure; not retryable. A withdrawal can be a legal takedown or a pseudonymisation fix, so cached copies of the content should not be kept or re-derived. Nothing was charged.`;
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This document was withdrawn by its source and LexAPI serves nothing of it — not even the title. Gone for good, not a temporary failure; not retryable. A withdrawal can be a legal takedown or a pseudonymisation fix, so cached copies of the content should not be kept or re-derived. LexAPI's Terms prohibit re-identifying people in anonymised or pseudonymised decisions. Nothing was charged.`;
       }
       return `${head} Gone. Not retryable; nothing was charged.`;
     }

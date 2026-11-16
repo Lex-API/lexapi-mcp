@@ -19,7 +19,7 @@ Citations and versions: every document is identified by its CELEX number and EUR
 
 LexAPI provides source texts; it does not assess whether anyone is compliant.
 
-National law (member-state legislation and case law): lex_national_coverage lists the live countries, their courts and source licensing; a country can be registered but not yet launched. National results carry sources/attribution, and on some plans national-law calls draw from a separate monthly allowance, reported in each response. Consolidated national texts are not authentic — only the official gazette is. Court decisions may be anonymised or pseudonymised by the source. French law (art. 33, loi n° 2019-222) prohibits using the identity of judges to evaluate, analyse, compare or predict their professional practices.
+National law (member-state legislation and case law): lex_national_coverage lists the live countries, their courts and source licensing; a country can be registered but not yet launched. National results carry sources/attribution; LexAPI's Terms require this attribution to be kept with republished content. On some plans national-law calls draw from a separate monthly allowance, reported in each response. Consolidated national texts are not authentic — only the official gazette is. Court decisions may be anonymised or pseudonymised by the source; LexAPI's Terms prohibit re-identifying people in anonymised or pseudonymised decisions. French law (art. 33, loi n° 2019-222) prohibits using the identity of judges to evaluate, analyse, compare or predict their professional practices.
 
 Each tool description states its cost in credits from the user's monthly pool. A 402 means credits are exhausted and a 429 means a rate limit; the error text gives the details.`;
 

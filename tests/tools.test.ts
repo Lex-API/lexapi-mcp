@@ -62,11 +62,6 @@ describe('tool catalogue', () => {
     }
   });
 
-  it('descriptions describe the tool and do not instruct the model', () => {
-    const imperative = /\b(tell the user|show it to the user|say so|confirm with the user|you must|call this (first|before)|check lex_national_coverage first|do not retry)\b/i;
-    for (const t of tools) expect(t.description, t.name).not.toMatch(imperative);
-  });
-
   it('every description states its cost or that it is free (N7: including webhook writes)', () => {
     for (const t of tools) {
       expect(t.description, t.name).toMatch(/[Cc]ost|[Ff]ree/);

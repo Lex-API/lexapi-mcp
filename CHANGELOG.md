@@ -7,7 +7,7 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 ### Changed
 - Every tool carries `annotations.title`. `lex_update_webhook` is annotated `destructiveHint: true` (it replaces the watch list and can remove search criteria).
 - Tool descriptions, server instructions and error messages describe behaviour and results instead of instructing the model.
-- `lex_counterparts`: the description and README say counterparts follow EU-act links recorded by the national source or notified to the Commission.
+- `lex_counterparts`: the description and README say counterparts follow EU-act links recorded by the national source or notified to the Commission as measures.
 - README: claude.ai menu path, privacy notice and support contact.
 
 ## 0.5.0 — 2026-11-16

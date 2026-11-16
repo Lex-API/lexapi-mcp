@@ -689,7 +689,7 @@ export const tools: ToolDef[] = [
     name: 'lex_get_national_document',
     title: 'Fetch a national document',
     description:
-      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; view "full" with offset returns the text. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew returns a distinct error (410) and nothing of it is served. A country not yet live returns 404 (live countries: lex_national_coverage). Cost: 5 reserved, settles at 1 (an unknown id too), so a pool under 5 returns 402. Counts against the national-law allowance on lower plans (see allowance). Each document carries attribution (source/licence) for the text.',
+      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; view "full" with offset returns the text. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew returns a distinct error (410) and nothing of it is served. A country not yet live returns 404 (live countries: lex_national_coverage). Cost: 5 reserved, settles at 1 (an unknown id too), so a pool under 5 returns 402. Counts against the national-law allowance on lower plans (see allowance). Each document carries attribution (source/licence); LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
@@ -710,7 +710,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
@@ -746,7 +746,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_legislation',
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. No asOf — current text only. A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence.',
+      'Find one country\'s legislation articles by meaning. No asOf — current text only. A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
@@ -927,7 +927,7 @@ export const tools: ToolDef[] = [
     name: 'lex_transposition',
     title: 'Notified national measures for an EU act',
     description:
-      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+ it also says, for live countries only, which measures LexAPI holds (id, resolved) and adds documents whose national source records the relation (provenance "source"); below that those fields are absent. termsRequired: true = the account has not yet accepted the national-source terms in the dashboard. source.cellar.attribution is the attribution for the Cellar data. Output is bounded (limit, ~40,000 characters); more gives the offset of the next page. Cost: 5 credits per call (each offset page too); not an EU act = 404, settles at 1.',
+      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+ it also says, for live countries only, which measures LexAPI holds (id, resolved) and adds documents whose national source records the relation (provenance "source"); below that those fields are absent. termsRequired: true = the account has not yet accepted the national-source terms in the dashboard. source.cellar.attribution is the attribution for the Cellar data; LexAPI\'s Terms require this attribution to be kept with republished content. Output is bounded (limit, ~40,000 characters); more gives the offset of the next page. Cost: 5 credits per call (each offset page too); not an EU act = 404, settles at 1.',
     inputSchema: {
       celexNumber: celex('CELEX number of the EU act'),
       jurisdictions: codeList('Only these countries, e.g. ["es","cz"] (EL = Greece, UK = United Kingdom); default all 28.').optional(),
@@ -951,7 +951,7 @@ export const tools: ToolDef[] = [
     name: 'lex_counterparts',
     title: 'Counterparts of a national act in other countries',
     description:
-      'A national document\'s counterparts in the other live countries, through the EU acts it is linked to (via): recorded by the national source, or a measure notified to the Commission, ranked: 1 = the national source records the relation; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned (see lex_national_coverage); a national id of a country not live returns 404 (nothing charged); any other 404 settles at 1 credit. A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts and ~40,000 characters); more gives the offset of the next page. Cost: 20 credits (each offset page too); a server timeout is refunded, and jurisdictions narrows the lookup.',
+      'A national document\'s counterparts in the other live countries, through the EU acts it is linked to (via), either by a link the national source records or by its notification to the Commission as a measure. Ranked: 1 = the national source records the relation; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned (see lex_national_coverage); a national id of a country not live returns 404 (nothing charged); any other 404 settles at 1 credit. A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts and ~40,000 characters); more gives the offset of the next page. Cost: 20 credits (each offset page too); a server timeout is refunded, and jurisdictions narrows the lookup.',
     inputSchema: {
       id: celexOrNationalId('National document id or EU act CELEX'),
       jurisdictions: codeList('Only these live countries, e.g. ["si","es"]; default every live one.').optional(),
@@ -1195,7 +1195,7 @@ export const tools: ToolDef[] = [
   {
     name: 'lex_test_webhook',
     title: 'Send a test delivery',
-    description: 'POST a signed webhook.test payload to the webhook URL now and report the endpoint\'s response, showing whether the endpoint is reachable and verifies signatures. Free.',
+    description: 'POST a signed webhook.test payload to the webhook URL now and report the endpoint\'s response, showing whether the endpoint is reachable and whether it accepts the signed payload. Free.',
     inputSchema: { id: z.string().trim().min(1).max(64) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     write: true,

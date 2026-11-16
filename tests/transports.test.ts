@@ -74,6 +74,14 @@ describe('MCP protocol (in-memory)', () => {
     expect(Object.keys(asOf.inputSchema.properties ?? {})).toContain('asOf');
     expect(asOf.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
     expect(listed.every((t) => typeof t.title === 'string' && t.title.length > 0)).toBe(true);
+    for (const t of listed) {
+      const def = tools.find((d) => d.name === t.name)!;
+      expect(t.annotations, t.name).toEqual({ title: def.title, ...def.annotations });
+      expect(typeof t.annotations?.readOnlyHint, t.name).toBe('boolean');
+      if (!t.annotations?.readOnlyHint) expect(typeof t.annotations?.destructiveHint, t.name).toBe('boolean');
+    }
+    expect(listed.find((t) => t.name === 'lex_update_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(listed.find((t) => t.name === 'lex_delete_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
 
     // N10: tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
     const listJson = JSON.stringify(listed);
