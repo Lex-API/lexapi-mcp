@@ -74,6 +74,14 @@ describe('MCP protocol (in-memory)', () => {
     expect(Object.keys(asOf.inputSchema.properties ?? {})).toContain('asOf');
     expect(asOf.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
     expect(listed.every((t) => typeof t.title === 'string' && t.title.length > 0)).toBe(true);
+    for (const t of listed) {
+      const def = tools.find((d) => d.name === t.name)!;
+      expect(t.annotations, t.name).toEqual({ title: def.title, ...def.annotations });
+      expect(typeof t.annotations?.readOnlyHint, t.name).toBe('boolean');
+      if (!t.annotations?.readOnlyHint) expect(typeof t.annotations?.destructiveHint, t.name).toBe('boolean');
+    }
+    expect(listed.find((t) => t.name === 'lex_update_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(listed.find((t) => t.name === 'lex_delete_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
 
     // N10: tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
     const listJson = JSON.stringify(listed);
@@ -87,10 +95,11 @@ describe('MCP protocol (in-memory)', () => {
     // (~3.6k) and the four edge filters on the five graph tools (~4.3k,
     // each filter's values listed once, in its enum) and the title
     // `language` on the seven citation tools that take it: measured 55.4k.
-    expect(listJson.length).toBeLessThan(57_000);
+    // v0.5.1 adds annotations.title to every tool: measured 57.4k.
+    expect(listJson.length).toBeLessThan(58_500);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
-    expect(client.getInstructions()).toMatch(/consolidated version for that date/);
+    expect(client.getInstructions()).toMatch(/consolidated version for a date/);
 
     // Invalid arguments are rejected by the SDK before any HTTP call.
     const before = seen.length;

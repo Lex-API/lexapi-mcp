@@ -54,6 +54,12 @@ describe('tool catalogue', () => {
       expect(t.annotations.openWorldHint).toBe(true);
     }
     expect(byName.lex_delete_webhook.annotations.destructiveHint).toBe(true);
+    expect(byName.lex_update_webhook.annotations.destructiveHint).toBe(true);
+    for (const t of tools) {
+      expect(t.title, t.name).toBeTruthy();
+      expect(t.name.length, t.name).toBeLessThanOrEqual(64);
+      if (!t.annotations.readOnlyHint) expect(typeof t.annotations.destructiveHint, t.name).toBe('boolean');
+    }
   });
 
   it('every description states its cost or that it is free (N7: including webhook writes)', () => {
@@ -338,7 +344,7 @@ describe('lex_semantic_legislation', () => {
     expect(hit).not.toHaveProperty('metadata');
     expect(data.asOf).toBe('2019-06-01');
     expect(data.asOfSummary).toEqual({ liveFetches: 1, unresolved: 0 });
-    expect(data.citing).toMatch(/cite the authentic act/);
+    expect(data.citing).toMatch(/The authentic act is baseCelex/);
     expect(data).not.toHaveProperty('asOfCaveat');
   });
 
@@ -363,7 +369,7 @@ describe('lex_semantic_legislation', () => {
     expect(c.unavailable).toEqual(['32006R1907 art_1 (article_not_in_version)']);
     expect(c.guidance.join(' ')).toMatch(/not in force on 2019-06-01.*that is the answer/);
     expect(c.guidance.join(' ')).toMatch(/call again shortly/);
-    expect(c.guidance.join(' ')).toMatch(/tell the user/);
+    expect(c.guidance.join(' ')).toMatch(/credit pool could not cover/);
     expect(data).not.toHaveProperty('citing');
   });
 
@@ -607,7 +613,7 @@ describe('webhook tools', () => {
     }));
     expect(calls[0].body).toEqual({ name: 'Chemicals', url: 'https://example.com/h', watchCelex: ['32006R1907'] });
     expect(data.webhook.secret).toBe('abc');
-    expect(data.important).toMatch(/only once/);
+    expect(data.important).toMatch(/only in this response/);
   });
 
   it('criteria are strict (unknown keys are refused, as the API would)', () => {

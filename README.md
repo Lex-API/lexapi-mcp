@@ -12,7 +12,7 @@ The server is hosted at **`https://mcp.lex-api.com/v1`** (Streamable HTTP). Add 
 
 ### claude.ai and Claude Desktop
 
-*Settings → Connectors → Add custom connector*, name it `LexAPI`, URL `https://mcp.lex-api.com/v1`, then *Connect* and sign in. Connectors added on claude.ai are also available in Claude Desktop (same account).
+*Customize → Connectors → Add custom connector*, name it `LexAPI`, URL `https://mcp.lex-api.com/v1`, then *Connect* and sign in. Connectors added on claude.ai are also available in Claude Desktop (same account).
 
 ### Claude Code
 
@@ -91,7 +91,7 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_citation_stats` | Citation graph totals and most-cited documents. `includeNational` counts national documents (BUSINESS+). | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
 | `lex_transposition` | The measures member states notified to the Commission for an EU act, by country (Cellar records; every plan). A notification is not a finding that the measure transposes the act. On BUSINESS+ it also says which measures LexAPI holds in live countries. | 5 |
-| `lex_counterparts` | A national act's counterparts in the other live countries, through the EU acts it transposes or implements (BUSINESS+). | 20 |
+| `lex_counterparts` | A national act's counterparts in the other live countries, through the EU acts it is linked to, either by a link the national source records or by its notification to the Commission as a measure (BUSINESS+). | 20 |
 | `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
 | `lex_national_coverage` | Which countries' national law LexAPI covers and what's live in each (sources, licences, attribution). Call first. | free |
 | `lex_list_national_documents` | Browse a country's national legislation/case law by title or type; cursor paging past the first 1,000 rows. | 3 per call |
@@ -104,7 +104,7 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 
 ### National law
 
-`lex_national_coverage`, `lex_list_national_documents`, `lex_get_national_document`, `lex_national_semantic_case_law` and `lex_national_semantic_legislation` cover member-state legislation and case law alongside the EU_LAW tools above. A country can be registered on LexAPI before it is made available to customers — always call `lex_national_coverage` first; the other tools answer an error for a country that isn't live yet. The citation-graph tools (`lex_cited_by`, `lex_cites`, `lex_citation_network`, `lex_citation_path`, `lex_related`, `lex_citation_stats`) accept national document ids directly (e.g. `"AT-NOR-12345"`) and an `includeNational` option to pull in national neighbours — BUSINESS, SCALE and ENTERPRISE only, 403 below that. National results have the same fields in every country (LexAPI API 2.8.0): `documentKind` (`act` | `decision`) everywhere, and on a decision `court`, `chamber`, `caseNumbers` and `citedNorms` — whatever the source calls them. Every national result carries `attribution` (the official source and its licence, e.g. RIS, gesetze-im-internet.de, Normattiva, Légifrance/Judilibre, the Rechtspraak open data) — show it to the user alongside anything quoted. On FREE/STARTER/PROFESSIONAL plans, national-law calls also draw from a separate monthly allowance (reported as `allowance` on each response); BUSINESS and higher have no separate limit. A document its source withdrew (a takedown, a pseudonymisation fix) answers a distinct error — nothing of it is served, not even the title; the model is told not to retry and to drop any cached copy. When the national index could not complete a semantic search, the result carries `partial: true` (`partialReason: "SEARCH_INCOMPLETE"`) and a `hint` — results may be incomplete; with nothing left to return the tool answers an error instead (a `503` retried after its `Retry-After`, or a `422 NATIONAL_SEMANTIC_FILTER_UNREACHABLE`: rephrase or change the filters), never an empty "no matches".
+`lex_national_coverage`, `lex_list_national_documents`, `lex_get_national_document`, `lex_national_semantic_case_law` and `lex_national_semantic_legislation` cover member-state legislation and case law alongside the EU_LAW tools above. A country can be registered on LexAPI before it is made available to customers — always call `lex_national_coverage` first; the other tools answer an error for a country that isn't live yet. The citation-graph tools (`lex_cited_by`, `lex_cites`, `lex_citation_network`, `lex_citation_path`, `lex_related`, `lex_citation_stats`) accept national document ids directly (e.g. `"AT-NOR-12345"`) and an `includeNational` option to pull in national neighbours — BUSINESS, SCALE and ENTERPRISE only, 403 below that. National results have the same fields in every country (LexAPI API 2.8.0): `documentKind` (`act` | `decision`) everywhere, and on a decision `court`, `chamber`, `caseNumbers` and `citedNorms` — whatever the source calls them. Every national result carries `attribution` (the official source and its licence, e.g. RIS, gesetze-im-internet.de, Normattiva, Légifrance/Judilibre, the Rechtspraak open data) — show it to the user alongside anything quoted. On FREE/STARTER/PROFESSIONAL plans, national-law calls also draw from a separate monthly allowance (reported as `allowance` on each response); BUSINESS and higher have no separate limit. A document its source withdrew (a takedown, a pseudonymisation fix) answers a distinct error — nothing of it is served, not even the title; the error says it is not retryable and that cached copies should not be kept. When the national index could not complete a semantic search, the result carries `partial: true` (`partialReason: "SEARCH_INCOMPLETE"`) and a `hint` — results may be incomplete; with nothing left to return the tool answers an error instead (a `503` retried after its `Retry-After`, or a `422 NATIONAL_SEMANTIC_FILTER_UNREACHABLE`: rephrase or change the filters), never an empty "no matches".
 
 ### Citation-graph filters and provenance
 
@@ -155,6 +155,11 @@ Sign in with LexAPI is a feature of the hosted server at `https://mcp.lex-api.co
 - **`LexAPI error 429`** — the per-minute rate limit of your key (FREE: 15 per minute). Short waits are retried once automatically; otherwise the message says how long to wait.
 - **`LexAPI error 403`** — the plan doesn't include the feature (e.g. export below BUSINESS, or semantic search on a legacy pre-credits FREE plan).
 - **`LexAPI error 400` creating a webhook** — the details name the problem (unsupported criteria, a watch list over the plan limit, or the plan's webhook limit; FREE has none).
+
+## Privacy and support
+
+- Privacy notice: [lex-api.com/privacy](https://lex-api.com/privacy?ref=npm-mcp)
+- Support: [support@lex-api.com](mailto:support@lex-api.com) · [lex-api.com/support](https://lex-api.com/support?ref=npm-mcp)
 
 ## Training data
 

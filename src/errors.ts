@@ -144,13 +144,13 @@ export function describeError(err: unknown): string {
   if (err instanceof UpstreamAuthError) {
     switch (err.kind) {
       case 'invalid_token':
-        return `LexAPI sign-in expired or was revoked (${err.description}). The user must reconnect LexAPI in their MCP client (sign in again); retrying with the same sign-in will not help.`;
+        return `LexAPI sign-in expired or was revoked (${err.description}). Reconnecting LexAPI in the MCP client (signing in again) restores access; retrying with the same sign-in does not.`;
       case 'rate_limited':
         return `LexAPI sign-in is rate limited right now.${err.retryAfterSeconds !== undefined ? ` Wait ${err.retryAfterSeconds} s before calling again.` : ' Wait a little before calling again.'}`;
       case 'upstream':
         return `LexAPI sign-in could not be checked right now (${err.description}). Retry in a minute; if it persists, status is at https://lex-api.com/status.`;
       case 'api_rejected':
-        return `LexAPI refused this connection's access (${err.description}). Ask the user to disconnect and reconnect LexAPI in their MCP client; if that does not help, contact support@lex-api.com.`;
+        return `LexAPI refused this connection's access (${err.description}). Disconnecting and reconnecting LexAPI in the MCP client may fix it; otherwise support@lex-api.com can help.`;
       default:
         return `LexAPI sign-in is temporarily unavailable on this server (${err.kind}). This is not the user's fault and signing in again will not help; retry later or use an API key (https://lex-api.com/dashboard?ref=mcp).`;
     }
@@ -169,7 +169,7 @@ export function describeError(err: unknown): string {
     case 400:
       return `${head}${detailsLine(err.details)} The request was rejected before any work was done and its credits were refunded. Fix the arguments and call again.`;
     case 401:
-      return `${head} The LexAPI API key is missing, wrong, or revoked. Ask the user to check the key configured for this MCP server (LEXAPI_API_KEY, or the Authorization header for the hosted server) or create a new one at ${DASHBOARD_URL}.`;
+      return `${head} The LexAPI API key is missing, wrong, or revoked. Check the key configured for this MCP server (LEXAPI_API_KEY, or the Authorization header for the hosted server), or create a new one at ${DASHBOARD_URL}.`;
     case 402: {
       // The monthly allowance of national-law calls for FREE/STARTER/
       // PROFESSIONAL plans — a separate counter from the
@@ -180,7 +180,7 @@ export function describeError(err: unknown): string {
           if (typeof d.limit === 'number') parts.push(`the monthly allowance is ${d.limit} national-law calls`);
           if (typeof d.resetsAt === 'string') parts.push(`it resets at ${d.resetsAt} (start of next UTC month)`);
         }
-        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This is the account's monthly allowance of national-law calls on its plan, not the LexAPI credit pool — a top-up does not help. Tell the user: wait for the reset, or upgrade to BUSINESS or higher, which has no separate national-law limit (${DASHBOARD_URL}, plans: ${PRICING_URL}). Do not retry this call unchanged.`;
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This is the account's monthly allowance of national-law calls on its plan, not the LexAPI credit pool — a top-up does not help. The allowance resets at the start of each UTC month; BUSINESS and higher plans have no separate national-law limit (${DASHBOARD_URL}, plans: ${PRICING_URL}). Not retryable unchanged.`;
       }
       const parts: string[] = [];
       if (d) {
@@ -188,14 +188,14 @@ export function describeError(err: unknown): string {
         if (typeof d.available === 'number') parts.push(`${d.available} are available`);
         if (typeof d.resetsAt === 'string') parts.push(`the monthly pool resets at ${d.resetsAt}`);
       }
-      return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} The account's monthly LexAPI credit pool is exhausted. Tell the user: they can wait for the reset, buy a top-up pack or upgrade at ${DASHBOARD_URL} (plans: ${PRICING_URL}). Cheaper calls may still succeed (e.g. lex_resolve or lex_cites cost 1 credit); do not retry this call unchanged.`;
+      return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} The account's monthly LexAPI credit pool is exhausted. Options: wait for the reset, buy a top-up pack or upgrade at ${DASHBOARD_URL} (plans: ${PRICING_URL}). Cheaper calls may still succeed (e.g. lex_resolve or lex_cites cost 1 credit); this call is not retryable unchanged.`;
     }
     case 403:
       if (err.code === 'NATIONAL_TERMS_NOT_ACCEPTED') {
         const url = d && typeof d.acceptUrl === 'string' ? ` (${d.acceptUrl})` : '';
-        return `${head} The account must accept the national-source terms once in the LexAPI dashboard${url} before national documents are served. Tell the user; retrying before that will not help. Nothing was charged.`;
+        return `${head} The account must accept the national-source terms once in the LexAPI dashboard${url} before national documents are served; retrying before that does not help. Nothing was charged.`;
       }
-      return `${head} The account's plan or subscription does not allow this call (not a temporary error — do not retry). Tell the user which feature was refused; plans are compared at ${PRICING_URL}.`;
+      return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). Plans are compared at ${PRICING_URL}.`;
     case 404: {
       // National 404s take three shapes, none of which point at lex_resolve
       // or lex_search (both EU-only): the typed document-id miss (`details:
@@ -226,7 +226,7 @@ export function describeError(err: unknown): string {
         const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'this country';
         return `${head} Semantic search is not available for ${jur} yet — check semanticSearch in lex_national_coverage's output before retrying. lex_list_national_documents and lex_get_national_document still work there. Not retryable; nothing was charged.`;
       }
-      return `${head} The account's current state does not allow this action; tell the user (it is not fixed by retrying).`;
+      return `${head} The account's current state does not allow this action (not fixed by retrying).`;
     case 503:
       // National semantic index temporarily down (same source as 409 above).
       if (err.code === 'NATIONAL_SEMANTIC_UNAVAILABLE') {
@@ -237,7 +237,7 @@ export function describeError(err: unknown): string {
           const wait = err.retryAfterSeconds;
           return wait !== undefined
             ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry in ${wait} s.`
-            : `${head} ${jur}'s national semantic index has repeatedly been unable to complete this search — this is NOT a "no matches" answer; nothing was charged. Do not retry right away: try again later, or rephrase or narrow the query.`;
+            : `${head} ${jur}'s national semantic index has repeatedly been unable to complete this search — this is NOT a "no matches" answer; nothing was charged. An immediate retry is unlikely to help; try again later, or rephrase or narrow the query.`;
         }
         return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
       }
@@ -268,9 +268,9 @@ export function describeError(err: unknown): string {
           : /daily/i.test(err.message)
             ? 'the daily call quota of this (legacy) plan'
             : 'a usage quota of this plan';
-        return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — do not retry, tell the user. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
+        return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — not retryable until then. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
       }
-      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Avoid parallel calls; a higher plan raises the per-minute limit (${PRICING_URL}).`;
+      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Parallel calls count against the same limit; a higher plan raises the per-minute limit (${PRICING_URL}).`;
     }
     case 410: {
       // A national document its source withdrew — a
@@ -286,7 +286,7 @@ export function describeError(err: unknown): string {
           if (typeof d.jurisdiction === 'string') parts.push(`jurisdiction ${d.jurisdiction}`);
           if (typeof d.withdrawnAt === 'string') parts.push(`withdrawn ${d.withdrawnAt}`);
         }
-        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This document was withdrawn by its source and LexAPI serves nothing of it — not even the title. Gone for good, not a temporary failure: do not retry. If you or the user were holding a cached copy, drop it — a withdrawal can be a legal takedown or a pseudonymisation fix, and keeping or re-deriving the content (including trying to identify who it was about) would defeat that. Nothing was charged.`;
+        return `${head}${parts.length ? ` (${parts.join(', ')}).` : ''} This document was withdrawn by its source and LexAPI serves nothing of it — not even the title. Gone for good, not a temporary failure; not retryable. A withdrawal can be a legal takedown or a pseudonymisation fix, so cached copies of the content should not be kept or re-derived. LexAPI's Terms prohibit re-identifying people in anonymised or pseudonymised decisions. Nothing was charged.`;
       }
       return `${head} Gone. Not retryable; nothing was charged.`;
     }

@@ -97,7 +97,7 @@ export function consolidatedLabel(celex: unknown): Obj | undefined {
     consolidated: true,
     consolidatedAsOf: c.date,
     baseCelex: c.base,
-    consolidatedNote: `Consolidated text (the act with its amendments integrated, as of ${c.date}) — a documentation tool, not the authentic text. Cite the act as published in the Official Journal (${c.base}) and its amending acts.`,
+    consolidatedNote: `Consolidated text (the act with its amendments integrated, as of ${c.date}) — a documentation tool, not the authentic text. The authentic act is ${c.base} as published in the Official Journal, together with its amending acts.`,
   };
 }
 
@@ -521,7 +521,7 @@ export function shapeLegislation(res: LexResponse<Json>): Obj {
     results,
     hint: b.hint,
     citing: anyConsolidated
-      ? 'Some hits are consolidated texts (consolidated: true, or asOfVersion.kind "consolidated"): they are documentation tools without legal force. Quote them for reading, but cite the authentic act (baseCelex / baseAct.law_id) as published in the Official Journal, plus the amending acts where relevant.'
+      ? 'Some hits are consolidated texts (consolidated: true, or asOfVersion.kind "consolidated"): they are documentation tools without legal force. The authentic act is baseCelex / baseAct.law_id as published in the Official Journal, together with the amending acts where relevant.'
       : undefined,
     asOfCaveat: b.asOf ? asOfCaveat(results, String(b.asOf)) : undefined,
   });
@@ -540,7 +540,7 @@ const AS_OF_USER_ACTION = new Set(['insufficient_credits']);
  * hit carries the LATEST text; what the model should do differs:
  *   - not in force on the date → that IS the answer (say so);
  *   - transient → retry shortly, or with a smaller limit;
- *   - credits → tell the user;
+ *   - credits → the pool could not pay for the fetch;
  *   - anything else (no text in that version, language, article missing…) →
  *     the version in force could not be read; don't quote it as of that date.
  */
@@ -556,10 +556,10 @@ export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
     else groups.unavailable.push(id);
   }
   const guidance: string[] = [];
-  if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; say so, and do not quote their text as the law on that date.`);
+  if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; their returned text is not the law on that date.`);
   if (groups.retryable.length) guidance.push('retryable: the version in force could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
-  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version in force — tell the user.');
-  if (groups.unavailable.length) guidance.push(`unavailable: the version in force on ${asOf} could not be read (see asOfReason) — do not present the returned text as the law on that date.`);
+  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version in force.');
+  if (groups.unavailable.length) guidance.push(`unavailable: the version in force on ${asOf} could not be read (see asOfReason); the returned text is not the law on that date.`);
   if (!guidance.length) return undefined;
   return compact({
     note: `Unresolved hits carry the LATEST text, not the text in force on ${asOf}.`,

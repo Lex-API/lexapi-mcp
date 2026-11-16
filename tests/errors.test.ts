@@ -37,14 +37,14 @@ describe('describeError — actionable messages', () => {
     expect(text).toContain('2 are available');
     expect(text).toContain('2026-11-01T00:00:00.000Z');
     expect(text).toMatch(/top-up/);
-    expect(text).toMatch(/do not retry/);
+    expect(text).toMatch(/not retryable unchanged/);
   });
 
   it('S1: legacy daily quota 429 without Retry-After → quota until resetsAt, no "wait a minute"', () => {
     const t = describeError(new LexAPIError(429, 'Daily quota exceeded', 'Daily quota exceeded: You have used all 100 calls.', { current: 100, limit: 100, resetsAt: '2026-10-27T00:00:00.000Z' }));
     expect(t).toMatch(/daily call quota/);
     expect(t).toContain('until 2026-10-27T00:00:00.000Z');
-    expect(t).toMatch(/do not retry, tell the user/);
+    expect(t).toMatch(/not retryable until then/);
     expect(t).not.toMatch(/Wait about a minute/);
     expect(t).not.toContain('..');
   });
