@@ -91,7 +91,7 @@ Every call is billed from your LexAPI credit pool exactly like the REST endpoint
 | `lex_citation_stats` | Citation graph totals and most-cited documents. `includeNational` counts national documents (BUSINESS+). | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
 | `lex_transposition` | The measures member states notified to the Commission for an EU act, by country (Cellar records; every plan). A notification is not a finding that the measure transposes the act. On BUSINESS+ it also says which measures LexAPI holds in live countries. | 5 |
-| `lex_counterparts` | A national act's counterparts in the other live countries, through the EU acts it transposes or implements (BUSINESS+). | 20 |
+| `lex_counterparts` | A national act's counterparts in the other live countries, through the EU acts it is linked to: recorded by the national source, or a measure notified to the Commission (BUSINESS+). | 20 |
 | `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
 | `lex_national_coverage` | Which countries' national law LexAPI covers and what's live in each (sources, licences, attribution). Call first. | free |
 | `lex_list_national_documents` | Browse a country's national legislation/case law by title or type; cursor paging past the first 1,000 rows. | 3 per call |
