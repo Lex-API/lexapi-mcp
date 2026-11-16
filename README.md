@@ -156,6 +156,10 @@ Sign in with LexAPI is a feature of the hosted server at `https://mcp.lex-api.co
 - **`LexAPI error 403`** — the plan doesn't include the feature (e.g. export below BUSINESS, or semantic search on a legacy pre-credits FREE plan).
 - **`LexAPI error 400` creating a webhook** — the details name the problem (unsupported criteria, a watch list over the plan limit, or the plan's webhook limit; FREE has none).
 
+## Training data
+
+Using LexAPI content to train, fine-tune or evaluate models needs a separate licence ([Terms §6](https://lex-api.com/terms?ref=npm-mcp#acceptable-use)). [Arieta Data](https://data.arietalabs.com/?ref=npm-mcp), a sister product from Arieta Labs, licenses datasets drawn from the same corpus for training, retrieval and evaluation.
+
 ## Development
 
 ```bash
