@@ -92,7 +92,7 @@ describe('QUOTA_EXHAUSTED and top-level codes', () => {
     expect(err.retryAfterSeconds).toBeUndefined();
     expect(err.resetsAt).toBe('2026-10-27T00:00:00.000Z');
     const t = describeError(err);
-    expect(t).toContain('exhausted until 2026-10-27T00:00:00.000Z — do not retry, tell the user');
+    expect(t).toContain('exhausted until 2026-10-27T00:00:00.000Z — not retryable until then');
     expect(t).toMatch(/daily call quota/);
     expect(t).not.toMatch(/Per-minute/);
   });

@@ -13,15 +13,15 @@ export const PACKAGE_NAME = 'lexapi-mcp';
  */
 export const SERVER_INSTRUCTIONS = `LexAPI: EU law from EUR-Lex, the CJEU and the Official Journal — legislation parsed to article level, case law, a typed citation graph and semantic search.
 
-Workflow: identify the act (lex_semantic_legislation / lex_semantic_case_law for concepts, lex_search for titles and filters, lex_resolve for URLs/ELI/ECLI), then read it with lex_get_document — large documents return an outline first; fetch the article you need with articleId. Amendments: lex_cited_by with citationType "amendment". Member-state measures for an EU act: lex_transposition — these are notifications to the Commission, not findings that a measure transposes the act (or does so completely); never present them as such.
+Finding and reading: lex_semantic_legislation / lex_semantic_case_law search by meaning, lex_search by title and filters, and lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers. lex_get_document reads a document; large documents return an outline first, and articleId returns one article. Amendments are lex_cited_by edges with citationType "amendment". lex_transposition lists the measures member states notified to the Commission for an EU act; these are notifications, not findings that a measure transposes the act (or does so completely).
 
-Citing: always give the CELEX number (and the EUR-Lex link). Consolidated texts (CELEX 0…-YYYYMMDD, or hits labelled consolidated: true) are documentation tools without legal force — quote them, but cite the authentic act as published in the Official Journal (baseCelex). For the law on a past date use lex_semantic_legislation with asOf; trust a hit as the text in force on that date only when asOfResolved is true. For a known article on a past date when you already know the consolidated version for that date (CELEX 0…-YYYYMMDD; lex_get_metadata and textAvailability show latestConsolidated), read it directly with lex_get_document; otherwise asOf is the route that resolves the version in force. lex_document_versions / lex_get_document_version are LexAPI's fetch snapshots, not in-force law.
+Citations and versions: every document is identified by its CELEX number and EUR-Lex link. Consolidated texts (CELEX 0…-YYYYMMDD, or hits labelled consolidated: true) are documentation without legal force; the authentic act is the one published in the Official Journal (baseCelex). lex_semantic_legislation with asOf returns the law in force on a past date; a hit carries the text in force on that date only when asOfResolved is true. When the consolidated version for a date is known (CELEX 0…-YYYYMMDD; lex_get_metadata and textAvailability show latestConsolidated), lex_get_document reads it directly; otherwise asOf resolves the version in force. lex_document_versions / lex_get_document_version are LexAPI's fetch snapshots, not in-force law.
 
-LexAPI provides source texts; it does not decide whether anyone is compliant — leave legal conclusions to the user and their advisers.
+LexAPI provides source texts; it does not assess whether anyone is compliant.
 
-National law (member-state legislation and case law): call lex_national_coverage before any other national tool — a country can be registered but not yet launched, and availability, courts and source licensing differ by country. Always carry the sources/attribution it and the national tools return through to the user; national-law calls also draw from a separate monthly allowance on some plans, reported in each tool's response. Consolidated national texts are not authentic — only the official gazette is; never try to re-identify parties a court anonymised or pseudonymised; for French decisions, never evaluate, compare or predict individual judges (art. 33, loi n° 2019-222).
+National law (member-state legislation and case law): lex_national_coverage lists the live countries, their courts and source licensing; a country can be registered but not yet launched. National results carry sources/attribution, and on some plans national-law calls draw from a separate monthly allowance, reported in each response. Consolidated national texts are not authentic — only the official gazette is. Court decisions may be anonymised or pseudonymised by the source. French law (art. 33, loi n° 2019-222) prohibits using the identity of judges to evaluate, analyse, compare or predict their professional practices.
 
-Costs come from the user's monthly credit pool and are stated in each tool description; avoid repeated or speculative calls. On a 402 (credits exhausted) or 429 (rate limit), stop and tell the user what the error says.`;
+Each tool description states its cost in credits from the user's monthly pool. A 402 means credits are exhausted and a 429 means a rate limit; the error text gives the details.`;
 
 export interface CreateServerOptions {
   readOnly?: boolean;
@@ -52,8 +52,7 @@ function registerTool(server: McpServer, tool: ToolDef, client: LexAPIClient): v
       title: tool.title,
       description: tool.description,
       inputSchema: tool.inputSchema,
-      // The tool-level `title` already names it; annotations.title would repeat it.
-      annotations: tool.annotations,
+      annotations: { title: tool.title, ...tool.annotations },
     },
     async (args: Record<string, unknown>, extra: CallExtra) => runTool(tool, args, client, extra),
   );

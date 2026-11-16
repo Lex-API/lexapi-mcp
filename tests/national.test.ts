@@ -74,8 +74,8 @@ describe('national-law tools', () => {
     }
   });
 
-  it('say to call lex_national_coverage first, and state their cost (except the coverage tool itself)', () => {
-    expect(byName.lex_national_coverage.description).toMatch(/call this before any other national tool/i);
+  it('point at lex_national_coverage for live countries, and state their cost (except the coverage tool itself)', () => {
+    expect(byName.lex_national_coverage.description).toMatch(/only the countries listed as live/i);
     for (const name of NATIONAL_TOOLS.filter((n) => n !== 'lex_national_coverage')) {
       const d = byName[name].description;
       expect(d, name).toMatch(/lex_national_coverage/);
@@ -190,8 +190,8 @@ describe('a national document its source withdrew (410 DOCUMENT_WITHDRAWN)', () 
     expect(result.isError).toBe(true);
     const text = (result.content[0] as { text: string }).text;
     expect(text).toMatch(/withdrawn/i);
-    expect(text).toMatch(/do not retry/i);
-    expect(text).toMatch(/drop it/i);
+    expect(text).toMatch(/not retryable/i);
+    expect(text).toMatch(/should not be kept/i);
     expect(text).not.toMatch(/lex_resolve/);
   });
 

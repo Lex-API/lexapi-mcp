@@ -547,7 +547,7 @@ describe('OAuth upstream credential in LexAPIClient', () => {
     expect(err).toBeInstanceOf(UpstreamAuthError);
     expect(err).toMatchObject({ kind: 'invalid_token', httpStatus: 401 });
     expect(gate.failure).toBe(err);
-    expect(describeError(err)).toMatch(/reconnect LexAPI/);
+    expect(describeError(err)).toMatch(/Reconnecting LexAPI/);
   });
 
   it('a freshly exchanged token refused again → api_rejected (no loop, not a re-auth trigger)', async () => {

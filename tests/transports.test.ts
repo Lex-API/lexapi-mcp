@@ -87,10 +87,11 @@ describe('MCP protocol (in-memory)', () => {
     // (~3.6k) and the four edge filters on the five graph tools (~4.3k,
     // each filter's values listed once, in its enum) and the title
     // `language` on the seven citation tools that take it: measured 55.4k.
-    expect(listJson.length).toBeLessThan(57_000);
+    // v0.5.1 adds annotations.title to every tool: measured 57.4k.
+    expect(listJson.length).toBeLessThan(58_500);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
-    expect(client.getInstructions()).toMatch(/consolidated version for that date/);
+    expect(client.getInstructions()).toMatch(/consolidated version for a date/);
 
     // Invalid arguments are rejected by the SDK before any HTTP call.
     const before = seen.length;
