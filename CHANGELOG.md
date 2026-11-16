@@ -2,7 +2,12 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
-## 0.5.0 — unreleased
+## 0.5.1 — unreleased
+
+### Changed
+- README and `server.json`: the hosted server is connected with an API key; Sign in with LexAPI is not enabled on it yet (`/health` reports `"oauth": false`). The remote's `Authorization` header is marked required again.
+
+## 0.5.0 — 2026-11-16
 
 Brings the citation-graph tools in line with LexAPI API 2.11.0 (transposition, counterparts, edge provenance and filters); **requires LexAPI API 2.11.0**. The coverage fields of API 2.12.0 / 2.13.0 are passed through unchanged.
 
@@ -22,9 +27,8 @@ Brings the citation-graph tools in line with LexAPI API 2.11.0 (transposition, c
 - A `503` whose body says `TIMEOUT` (a server-side time budget ran out) is no longer retried automatically; other 503s are retried as before.
 - A `503` with `partialReason: "SEARCH_INCOMPLETE"` is retried at most once, only after its wait (`Retry-After`, else the body's `retryAfter`; at most 10 s) and only when at least 15 s of the call's deadline is left after it; without a wait it is not retried. Other 503s are retried as before, and a 503 is never described as a rate limit.
 - `lex_national_coverage`'s description mentions the `citationGraph` measurements it returns.
-- README and `server.json`: the hosted server is connected with an API key; Sign in with LexAPI is not enabled on it yet (`/health` reports `"oauth": false`). The remote's `Authorization` header is marked required again.
 
-## 0.4.0 — unreleased
+## 0.4.0 — not published (included in 0.5.0)
 
 Adds national-law support (member-state legislation and case law alongside EUR-Lex; **requires LexAPI API 2.8.0**) and **Sign in with LexAPI** on the hosted server.
 

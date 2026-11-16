@@ -22,7 +22,7 @@ Any client that can send a custom header on a Streamable HTTP connection: point 
 
 ### Sign in with LexAPI (not yet enabled)
 
-Signing in with your LexAPI account from the MCP client (OAuth 2.1, no key to copy) is coming but is not enabled on the hosted server yet; `/health` reports `"oauth": false` until it is. Until then, connect with an API key as above.
+Signing in with your LexAPI account from the MCP client (OAuth 2.1) is not enabled on the hosted server yet; `/health` reports `"oauth": false`. Connect with an API key as above.
 
 ## Run it locally (npm, API key)
 
