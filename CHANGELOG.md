@@ -2,7 +2,12 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
-## 0.5.1 — unreleased
+## 0.5.2 — unreleased
+
+### Changed
+- Shorter README; several tool descriptions trimmed. No change to tool names, input schemas, annotations or behaviour.
+
+## 0.5.1 — 2026-11-16
 
 ### Changed
 - Every tool carries `annotations.title`. `lex_update_webhook` is annotated `destructiveHint: true` (it replaces the watch list and can remove search criteria).
