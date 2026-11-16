@@ -91,6 +91,8 @@ export function parseErrorBody(
   if (typeof j.param === 'string') strayFields.param = j.param;
   if (Array.isArray(j.allowed)) strayFields.allowed = j.allowed;
   if (typeof j.acceptUrl === 'string') strayFields.acceptUrl = j.acceptUrl;
+  // National semantic 503/422: why the search could not be completed.
+  if (typeof j.partialReason === 'string') strayFields.partialReason = j.partialReason;
   const jurisdictionFallback = Object.keys(strayFields).length ? strayFields : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
@@ -229,6 +231,14 @@ export function describeError(err: unknown): string {
       // National semantic index temporarily down (same source as 409 above).
       if (err.code === 'NATIONAL_SEMANTIC_UNAVAILABLE') {
         const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'This country';
+        // The index could not complete this search and had nothing left to
+        // return: an empty answer would not have meant "no matches".
+        if (d && d.partialReason === 'SEARCH_INCOMPLETE') {
+          const wait = err.retryAfterSeconds;
+          return wait !== undefined
+            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry in ${wait} s.`
+            : `${head} ${jur}'s national semantic index has repeatedly been unable to complete this search — this is NOT a "no matches" answer; nothing was charged. Do not retry right away: try again later, or rephrase or narrow the query.`;
+        }
         return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
       }
       // lex_counterparts past its server-side budget (legacy shape, refunded).
@@ -236,6 +246,14 @@ export function describeError(err: unknown): string {
         return `${head} The lookup ran out of its server-side time budget; nothing was charged. Narrow it with jurisdictions, or retry later.`;
       }
       return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
+    case 422:
+      // The national index cannot search this slice completely and had
+      // nothing left to return; the same request gets the same answer.
+      if (err.code === 'NATIONAL_SEMANTIC_FILTER_UNREACHABLE') {
+        const jur = d && typeof d.jurisdiction === 'string' ? d.jurisdiction : 'this country';
+        return `${head} The national semantic index for ${jur} cannot search this slice (country, document kind, filters) completely and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retrying the same call will not help: rephrase the query, or change or drop the filters.`;
+      }
+      return `${head}${detailsLine(err.details)}`;
     case 429: {
       const wait = err.retryAfterSeconds;
       const resetsAt = err.resetsAt ?? (d && typeof d.resetsAt === 'string' ? d.resetsAt : undefined);

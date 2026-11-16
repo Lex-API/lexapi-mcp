@@ -14,9 +14,13 @@ Brings the citation-graph tools in line with LexAPI API 2.11.0 (transposition, c
 - **`unresolved`** on `lex_cites` and `lex_citation_network` (national document ids): the references that could not be turned into an edge, the first 100 shown, with `unresolvedTruncated`.
 - Citation results show each edge group's `provenance` and `resolution`, and a node's `jurisdiction` (national documents only) and `documentKind`; `lex_cited_by` / `lex_cites` keep `totalEdges` and `countsSource` (API 2.10.0), `lex_citation_network` keeps `paging.countsSource`. `lex_citation_stats` passes `byJurisdiction`, `byProvenance` and `transposition` through.
 - `describeError`: a legacy-shape `400 INVALID_PARAMS` now shows `param` and `allowed`; `403 NATIONAL_TERMS_NOT_ACCEPTED` points at the one-time acceptance in the dashboard (`acceptUrl`); a `503 TIMEOUT` (counterparts) says it was refunded and to narrow with `jurisdictions`.
+- `lex_national_semantic_case_law` / `lex_national_semantic_legislation` keep `partial` / `partialReason` (`SEARCH_INCOMPLETE`): the national index could not complete the search, so results may be incomplete; both descriptions say so.
+- `describeError`: `422 NATIONAL_SEMANTIC_FILTER_UNREACHABLE` says the index cannot search that slice completely, that it is not a "no matches" answer, and to rephrase the query or change the filters (not retryable as is); a `503 NATIONAL_SEMANTIC_UNAVAILABLE` with `partialReason: "SEARCH_INCOMPLETE"` says it is not a "no matches" answer and gives the wait, or — without one — to try later or rephrase.
+- `lex_resolve`'s description explains `resolvedVia` (incl. `eli-cellar`) and `verified` (passed through when the API sends them); it suggests checking the CELEX only for an unverified `eli` answer.
 
 ### Changed
 - A `503` whose body says `TIMEOUT` (a server-side time budget ran out) is no longer retried automatically; other 503s are retried as before.
+- A `503` with `partialReason: "SEARCH_INCOMPLETE"` is retried at most once, only after its wait (`Retry-After`, else the body's `retryAfter`; at most 10 s) and only when at least 15 s of the call's deadline is left after it; without a wait it is not retried. Other 503s are retried as before, and a 503 is never described as a rate limit.
 - `lex_national_coverage`'s description mentions the `citationGraph` measurements it returns.
 
 ## 0.4.0 — unreleased

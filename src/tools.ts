@@ -349,7 +349,7 @@ export const tools: ToolDef[] = [
     name: 'lex_resolve',
     title: 'Resolve a legal identifier to CELEX',
     description:
-      'Turn a pasted EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. Cost: 1 credit. ECLIs resolve only for case law already in the LexAPI corpus (404 otherwise).',
+      'Turn a pasted EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. Cost: 1 credit. ECLIs resolve only for case law already in the LexAPI corpus (404 otherwise). resolvedVia says how: celex / url (read off the identifier), ecli-corpus / eli-corpus (corpus lookup), eli-cellar (Publications Office register), eli (derived from the ELI pattern only). verified: false is normal for CELEX and URL inputs (they are not looked up, so a mistyped CELEX also comes back); with resolvedVia "eli" the mapping itself is a guess — check it with lex_get_document before relying on it.',
     inputSchema: {
       identifier: z.string().trim().min(3).max(2000).describe('CELEX, EUR-Lex URL, ELI URI or ECLI.'),
     },
@@ -711,7 +711,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). Not yet live errors — check lex_national_coverage first. partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete — say so, and follow the hint. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
@@ -747,7 +747,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_legislation',
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. No asOf — current text only. Not yet live errors — check lex_national_coverage first. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
+      'Find one country\'s legislation articles by meaning. No asOf — current text only. Not yet live errors — check lex_national_coverage first. partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete — say so, and follow the hint. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence — show it to the user.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
