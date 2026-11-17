@@ -776,6 +776,41 @@ describe('lex_act_history', () => {
     expect(ok.data.exists).toBe(true);
   });
 
+  it('an unreadable or empty 200 for the relations is a failed part, not "no changes"', async () => {
+    const replies: Reply[] = [
+      { raw: '' }, { raw: '<html>OK</html>', headers: { 'content-type': 'text/html' } }, { body: { success: true } },
+      { body: { success: false, citedBy: [] } }, { body: { success: true, citedBy: 'none' } }, { body: [] },
+    ];
+    for (const edges of replies) {
+      const { data, result } = await call('lex_act_history', { celexNumber: '32006R1907' }, route({ edges }));
+      expect(result.isError).toBeFalsy();
+      expect(data.changes).toBeUndefined();
+      expect(data.title).toBe('REACH');
+      expect(data.incomplete).toEqual([{
+        part: 'the changes: amendments, corrigenda, repeals', call: 'lex_cited_by',
+        reason: 'unreadable_response', error: 'the answer was not readable: it carried no citedBy list',
+      }]);
+    }
+    // Both answers unreadable: still a result that says so, with nothing claimed.
+    const both = await call('lex_act_history', { celexNumber: '32006R1907' }, () => ({ raw: '' }));
+    expect(both.data).toMatchObject({ celex: '32006R1907', exists: 'unknown', inForce: 'unknown' });
+    expect(both.data.changes).toBeUndefined();
+    expect(both.data.incomplete.map((i: any) => i.reason)).toEqual(['unreadable_response', 'unreadable_response']);
+  });
+
+  it('a date is taken only from an answer about the listed act', async () => {
+    const { data } = await call('lex_act_history', { celexNumber: '32006R1907', dates: 2 }, route({
+      dated: (celex) => (celex === '32025R0100'
+        ? { body: metadata({ celex: '32016R0679', celexNumber: '32016R0679', dateOfDocumentISO: '2016-04-27' }) }
+        : { body: { success: true } }),
+    }));
+    expect(data.changes.repeals[0].date).toBeUndefined();
+    expect(data.changes.repeals[0]).toMatchObject({ celex: '32025R0100', celexYear: 2025, dateNotRead: { reason: 'different_document' } });
+    expect(data.changes.repeals[0].dateNotRead.error).toMatch(/32025R0100 was asked for and the answer is about 32016R0679/);
+    expect(data.changes.amendments[0].dateNotRead.reason).toBe('unreadable_response');
+    expect(data.counts.datesRead).toBeUndefined();
+  });
+
   it('nothing obtained: the API error is returned as the error', async () => {
     const { result, text, calls } = await call('lex_act_history', { celexNumber: '32006R1907' }, () => exhausted(1));
     expect(result.isError).toBe(true);
@@ -985,6 +1020,43 @@ describe('lex_research', () => {
     expect(data.sources[1]).toMatchObject({ jurisdiction: 'CZ', status: 'failed', reason: 'semantic_not_enabled' });
     expect(data.results).toEqual([]);
     expect(data.incomplete).toBe(true);
+  });
+
+  it('an unreadable or empty 200 is a failed search, not "ok, 0 hits"', async () => {
+    const replies: Reply[] = [
+      { raw: '' }, { raw: '<html>OK</html>', headers: { 'content-type': 'text/html' } }, { body: { success: true } },
+      { body: { success: false, results: [] } }, { body: { results: {} } }, { body: [] },
+    ];
+    for (const reply of replies) {
+      const { data } = await call('lex_research', { query: 'right to erasure' }, (c) => (kindOf(c) === 'legislation' ? reply : { body: { success: true, results: [euCase(0.8)] } }));
+      expect(data.sources[0]).toEqual({
+        jurisdiction: 'EU', kind: 'legislation', call: 'lex_semantic_legislation', status: 'failed',
+        reason: 'unreadable_response', error: 'the answer was not readable: it carried no results list',
+      });
+      expect(data.sources[1]).toMatchObject({ status: 'ok', hits: 1 });
+      expect(data.searches).toEqual({ requested: 2, ok: 1 });
+      expect(data.incomplete).toBe(true);
+    }
+    const empty = await call('lex_research', { query: 'right to erasure', kinds: ['legislation'] }, () => ({ body: { success: true, results: [] } }));
+    expect(empty.data.sources[0]).toMatchObject({ status: 'ok', hits: 0 });
+  });
+
+  it('rows that are not objects do not become hits', async () => {
+    const { data } = await call('lex_research', { query: 'right to erasure', kinds: ['legislation'] }, () => ({ body: { success: true, results: [null, 'x', 7, [], legis(1)] } }));
+    expect(data.results).toHaveLength(1);
+    expect(data.results[0].law_id).toBe('32016R0679');
+    expect(data.sources[0]).toMatchObject({ status: 'ok', hits: 1, unreadableRows: 4 });
+  });
+
+  it('a coverage answer of an unexpected shape is a coverage failure, not "no such country"', async () => {
+    for (const cov of [{ raw: '' }, { body: { success: true } }, { body: { jurisdictions: 'AT' } }] as Reply[]) {
+      const { data, paths } = await call('lex_research', { query: 'Datenschutz', jurisdictions: ['at'], kinds: ['legislation'] }, (c) => (
+        c.url.pathname.endsWith('/national/coverage') ? cov : { body: { success: true, results: [natLegis('AT', 0.8)] } }
+      ));
+      expect(data.coverage).toMatchObject({ call: 'lex_national_coverage', reason: 'unreadable_response' });
+      expect(paths).toEqual(['/national/coverage', '/at/legislation/semantic']);
+      expect(data.sources[0]).toMatchObject({ jurisdiction: 'AT', status: 'ok', hits: 1 });
+    }
   });
 
   it('a search that was not started for lack of time is reported as not run', async () => {

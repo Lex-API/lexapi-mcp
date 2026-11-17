@@ -122,6 +122,19 @@ class Calls {
     }
   }
 
+  /**
+   * A call whose answer must be an object carrying a list under `key`. An
+   * empty body, a page that is not JSON, `success: false` or a missing list
+   * is a failed call, never an empty list.
+   */
+  async runList(key: string, fn: (c: LexAPIClient) => Promise<LexResponse<Json>>): Promise<Outcome> {
+    const r = await this.run(fn);
+    if (r.failure) return r;
+    const b: unknown = r.res.body;
+    if (isObj(b) && b.success !== false && Array.isArray(b[key])) return r;
+    return { failure: { reason: 'unreadable_response', error: `the answer was not readable: it carried no ${key} list` } };
+  }
+
   private note(res: LexResponse<Json>): void {
     const credits = isObj(res.body) && isObj(res.body.credits) ? res.body.credits : undefined;
     if (credits && typeof credits.remaining === 'number' && (!this.lowest || credits.remaining < this.lowest.remaining)) {
@@ -621,7 +634,7 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
   if (celex !== requested) out.requested = requested;
 
   // 1. The relations: one page of amendment / corrigendum / repeal edges.
-  const edges = await calls.run((c) => c.citedBy(celex, compact({
+  const edges = await calls.runList('citedBy', (c) => c.citedBy(celex, compact({
     citationType: [...CHANGE_TYPES],
     limit,
     offset,
@@ -634,7 +647,8 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
   if (meta.failure?.reason === 'not_found') {
     return { ...out, exists: false, inForce: 'unknown', basis: { exists: `lex_get_metadata: ${meta.failure.error}` }, ...calls.footer() };
   }
-  if (edges.failure && meta.failure && meta.failure.reason !== 'unconfirmed_not_found') throw asThrown(edges.failure);
+  // Nothing was obtained and the API said why: its error is the answer.
+  if (edges.failure?.cause && meta.failure && meta.failure.reason !== 'unconfirmed_not_found') throw asThrown(edges.failure);
 
   const ACT_PART = 'the act: whether it exists (not confirmed), title, dates, in-force status, end of validity, consolidated versions';
   const carried = meta.failure ? undefined : carriedDocument(meta.res.body, 'metadata', celex, CELEX_KEYS);
@@ -718,7 +732,13 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
       c.dateNotRead = r.notRun ? { reason: r.failure.reason, error: r.failure.error } : shown(r.failure);
       continue;
     }
-    const m = isObj(r.res.body.metadata) ? r.res.body.metadata : {};
+    // The date is taken only from an answer about this act.
+    const got = carriedDocument(r.res.body, 'metadata', c.celex.toUpperCase(), CELEX_KEYS);
+    if (got.problem) {
+      c.dateNotRead = { reason: got.problem.reason, error: got.problem.note };
+      continue;
+    }
+    const m = got.doc;
     if (typeof m.dateOfDocumentISO === 'string') {
       c.date = m.dateOfDocumentISO;
       datesRead++;
@@ -802,7 +822,7 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
   const national = codes.filter((c) => c !== 'eu');
   const notLive = new Map<string, Failure>();
   if (national.length) {
-    const cov = await calls.run((c) => c.nationalCoverage());
+    const cov = await calls.runList('jurisdictions', (c) => c.nationalCoverage());
     if (cov.failure) {
       out.coverage = { call: 'lex_national_coverage', ...shown(cov.failure), note: 'Live status was not checked; each national search reports its own answer.' };
     } else {
@@ -839,7 +859,7 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
       Object.assign(s.report, { status: 'not_run', reason: skip.reason, error: skip === nationalStopped ? `not run: an earlier national search ended with ${skip.reason}` : skip.error });
       return;
     }
-    const r = await calls.run((c) => (s.code === 'eu'
+    const r = await calls.runList('results', (c) => (s.code === 'eu'
       ? (s.kind === 'legislation' ? c.semanticLegislation(compact({ ...body, language: a.language })) : c.semanticCaseLaw(compact({ ...body, language: a.language })))
       : (s.kind === 'legislation' ? c.nationalSemanticLegislation(s.code, body) : c.nationalSemanticCaseLaw(s.code, body))));
     if (r.failure) {
@@ -849,10 +869,12 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
       return;
     }
     const b = r.res.body;
-    const rows = Array.isArray(b.results) ? b.results : [];
+    const all = Array.isArray(b.results) ? b.results : [];
+    const rows = all.filter(isObj);
     Object.assign(s.report, compact({
       status: 'ok',
       hits: rows.length,
+      unreadableRows: all.length - rows.length || undefined,
       hint: b.hint,
       partial: b.partial,
       partialReason: b.partialReason,
