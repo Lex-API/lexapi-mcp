@@ -933,6 +933,8 @@ function mergedHit(s: Search, row: unknown, responseAttribution: unknown): Obj {
   const hit: Obj = { jurisdiction: eu ? 'EU' : (jurisdiction ?? s.code.toUpperCase()), kind: s.kind, ...rest };
   if (typeof snippet === 'string') hit.snippet = truncate(snippet, HIT_TEXT_CHARS);
   if (typeof summary === 'string') hit.summary = truncate(summary, HIT_TEXT_CHARS);
+  // Not asked for here; bounded like the snippet if an answer carries it.
+  if (typeof hit.text === 'string') hit.text = truncate(hit.text, HIT_TEXT_CHARS);
   if (s.kind === 'legislation') {
     const flag = eu ? inForceOf(shaped).inForce : nationalInForce;
     hit.inForce = typeof flag === 'boolean' ? flag : 'unknown';

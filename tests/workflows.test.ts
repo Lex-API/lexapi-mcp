@@ -1068,6 +1068,15 @@ describe('lex_research', () => {
     expect(empty.data.sources[0]).toMatchObject({ status: 'ok', hits: 0 });
   });
 
+  it('a full text an answer carries is bounded like the snippet', async () => {
+    const { data, text } = await call('lex_research', { query: 'right to erasure' }, (c) => (kindOf(c) === 'legislation'
+      ? { body: { success: true, results: [legis(1, { text: 'T'.repeat(200_000) })] } }
+      : { body: { success: true, results: [{ ...euCase(0.8), text: 'J'.repeat(200_000) }] } }));
+    expect(data.results).toHaveLength(2);
+    for (const h of data.results) expect(h.text.length).toBeLessThanOrEqual(500);
+    expect(text.length).toBeLessThan(5_000);
+  });
+
   it('rows that are not objects do not become hits', async () => {
     const { data } = await call('lex_research', { query: 'right to erasure', kinds: ['legislation'] }, () => ({ body: { success: true, results: [null, 'x', 7, [], legis(1)] } }));
     expect(data.results).toHaveLength(1);
