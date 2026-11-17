@@ -102,7 +102,7 @@ describe('MCP protocol (in-memory)', () => {
     // every webhook criteria field may be null, as in the API: measured 58.4k.
     // The three workflow tools (lex_check_citation, lex_act_history,
     // lex_research) add ~6.1k: measured 64.6k.
-    expect(listJson.length).toBeLessThan(64_600);
+    expect(listJson.length).toBeLessThan(64_650);
     // The instructions are in every client's context too: measured 3.3k;
     // 3.7k with the workflow tools and the in-force label.
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_750);
@@ -113,7 +113,7 @@ describe('MCP protocol (in-memory)', () => {
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(57_300);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(57_350);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);

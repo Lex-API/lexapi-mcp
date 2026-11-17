@@ -363,12 +363,13 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   out.celex = celex;
 
   const ref = a.article ? parseArticle(a.article) : undefined;
-  // The whole article list is read, not one article: an empty match cannot
-  // be told from a text without articles otherwise.
+  // One article is read with the document. The whole article list is read
+  // only when that comes back empty, to tell "no such article" from "a text
+  // without articles".
   const call = ref ? 'lex_get_document' : 'lex_get_metadata';
   const what = `existence, title, in-force status${ref ? ', article' : ''}`;
   const read = await calls.run((c) => (ref
-    ? c.getDocument({ celexNumber: celex, include: ['metadata', 'articles'] })
+    ? c.getDocument({ celexNumber: celex, articleId: ref.number, include: ['metadata', 'articles'] })
     : c.getMetadata({ celexNumber: celex })));
   const unknownArticle = a.article && !ref ? { article: { requested: a.article, found: 'unknown', note: UNMAPPED_ARTICLE } } : {};
 
@@ -441,18 +442,28 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
 
   const consolidated = consolidatedBaseOf(celex) !== null;
   if (ref && a.article) {
-    const content = isObj(d.content) ? d.content : undefined;
-    const units = content && Array.isArray(content.articles) ? content.articles.filter(isObj) : [];
-    const hit = units.find((u) => {
+    const matchesRef = (u: Obj) => {
       const id = String(u.id ?? '').toLowerCase();
       const number = String(u.number ?? '').toLowerCase();
       return id === `art_${ref.number}` || id === ref.number || number === `article ${ref.number}` || number === ref.number;
-    });
-    if (!content) {
+    };
+    const unitsOf = (doc: Obj) => (isObj(doc.content) && Array.isArray(doc.content.articles) ? doc.content.articles.filter(isObj) : []);
+    let units = unitsOf(d);
+    let hit = units.find(matchesRef);
+    let listFailure: Obj | undefined;
+    if (!hit && isObj(d.content)) {
+      const list = await calls.run((c) => c.getDocument({ celexNumber: celex, include: ['articles'] }));
+      const got = list.failure ? undefined : carriedDocument(list.res.body, 'document', celex, CELEX_KEYS);
+      if (list.failure) listFailure = shown(list.failure);
+      else if (!got || got.problem) listFailure = got?.problem;
+      else {
+        units = unitsOf(got.doc);
+        hit = units.find(matchesRef);
+      }
+    }
+    if (!isObj(d.content)) {
       const ta = isObj(d.textAvailability) ? d.textAvailability : {};
       out.article = { requested: a.article, found: 'unknown', note: `No text was served for ${celex}${ta.reason ? ` (${String(ta.reason)})` : ''}, so the article could not be looked up.` };
-    } else if (!units.length) {
-      out.article = { requested: a.article, found: 'unknown', note: `The text of ${celex} has no article units as LexAPI holds it (a judgment, or a text parsed without articles), so the article could not be looked up.` };
     } else if (hit) {
       const text = typeof hit.content === 'string' ? hit.content : typeof hit.text === 'string' ? hit.text : undefined;
       out.article = compact({
@@ -466,6 +477,11 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
         language: md.languageFallback ? md.language : undefined,
         notChecked: ref.rest ? `"${ref.rest}": only the article was looked up, not a paragraph or point of it.` : undefined,
       });
+    } else if (listFailure) {
+      out.article = { requested: a.article, found: 'unknown', note: `Article ${ref.number} was not returned for ${celex}, and the article list that would show whether the text has article units could not be read.` };
+      out.notChecked = [{ what: 'article', call: 'lex_get_document', ...listFailure }];
+    } else if (!units.length) {
+      out.article = { requested: a.article, found: 'unknown', note: `The text of ${celex} has no article units as LexAPI holds it (a judgment, or a text parsed without articles), so the article could not be looked up.` };
     } else {
       out.article = {
         requested: a.article,
@@ -474,7 +490,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
         note: `Article ${ref.number} is not among the ${units.length} article units of ${celex} (written like "${String(units[0].number ?? units[0].id)}"); only ${consolidated ? 'this consolidated version was' : 'the act as published was'} compared${consolidated ? '' : ', and an article inserted by a later amendment is only in a consolidated version'}.`,
       };
     }
-    basis.article = `${call}: the article units of the text`;
+    basis.article = `${call} with articleId${hit ? '' : ', then the article list of the text'}`;
   } else {
     Object.assign(out, unknownArticle);
   }

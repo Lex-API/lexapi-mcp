@@ -243,24 +243,28 @@ describe('lex_check_citation', () => {
     { id: 'art_17', number: 'Article 17', title: 'Right to erasure', content: `1. The data subject shall have the right… ${'x'.repeat(600)}` },
   ];
 
+  // The API returns only the article asked for; without articleId, all of them.
+  const articleReply = (list: Array<Record<string, unknown>> = ARTICLES, extra: Record<string, unknown> = {}) => (c: Call): Reply => {
+    const want = (c.body as { articleId?: string }).articleId;
+    return { body: articleDoc(want === undefined ? list : list.filter((x) => x.id === `art_${want}`), extra), headers: { 'x-source': 'corpus' } };
+  };
+
   it('an article that exists is read with the document in one call', async () => {
-    const { data, paths, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({
-      body: articleDoc(ARTICLES, { inForce: true }), headers: { 'x-source': 'corpus' },
-    }));
+    const { data, paths, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 17' }, articleReply(ARTICLES, { inForce: true }));
+    // One article is read, not the whole act.
     expect(paths).toEqual(['/documentContent']);
-    // The whole article list is read, so a miss can be told from a text without articles.
-    expect(calls[0].body).toEqual({ celexNumber: '32016R0679', include: ['metadata', 'articles'] });
+    expect(calls[0].body).toEqual({ celexNumber: '32016R0679', articleId: '17', include: ['metadata', 'articles'] });
     expect(data).toMatchObject({ exists: true, inForce: true });
     expect(data.article).toEqual({
-      requested: '17', found: true, id: 'art_17', number: 'Article 17', title: 'Right to erasure', checkedIn: '32016R0679',
+      requested: 'Article 17', found: true, id: 'art_17', number: 'Article 17', title: 'Right to erasure', checkedIn: '32016R0679',
       excerpt: expect.any(String),
     });
     expect(data.article.excerpt.length).toBeLessThanOrEqual(300);
-    expect(data.basis.article).toBe('lex_get_document: the article units of the text');
+    expect(data.basis.article).toBe('lex_get_document with articleId');
   });
 
   it('common citation forms are mapped to the article number; a paragraph or point is reported as not checked', async () => {
-    const reply = () => ({ body: articleDoc(ARTICLES) });
+    const reply = articleReply();
     for (const form of ['Art. 17', 'Art 17', 'art_17', 'ARTICLE 17', 'Article 17(1)', '17(1)(a)', 'Art. 17, para 2']) {
       const { data } = await call('lex_check_citation', { identifier: '32016R0679', article: form }, reply);
       expect(data.article, form).toMatchObject({ requested: form, found: true, id: 'art_17' });
@@ -284,14 +288,20 @@ describe('lex_check_citation', () => {
   });
 
   it('an article that does not exist: found false, scoped to the article units that were compared', async () => {
-    const { data } = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 120' }, () => ({ body: articleDoc(ARTICLES) }));
+    const { data, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 120' }, articleReply());
+    // The article list is read only now, to tell a miss from a text without articles.
+    expect(calls.map((c) => c.body)).toEqual([
+      { celexNumber: '32016R0679', articleId: '120', include: ['metadata', 'articles'] },
+      { celexNumber: '32016R0679', include: ['articles'] },
+    ]);
+    expect(data.basis.article).toBe('lex_get_document with articleId, then the article list of the text');
     expect(data.exists).toBe(true);
     expect(data.article).toEqual({
       requested: 'Article 120', found: false, checkedIn: '32016R0679',
       note: 'Article 120 is not among the 3 article units of 32016R0679 (written like "Article 6"); only the act as published was compared, and an article inserted by a later amendment is only in a consolidated version.',
     });
     expect(data.inForce).toBe('unknown');
-    const cons = await call('lex_check_citation', { identifier: '02016R0679-20160504', article: '120' }, () => ({ body: articleDoc(ARTICLES, { celex: '02016R0679-20160504' }) }));
+    const cons = await call('lex_check_citation', { identifier: '02016R0679-20160504', article: '120' }, articleReply(ARTICLES, { celex: '02016R0679-20160504' }));
     expect(cons.data.article.note).toBe('Article 120 is not among the 3 article units of 02016R0679-20160504 (written like "Article 6"); only this consolidated version was compared.');
   });
 
@@ -304,6 +314,26 @@ describe('lex_check_citation', () => {
       expect(data.article).toMatchObject({ requested: '17', found: 'unknown' });
       expect(data.article.note).toMatch(/has no article units as LexAPI holds it/);
     }
+  });
+
+  it('the article list could not be read after a miss: the article is unknown, and the failed read is named', async () => {
+    for (const [second, reason] of [[exhausted(), 'credits_exhausted'], [{ body: { success: true } }, 'unreadable_response'], [{ body: articleDoc(ARTICLES, { celex: '32016R0680' }) }, 'different_document']] as Array<[Reply, string]>) {
+      const { data, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: '120' }, (c, n) => (n === 1 ? articleReply()(c) : second));
+      expect(calls).toHaveLength(2);
+      expect(data).toMatchObject({ exists: true, title: 'Regulation (EU) 2016/679' });
+      expect(data.article).toMatchObject({ requested: '120', found: 'unknown' });
+      expect(data.article.note).toMatch(/could not be read/);
+      expect(data.notChecked[0]).toMatchObject({ what: 'article', call: 'lex_get_document', reason });
+    }
+  });
+
+  it('an article the API did not match by id but the list carries is found', async () => {
+    const list = [{ id: 'art_1', number: 'Article 1', content: 'x' }, { id: '5a', number: 'Article 5a', content: 'y' }];
+    const { data, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: '5a' }, (c) => ({
+      body: articleDoc((c.body as { articleId?: string }).articleId ? [] : list),
+    }));
+    expect(calls).toHaveLength(2);
+    expect(data.article).toMatchObject({ found: true, number: 'Article 5a' });
   });
 
   it('a 200 that carries no document is not evidence that it exists', async () => {
