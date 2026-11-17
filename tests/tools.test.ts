@@ -703,11 +703,16 @@ describe('webhook tools', () => {
     expect(s.safeParse({ id: 'w1', searchCriteria: null }).success).toBe(true);
     // Value forms the API accepts are accepted on create and update alike.
     const create = z.object(byName.lex_create_webhook.inputSchema);
-    for (const criteria of [{ year: '2026' }, { year: ['2025', 2026] }, { domain: 'eu_law' }, { query: null, documentType: 'regulation' }]) {
+    for (const criteria of [{ year: '2026' }, { year: ['2025', 2026] }, { domain: 'eu_law' }, { query: null, documentType: 'regulation' },
+      { dateFrom: null, year: null, documentType: null }, { year: 1900 },
+      { query: null, documentType: null, author: null, subdomain: null, dateFrom: null, dateTo: null, year: null, textScope: null, domain: null, language: null }]) {
       expect(s.safeParse({ id: 'w1', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(true);
       expect(create.safeParse({ name: 'n', url: 'https://e.com', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(true);
     }
-    for (const criteria of [{ year: '26' }, { domain: 'NATIONAL_LAW' }, { textScope: 'text' }]) {
+    // A refused year says what is expected.
+    expect(JSON.stringify(s.safeParse({ id: 'w1', searchCriteria: { year: 26 } }).error?.issues)).toMatch(/4-digit year/);
+    expect((byName.lex_create_webhook.inputSchema.searchCriteria as any).unwrap().shape.domain.description).toMatch(/EU_LAW or ALL/);
+    for (const criteria of [{ year: '26' }, { year: 12345 }, { domain: 'NATIONAL_LAW' }, { textScope: 'text' }]) {
       expect(s.safeParse({ id: 'w1', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(false);
       expect(create.safeParse({ name: 'n', url: 'https://e.com', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(false);
     }

@@ -190,9 +190,10 @@ const NATIONAL_DOMAIN_NOTE = 'NATIONAL_LAW is EUR-Lex\'s own collection; member-
 // One language per national index: the API answers any other value with a 400.
 const nationalLanguage = lang('Not needed. Only the country\'s own language is accepted (e.g. "de" for AT); any other value is a 400 that names it.').optional();
 // Webhook matching rules, as the API validates them: the same keys and value
-// forms on create and update.
-const criteriaYear = z.union([z.number().int().min(1950).max(2100), z.string().regex(/^\d{4}$/, 'a 4-digit year')]);
-const oneOrList = () => z.union([z.string(), z.array(z.string())]).optional();
+// forms on create and update. Every field may be null (same as leaving it out).
+const YEAR_FORM = 'a 4-digit year (number or string), or a list of them';
+const criteriaYear = z.union([z.number().int().min(1000, YEAR_FORM).max(9999, YEAR_FORM), z.string().regex(/^\d{4}$/, YEAR_FORM)], { error: YEAR_FORM });
+const oneOrList = () => z.union([z.string(), z.array(z.string())], { error: 'a string or a list of strings' }).nullable().optional();
 // The field descriptions are published once, on lex_create_webhook; the
 // update tool takes the same schema and points there.
 const webhookCriteria = (describe: boolean) => {
@@ -202,13 +203,13 @@ const webhookCriteria = (describe: boolean) => {
     documentType: d(oneOrList(), 'Document type(s), lex_search values.'),
     author: d(oneOrList(), 'Issuing institution(s), lex_search values.'),
     subdomain: d(oneOrList(), 'Replaces the default (EU law, no consolidated texts); "consolidated" = consolidated texts only.'),
-    dateFrom: d(isoDate().optional(), 'Lower bound on the document date (YYYY-MM-DD).'),
-    dateTo: d(isoDate().optional(), 'Upper bound on the document date (YYYY-MM-DD).'),
-    year: d(z.union([criteriaYear, z.array(criteriaYear)]).optional(), 'Document year(s).'),
-    textScope: d(z.enum(['title', 'title-text', 'any']).optional(), 'Accepted for compatibility; every value matches titles.'),
-    domain: d(z.string().refine((v) => ['EU_LAW', 'ALL'].includes(v.toUpperCase()), 'EU_LAW or ALL').optional(),
-      'EU_LAW or ALL. Accepted for compatibility; only EU law is matched.'),
-    language: d(z.string().optional(), 'Accepted for compatibility; no effect.'),
+    dateFrom: d(isoDate().nullable().optional(), 'Lower bound on the document date (YYYY-MM-DD).'),
+    dateTo: d(isoDate().nullable().optional(), 'Upper bound on the document date (YYYY-MM-DD).'),
+    year: d(z.union([criteriaYear, z.array(criteriaYear)], { error: YEAR_FORM }).nullable().optional(), 'Document year(s).'),
+    textScope: d(z.enum(['title', 'title-text', 'any']).nullable().optional(), 'Accepted for compatibility; every value matches titles.'),
+    domain: d(z.string().refine((v) => ['EU_LAW', 'ALL'].includes(v.toUpperCase()), 'EU_LAW or ALL').nullable().optional(),
+      'EU_LAW or ALL (any case). Accepted for compatibility; only EU law is matched.'),
+    language: d(z.string().nullable().optional(), 'Accepted for compatibility; no effect.'),
   }).strict();
 };
 

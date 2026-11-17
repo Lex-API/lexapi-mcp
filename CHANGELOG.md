@@ -11,7 +11,7 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 - `asOfCaveat.note` calls the text of unresolved hits the indexed text (was "the LATEST text").
 - **Output:** `lex_get_document_version` returns the date a snapshot was looked up for as `snapshotDate` (was `asOf`); it is not an in-force date. `lex_export` results on credit plans carry a `billing` line.
 - **Stricter input:** `lex_semantic_case_law.filters` accepts only the keys of the API reference (`court`, `date_from`, `date_to`, `case_number`, `ecli`, `language`); any other key is a validation error, so a misspelt `dateFrom` is refused instead of ignored. `lex_semantic_legislation.filters` accepts `language` only, the one key the legislation index reads. `lex_update_webhook.searchCriteria` has the same fields as `lex_create_webhook`, and its values are now type-checked as on create.
-- Webhook `searchCriteria` (create and update) accept what the API accepts: `year` also as a 4-digit string, `domain` in any case, `query: null`.
+- Webhook `searchCriteria` (create and update) accept what the API accepts: any 4-digit `year`, as a number or a string, `domain` in any case, and `null` for any field.
 - `lex_national_semantic_case_law` no longer lists `hyde`, which never had an effect there; a call that still sends it works as before.
 - `lex_national_semantic_legislation` says what a hit carries instead of "current text only": `in_force`, with `valid_from` / `valid_to` where the index has them.
 - `lex_semantic_legislation` says that only an `article_ref` of the form `art_N` is an `articleId`; any other form (`anx_N` annex, `rct_a-b` recitals, `par_N` / `j_N` text windows) is read with `include`.
@@ -22,7 +22,7 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 - `lex_counterparts`, `lex_transposition`, `lex_get_national_document` and `lex_export` state their cost only; what is reserved or refunded is said in the error text (402 on `lex_export` and `lex_get_national_document`: what is reserved; 403: no credits charged; 404: at most 1 credit) and, on credit plans, in the `lex_export` result.
 - Every parameter has a description; the fields inside `lex_update_webhook.searchCriteria` are described once, on `lex_create_webhook`, and the parameter points there. Date and CELEX formats are stated in the descriptions and checked as before; they are no longer repeated as regular expressions in the schema.
 - With `LEXAPI_MCP_READ_ONLY`, the remaining descriptions do not name the hidden tools.
-- A test compares the credit costs in the descriptions with the API's operation weights (`tests/fixtures/operation-weights.json`, refreshed with `scripts/refresh-operation-weights.mjs`).
+- A test compares the credit costs in the descriptions, the 402 texts, the `lex_export` billing line and the README credits column with the API's operation weights (`tests/fixtures/operation-weights.json`, refreshed with `scripts/refresh-operation-weights.mjs`).
 
 ## 0.5.1 — 2026-11-16
 

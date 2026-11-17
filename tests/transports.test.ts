@@ -99,8 +99,8 @@ describe('MCP protocol (in-memory)', () => {
     // v0.5.2 describes every parameter, types the webhook update criteria
     // and says what holds for several tools once, in the server
     // instructions; the tools that return attribution say it must be kept:
-    // measured 58.0k.
-    expect(listJson.length).toBeLessThan(58_100);
+    // every webhook criteria field may be null, as in the API: measured 58.4k.
+    expect(listJson.length).toBeLessThan(58_450);
     // The instructions are in every client's context too: measured 3.3k.
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_350);
 
