@@ -1,6 +1,6 @@
 # LexAPI MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — EU law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, the typed citation graph, and semantic search (including **the law as in force on a past date**). Works with Claude, Cursor, VS Code and any other MCP client.
+[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — EU law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, the typed citation graph, and semantic search (including **the law as in force on a date**). Works with Claude, Cursor, VS Code and any other MCP client.
 
 Ask your assistant *"what does Article 17 GDPR require?"*, *"which acts amended REACH?"* or *"what were the own-funds requirements for banks in June 2019?"* — the model calls LexAPI and answers from the source text, with CELEX citations.
 
@@ -72,7 +72,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date. | 5 (+ up to 5 per version fetch with `asOf`) |
+| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date (today's date for current law). | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
 | `lex_recent_documents` | What was published in the last N days. | 3 per 10 results |

@@ -6,6 +6,7 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 
 ### Changed
 - Shorter README; several tool descriptions trimmed. No change to tool names, input schemas, annotations or behaviour.
+- `lex_semantic_legislation`: the description, the `asOf` parameter and the server instructions say that a search without `asOf` returns the indexed texts as they are, with repealed or amended provisions unmarked, and that today's date as `asOf` gives current law.
 
 ## 0.5.1 — 2026-11-16
 
