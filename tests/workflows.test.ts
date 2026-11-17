@@ -592,6 +592,22 @@ describe('lex_check_citation', () => {
     expect(typo.data).toMatchObject({ celex: '3206R0679', exists: false });
   });
 
+  it('a CELEX with a variant tag (_SUM, _RES) is read as the CELEX without it, as the API resolves it', async () => {
+    for (const identifier of ['32016R0679_SUM', 'celex:32016r0679_sum', '32016R0679_RES', '32016R0679_INF']) {
+      const { data, calls, paths } = await call('lex_check_citation', { identifier }, () => ({ body: metadata() }));
+      expect(paths, identifier).toEqual(['/documents/metadata']);
+      expect(calls[0].body, identifier).toEqual({ celexNumber: '32016R0679' });
+      expect(data, identifier).toMatchObject({ identifier, identifierType: 'celex', celex: '32016R0679', exists: true });
+      expect(data.basis.celex).toMatch(/^the CELEX as given, without its _(SUM|RES|INF) tag \(a summary or rendition of the same document\)$/);
+    }
+    // A corrigendum, a consolidated version and a qualified act are other documents: read as given.
+    for (const identifier of ['32013R0952R(04)', '02016R0679-20180524', '32019D0003(01)', '32016R0679_1', '32016R0679_ABCDE']) {
+      const { data, calls } = await call('lex_check_citation', { identifier }, () => ({ body: metadata({ celex: identifier, celexNumber: identifier }) }));
+      expect(calls[0].body, identifier).toEqual({ celexNumber: identifier });
+      expect(data.basis.celex, identifier).toBe('the CELEX as given');
+    }
+  });
+
   it('what the API can resolve is sent to it: a URL without a scheme, a uri= parameter, a bare ELI path', async () => {
     const resolveOk = (c: Call): Reply => (c.url.pathname.endsWith('/resolve')
       ? { body: { success: true, identifierType: 'url', resolvedVia: 'url', verified: false, celex: '32016R0679', urls: {} } }

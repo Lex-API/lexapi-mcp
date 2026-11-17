@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { LexAPIError } from './errors.js';
 import { webhookUrlProblem } from './webhookUrl.js';
-import { actHistory, checkCitation, isNationalId, research } from './workflows.js';
+import { actHistory, checkCitation, isNationalId, NATIONAL_ID_RE, research } from './workflows.js';
 
 import type { Json, LexAPIClient, LexResponse } from './client.js';
 import {
@@ -89,12 +89,13 @@ const celex = (what = 'CELEX number') =>
     .describe(`${what}, e.g. 32016R0679.`);
 
 // National-corpus ids (e.g. `AT-NOR-10001597`, `SI-JUD-UPRS-2025-I.U.727.2022.`):
-// a two-letter jurisdiction prefix, same as middleware/jurisdiction.js's
-// nationalIdParamGuard (`/^([A-Z]{2})-/`) uses to recognise them on the
-// citation graph. `includeNational`-aware citation tools accept either
+// a two-letter jurisdiction prefix, which is how the API recognises them on
+// the citation graph, then the source's own identifier, letters of any
+// alphabet included (NATIONAL_ID_RE, shared with the workflow tools). The
+// pattern is checked in a refinement, so it is not published in the JSON
+// schema. `includeNational`-aware citation tools accept either
 // shape; document reads stay celex()-only (lex_get_national_document /
 // lex_list_national_documents cover national documents directly).
-const NATIONAL_ID_RE = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
 const celexOrNationalId = (what = 'identifier') =>
   z.string().trim()
     .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v),

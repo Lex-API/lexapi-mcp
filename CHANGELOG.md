@@ -13,6 +13,8 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 
 ### Changed
 - Shorter README; several tool descriptions trimmed. No tool or parameter is renamed and no tool is removed; the schema and output changes are listed below.
+- `lex_cited_by`, `lex_cites`, `lex_citation_network`, `lex_citation_path`, `lex_related` and `lex_counterparts` accept a national document id with letters outside ASCII (for example `AT-JUD-JJT_20200101_OGH0002_PRÄ0000_001`), and `:` or `+` in it, as `lex_check_citation` already did; every id accepted before is still accepted.
+- `lex_check_citation`: a CELEX with a variant tag (`32016R0679_SUM`, `_RES`) is read as the CELEX without the tag, which is how the API resolves it; `basis.celex` says so.
 - `lex_national_semantic_case_law` / `lex_national_semantic_legislation`: `partial: true` is described as a search that did not finish, not as a coverage gap.
 - `lex_semantic_legislation`: the description, the server instructions and the README say: "For the text in force today, pass today's date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked." The `asOf` range reads "to today (UTC)".
 - `asOfCaveat.note` calls the text of unresolved hits the indexed text (was "the LATEST text").
