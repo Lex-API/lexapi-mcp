@@ -186,6 +186,8 @@ describe('lex_check_citation', () => {
       expect(history.data.inForceNote).toMatch(/contradict each other/);
       const search = await call('lex_research', { query: 'data protection', kinds: ['legislation'] }, () => ({ body: { success: true, results: [{ law_id: '32016R0679', article_ref: 'art_1', score: 0.9, ...fields }] } }));
       expect(search.data.results[0].inForce).toBe('unknown');
+      for (const k of ['notInForceReason', 'endOfValidity', 'entryIntoForce']) expect(k in search.data.results[0], k).toBe(false);
+      expect(search.data.results[0].inForceNote).toMatch(/contradict each other/);
     }
   });
 
@@ -1236,6 +1238,10 @@ describe('lex_research', () => {
       : { body: { success: true, results: [{ ...euCase(0.8), text: 'J'.repeat(200_000) }] } }));
     expect(data.results).toHaveLength(2);
     for (const h of data.results) expect(h.text.length).toBeLessThanOrEqual(500);
+    for (const h of data.results) expect(h.textTruncated).toBe(true);
+    const short = await call('lex_research', { query: 'right to erasure', kinds: ['legislation'] }, () => ({ body: { success: true, results: [legis(1, { text: 'A short article.' })] } }));
+    expect(short.data.results[0]).toMatchObject({ text: 'A short article.' });
+    expect('textTruncated' in short.data.results[0]).toBe(false);
     expect(text.length).toBeLessThan(5_000);
   });
 

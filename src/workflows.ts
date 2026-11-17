@@ -1070,11 +1070,19 @@ function mergedHit(s: Search, row: unknown, responseAttribution: unknown): Obj {
   const hit: Obj = { jurisdiction: eu ? 'EU' : (jurisdiction ?? s.code.toUpperCase()), kind: s.kind, ...rest };
   if (typeof snippet === 'string') hit.snippet = truncate(snippet, HIT_TEXT_CHARS);
   if (typeof summary === 'string') hit.summary = truncate(summary, HIT_TEXT_CHARS);
-  // Not asked for here; bounded like the snippet if an answer carries it.
-  if (typeof hit.text === 'string') hit.text = truncate(hit.text, HIT_TEXT_CHARS);
+  // Not asked for here; bounded like the snippet if an answer carries it, and marked as cut.
+  if (typeof hit.text === 'string' && hit.text.length > HIT_TEXT_CHARS) {
+    hit.text = truncate(hit.text, HIT_TEXT_CHARS);
+    hit.textTruncated = true;
+  }
   if (s.kind === 'legislation') {
-    const flag = eu ? inForceOf(shaped).inForce : nationalInForce;
-    hit.inForce = typeof flag === 'boolean' ? flag : 'unknown';
+    const label = eu ? inForceOf(shaped) : { inForce: nationalInForce };
+    hit.inForce = typeof label.inForce === 'boolean' ? label.inForce : 'unknown';
+    if (eu && label.inForceNote) {
+      // Fields that contradict each other are not passed on beside "unknown".
+      for (const k of ['notInForceReason', 'endOfValidity', 'entryIntoForce']) delete hit[k];
+      hit.inForceNote = label.inForceNote;
+    }
   } else if (inForce !== undefined) {
     // Sent only on a national decision, and only as false: its recorded end of validity has passed.
     hit.inForce = inForce;
