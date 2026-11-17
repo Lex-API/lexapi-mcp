@@ -52,6 +52,8 @@ export interface Seen {
   method: string;
   authorization?: string;
   apiKey?: string;
+  /** The X-LexAPI-Client header. */
+  client?: string;
   body: string;
 }
 
@@ -146,6 +148,7 @@ export async function startMockAs(): Promise<MockAs> {
       method: req.method ?? '',
       authorization: req.headers.authorization,
       apiKey: req.headers['x-api-key'] as string | undefined,
+      client: req.headers['x-lexapi-client'] as string | undefined,
       body,
     });
     const json = (status: number, v: unknown, headers: Record<string, string> = {}) => {

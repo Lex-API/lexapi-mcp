@@ -592,6 +592,22 @@ describe('lex_check_citation', () => {
     expect(typo.data).toMatchObject({ celex: '3206R0679', exists: false });
   });
 
+  it('a CELEX with a variant tag (_SUM, _RES) is read as the CELEX without it, as the API resolves it', async () => {
+    for (const identifier of ['32016R0679_SUM', 'celex:32016r0679_sum', '32016R0679_RES', '32016R0679_INF']) {
+      const { data, calls, paths } = await call('lex_check_citation', { identifier }, () => ({ body: metadata() }));
+      expect(paths, identifier).toEqual(['/documents/metadata']);
+      expect(calls[0].body, identifier).toEqual({ celexNumber: '32016R0679' });
+      expect(data, identifier).toMatchObject({ identifier, identifierType: 'celex', celex: '32016R0679', exists: true });
+      expect(data.basis.celex).toMatch(/^the CELEX as given, without its _(SUM|RES|INF) tag \(a summary or rendition of the same document\)$/);
+    }
+    // A corrigendum, a consolidated version and a qualified act are other documents: read as given.
+    for (const identifier of ['32013R0952R(04)', '02016R0679-20180524', '32019D0003(01)', '32016R0679_1', '32016R0679_ABCDE']) {
+      const { data, calls } = await call('lex_check_citation', { identifier }, () => ({ body: metadata({ celex: identifier, celexNumber: identifier }) }));
+      expect(calls[0].body, identifier).toEqual({ celexNumber: identifier });
+      expect(data.basis.celex, identifier).toBe('the CELEX as given');
+    }
+  });
+
   it('what the API can resolve is sent to it: a URL without a scheme, a uri= parameter, a bare ELI path', async () => {
     const resolveOk = (c: Call): Reply => (c.url.pathname.endsWith('/resolve')
       ? { body: { success: true, identifierType: 'url', resolvedVia: 'url', verified: false, celex: '32016R0679', urls: {} } }
@@ -621,6 +637,20 @@ describe('lex_check_citation', () => {
     const { data, calls } = await call('lex_check_citation', { identifier: id.toLowerCase() }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id, documentKind: 'decision' }) }));
     expect(decodeURIComponent(calls[1].url.pathname)).toBe(`/api/v1/at/documents/${id}`);
     expect(data).toMatchObject({ identifierType: 'national_id', id, exists: true });
+  });
+
+  it('a national id in decomposed form (NFD) is read in its composed form (NFC)', async () => {
+    const id = 'AT-JUD-JJT-20200101-OGH0002-PRÄ0000-001';
+    const nfd = id.normalize('NFD');
+    expect(nfd).not.toBe(id);
+    for (const identifier of [nfd, nfd.toLowerCase(), ` ${nfd} `]) {
+      const { data, calls } = await call('lex_check_citation', { identifier }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id, documentKind: 'decision' }) }));
+      expect(calls[1].url.pathname).toBe(`/api/v1/at/documents/${encodeURIComponent(id)}`);
+      expect(data).toMatchObject({ identifierType: 'national_id', id, exists: true });
+    }
+    // The composed id is sent as before.
+    const same = await call('lex_check_citation', { identifier: id }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id, documentKind: 'decision' }) }));
+    expect(same.calls[1].url.pathname).toBe('/api/v1/at/documents/AT-JUD-JJT-20200101-OGH0002-PR%C3%840000-001');
   });
 
   it('a Slovenian decision id answered with its final dot restored is the same document; nothing else is', async () => {

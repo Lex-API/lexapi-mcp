@@ -1,3 +1,4 @@
+import { CLIENT_HEADER, clientHeaderValue, type ClientApp, type ClientMode } from './clientHeader.js';
 import { LexAPIError, LexAPITransportError, parseErrorBody } from './errors.js';
 import { PACKAGE_VERSION } from './version.js';
 
@@ -31,6 +32,10 @@ const MAX_RETRY_AFTER_SLEEP_S = 10;
  * complete needs a full attempt, not the minimum one.
  */
 const MIN_INCOMPLETE_RETRY_REMAINING_MS = 15_000;
+
+/** Redirects followed for one attempt; one more is an error. */
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /** Response headers worth surfacing to a model; everything else is dropped. */
 const KEPT_HEADERS = [
@@ -93,6 +98,12 @@ export interface LexAPIClientOptions {
   signal?: AbortSignal;
   /** Injected for tests (the per-call deadline clock). */
   now?: () => number;
+  /** How the server is run; sent in the X-LexAPI-Client header. */
+  mode?: ClientMode;
+  /** The MCP tool these requests are made for; sent in the X-LexAPI-Client header. */
+  tool?: string;
+  /** The MCP client's clientInfo; sent in the X-LexAPI-Client header in stdio mode only. */
+  app?: ClientApp;
 }
 
 /** No retry or 429 sleep is started unless at least this much of the call's deadline would remain. */
@@ -117,6 +128,8 @@ function apiKeyAuth(key: string): UpstreamAuth {
 export class LexAPIClient {
   private readonly auth: UpstreamAuth;
   private readonly baseUrl: string;
+  /** The only origin requests and credentials are sent to; undefined when the base URL is not a URL. */
+  private readonly baseOrigin: URL | undefined;
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -124,6 +137,8 @@ export class LexAPIClient {
   private readonly signal?: AbortSignal;
   private readonly now: () => number;
   private readonly opts: LexAPIClientOptions;
+  /** Fixed for the lifetime of this client: one tool call has its own client (forCall). */
+  private readonly clientHeader: string | undefined;
 
   constructor(opts: LexAPIClientOptions) {
     if (opts.auth) {
@@ -139,18 +154,26 @@ export class LexAPIClient {
     this.signal = opts.signal;
     this.now = opts.now ?? Date.now;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    try { this.baseOrigin = new URL(this.baseUrl); } catch { this.baseOrigin = undefined; }
     this.maxRetries = opts.maxRetries ?? 1;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetch ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.clientHeader = clientHeaderValue({ mode: opts.mode, tool: opts.tool, app: opts.app });
   }
 
-  /** A client for one MCP request: its cancellation signal and timeout. */
-  forCall(call: { signal?: AbortSignal; timeoutMs?: number }): LexAPIClient {
+  /**
+   * A client for one MCP request: its cancellation signal and timeout, the
+   * tool it executes and the MCP client that asked. A client made from this
+   * one (a workflow tool's calls) keeps the tool and the MCP client.
+   */
+  forCall(call: { signal?: AbortSignal; timeoutMs?: number; tool?: string; app?: ClientApp }): LexAPIClient {
     return new LexAPIClient({
       ...this.opts,
       ...(call.signal ? { signal: call.signal } : {}),
       ...(call.timeoutMs ? { timeoutMs: call.timeoutMs } : {}),
+      ...(call.tool ? { tool: call.tool } : {}),
+      ...(call.app ? { app: call.app } : {}),
     });
   }
 
@@ -166,6 +189,66 @@ export class LexAPIClient {
       if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
       throw err;
     });
+  }
+
+  /** A redirect target is followed only on the API's own origin, or on its host when http is upgraded to https. */
+  private sameApi(target: URL): boolean {
+    const base = this.baseOrigin;
+    if (!base) return false;
+    if (target.origin === base.origin) return true;
+    return base.protocol === 'http:' && target.protocol === 'https:' && target.hostname === base.hostname
+      && base.port === '' && target.port === '';
+  }
+
+  /**
+   * One attempt: the request and the redirects it is answered with. Redirects
+   * are handled here, not by fetch, which would send the API key to whatever
+   * host a redirect names. One to another host is not followed: no request
+   * is made to it, and the error names its origin only.
+   */
+  private async send(
+    url: URL,
+    method: string,
+    headers: Record<string, string>,
+    body: string | undefined,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    let target = url;
+    let sentMethod = method;
+    let sentHeaders = headers;
+    let sentBody = body;
+    for (let followed = 0; ; followed++) {
+      const res = await this.fetchImpl(target, {
+        method: sentMethod,
+        headers: sentHeaders,
+        ...(sentBody !== undefined ? { body: sentBody } : {}),
+        signal,
+        redirect: 'manual',
+      });
+      const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
+      if (!location) return res;
+      await discard(res);
+      let next: URL;
+      try {
+        next = new URL(location, target);
+      } catch {
+        throw new LexAPITransportError('the API answered with a redirect that has no usable target', false);
+      }
+      if (!this.sameApi(next)) {
+        throw new LexAPITransportError(`the API answered with a redirect to another host (${next.origin}), which is not followed`, false);
+      }
+      if (followed >= MAX_REDIRECTS) {
+        throw new LexAPITransportError(`the API answered with more than ${MAX_REDIRECTS} redirects in a row`, false);
+      }
+      // 303 turns anything but GET into a GET; 301 and 302 do so for POST
+      // (as fetch does); 307 and 308 repeat the request as it was.
+      if ((res.status === 303 && sentMethod !== 'GET') || ((res.status === 301 || res.status === 302) && sentMethod === 'POST')) {
+        sentMethod = 'GET';
+        sentBody = undefined;
+        sentHeaders = Object.fromEntries(Object.entries(sentHeaders).filter(([k]) => k !== 'content-type'));
+      }
+      target = next;
+    }
   }
 
   /** Low-level request. Throws LexAPIError (HTTP error) or LexAPITransportError. */
@@ -188,6 +271,7 @@ export class LexAPIClient {
       accept: opts.ndjson ? 'application/x-ndjson, application/json' : 'application/json',
       'user-agent': `lexapi-mcp/${PACKAGE_VERSION}`,
     };
+    if (this.clientHeader) baseHeaders[CLIENT_HEADER] = this.clientHeader;
     if (opts.body !== undefined) baseHeaders['content-type'] = 'application/json';
 
     const canRetry = opts.retry !== false;
@@ -214,15 +298,12 @@ export class LexAPIClient {
       let res: Response;
       const attemptSignal = combineSignals(this.signal, AbortSignal.timeout(Math.max(1, remaining())));
       try {
-        res = await this.fetchImpl(url, {
-          method,
-          headers,
-          ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
-          signal: attemptSignal.signal,
-        });
+        res = await this.send(url, method, headers, opts.body !== undefined ? JSON.stringify(opts.body) : undefined, attemptSignal.signal);
       } catch (err) {
         attemptSignal.dispose();
         if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
+        // A refused redirect: the same request would be answered the same way.
+        if (err instanceof LexAPITransportError) throw err;
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
         const backoff = 500 * 2 ** (attempt + 1);
         if (!timedOut && canRetry && attempt < this.maxRetries && canWait(backoff)) {

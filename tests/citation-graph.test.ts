@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { runTool } from '../src/server.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
+import { createLexServer, runTool } from '../src/server.js';
 import { SERVER_INSTRUCTIONS } from '../src/server.js';
 import { tools, type ToolDef } from '../src/tools.js';
 import { clientWith, parseText } from './helpers.js';
@@ -530,5 +533,144 @@ describe('honest descriptions', () => {
   it('server instructions say the same', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/lex_transposition/);
     expect(SERVER_INSTRUCTIONS).toMatch(/not findings that a measure transposes the act/);
+  });
+});
+
+describe('identifiers of the citation-graph tools', () => {
+  // [tool, the parameters that take an identifier, the path the first one is sent on]
+  const GRAPH: Array<[string, string[], string]> = [
+    ['lex_cited_by', ['celexNumber'], '/citations/cited-by/'],
+    ['lex_cites', ['celexNumber'], '/citations/cites/'],
+    ['lex_citation_network', ['celexNumber'], '/citations/network/'],
+    ['lex_citation_path', ['from', 'to'], '/citations/path/'],
+    ['lex_related', ['celexNumber'], '/citations/related/'],
+    ['lex_counterparts', ['id'], '/citations/counterparts/'],
+  ];
+  const UMLAUT = 'AT-JUD-JJT_20200101_OGH0002_PRÄ0000_001';
+  const argsFor = (params: string[], id: string) => Object.fromEntries(params.map((p) => [p, id]));
+
+  it('a national id with letters outside ASCII is accepted by every graph tool and sent as given (over MCP)', async () => {
+    const { client, calls } = clientWith(() => ({ body: { success: true } }));
+    const server = createLexServer(client);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    await mcp.connect(b);
+    for (const id of [UMLAUT, 'SI-JUD-VSRS-2020-Š.Ž.1.2020.', 'CZ-JUS-NS-21.CDO.1.2020', 'EL-ΦΕΚ-Α-2020-1']) {
+      for (const [name, params, path] of GRAPH) {
+        const from = calls.length;
+        const res = await mcp.callTool({ name, arguments: argsFor(params, id) });
+        expect(res.isError, `${name} ${id}`).toBeFalsy();
+        expect(calls.length, `${name} ${id}`).toBe(from + 1);
+        const want = params.map(() => id).join('/');
+        expect(decodeURIComponent(calls[from].url.pathname), `${name} ${id}`).toBe(`/api/v1${path}${want}`);
+      }
+    }
+    // Lower case is upper-cased, as for any other id.
+    const lower = await mcp.callTool({ name: 'lex_cites', arguments: { celexNumber: UMLAUT.toLowerCase() } });
+    expect(lower.isError).toBeFalsy();
+    expect(decodeURIComponent(calls[calls.length - 1].url.pathname)).toBe(`/api/v1/citations/cites/${UMLAUT}`);
+    await mcp.close();
+  });
+
+  it('an id in decomposed form (NFD) is accepted and sent composed (NFC); composed and ASCII ids are sent as before', async () => {
+    const nfd = UMLAUT.normalize('NFD');
+    expect(nfd).not.toBe(UMLAUT);
+    expect(nfd).toContain('A\u0308');
+    const { client, calls } = clientWith(() => ({ body: { success: true } }));
+    const server = createLexServer(client);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    await mcp.connect(b);
+    // [given, the bytes sent in the path]
+    const cases: Array<[string, string]> = [
+      [nfd, encodeURIComponent(UMLAUT)],
+      [nfd.toLowerCase(), encodeURIComponent(UMLAUT)],
+      [UMLAUT, 'AT-JUD-JJT_20200101_OGH0002_PR%C3%840000_001'],
+      ['AT-NOR-10001597', 'AT-NOR-10001597'],
+      ['SI-JUD-UPRS-2025-I.U.727.2022.', 'SI-JUD-UPRS-2025-I.U.727.2022.'],
+      ['32013R0952R(04)', '32013R0952R(04)'],
+      ['02016R0679-20180524', '02016R0679-20180524'],
+    ];
+    for (const [given, sent] of cases) {
+      for (const [name, params, path] of GRAPH) {
+        const from = calls.length;
+        const res = await mcp.callTool({ name, arguments: argsFor(params, given) });
+        expect(res.isError, `${name} ${given}`).toBeFalsy();
+        expect(calls[from].url.pathname, `${name} ${given}`).toBe(`/api/v1${path}${params.map(() => sent).join('/')}`);
+      }
+    }
+    await mcp.close();
+    // A combining mark that does not compose with its letter is still refused.
+    for (const [name, params] of GRAPH) expect(ok(name, argsFor(params, 'AT-NOR-Q\u0308-1')), name).toBe(false);
+  });
+
+  it('every id accepted before is still accepted', () => {
+    const before = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
+    const ids = [
+      '32016R0679', 'celex:32016r0679', '62018CJ0311', '02016R0679-20180524', '32013R0952R(04)', '32016R0679_SUM', 'E2016J0001',
+      'AT-NOR-10001597', 'at-nor-10001597', 'SI-JUD-UPRS-2025-I.U.727.2022.', 'NL-ECLI-NL-HR-2020-1', 'DE-BJNR001950896', 'IT-COST-2020-1',
+      'AT-JUD-JJT_20200101_OGH0002_000', 'UK-UKPGA-2018-12', 'EU-2016-679', 'XX-(1)/a_b.c-d', '  AT-NOR-1  ',
+    ];
+    for (const id of ids) {
+      if (/^\s*[A-Za-z]{2}-/.test(id)) expect(before.test(id.trim()), id).toBe(true);
+      for (const [name, params] of GRAPH) expect(ok(name, argsFor(params, id)), `${name} ${id}`).toBe(true);
+    }
+  });
+
+  it('what is not an identifier is refused before any call, and the message says what is expected', async () => {
+    const garbage = ['', '!!', 'GDPR', 'data protection', 'AT-', 'AT-NOR 1', 'AT-NOR-1; DROP', 'AT-NOR-1\n', 'AT-§-1', 'https://example.test/x'];
+    for (const [name, params] of GRAPH) {
+      for (const id of garbage) {
+        const r = z.object(byName[name].inputSchema).safeParse(argsFor(params, id));
+        // A trailing line break is trimmed, as before.
+        if (id === 'AT-NOR-1\n') { expect(r.success, name).toBe(true); continue; }
+        expect(r.success, `${name} ${JSON.stringify(id)}`).toBe(false);
+        expect(r.error!.issues[0].message, name).toMatch(/must be a CELEX number \(e\.g\. 32016R0679\) or a national document id \(e\.g\. AT-NOR-12345\)/);
+      }
+    }
+    const { client, calls } = clientWith(() => ({ body: { success: true } }));
+    const server = createLexServer(client);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    await mcp.connect(b);
+    const bad = await mcp.callTool({ name: 'lex_cited_by', arguments: { celexNumber: 'data protection' } });
+    expect(bad.isError).toBe(true);
+    expect((bad.content as Array<{ text: string }>)[0].text).toMatch(/national document id \(e\.g\. AT-NOR-12345\)/);
+    expect(calls).toHaveLength(0);
+    await mcp.close();
+  });
+
+  it('the published schemas carry no pattern for these identifiers, and every pattern they do carry compiles', async () => {
+    const server = createLexServer(clientWith(() => ({ body: {} })).client);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    await mcp.connect(b);
+    const { tools: listed } = await mcp.listTools();
+    for (const [name, params] of GRAPH) {
+      const props = listed.find((t) => t.name === name)!.inputSchema.properties as Record<string, { pattern?: string; type?: string }>;
+      for (const p of params) expect(props[p], `${name}.${p}`).toMatchObject({ type: 'string' });
+      for (const p of params) expect(props[p].pattern, `${name}.${p}`).toBeUndefined();
+    }
+    const patterns: string[] = [];
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object') {
+        for (const [k, x] of Object.entries(v)) {
+          if (k === 'pattern' && typeof x === 'string') patterns.push(x);
+          else walk(x);
+        }
+      }
+    };
+    walk(listed.map((t) => t.inputSchema));
+    for (const p of patterns) {
+      expect(() => new RegExp(p), p).not.toThrow();
+      expect(() => new RegExp(p, 'u'), p).not.toThrow();
+      expect(p, 'a Unicode property escape needs a flag a client may not set').not.toMatch(/\\p\{/);
+    }
+    await mcp.close();
   });
 });

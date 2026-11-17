@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { LexAPIError } from './errors.js';
 import { webhookUrlProblem } from './webhookUrl.js';
-import { actHistory, checkCitation, isNationalId, research } from './workflows.js';
+import { actHistory, checkCitation, isNationalId, NATIONAL_ID_RE, research } from './workflows.js';
 
 import type { Json, LexAPIClient, LexResponse } from './client.js';
 import {
@@ -78,7 +78,7 @@ export const CITATION_RESOLUTIONS = ['id', 'key', 'abbreviation', 'text-pattern'
 
 const CONTENT_PARTS = ['metadata', 'fullText', 'articles', 'recitals', 'paragraphs', 'sections', 'tables', 'annexes'] as const;
 
-// Mirrors the API's isValidCelexToken (corrigenda `32013R0952R(04)` and
+// The CELEX form the API accepts (corrigenda `32013R0952R(04)` and
 // consolidated `02016R0679-20180524` included), case-insensitive; an
 // optional `CELEX:` prefix is stripped before sending.
 const CELEX_RE = /^(?:CELEX:)?[0-9A-Za-z][0-9A-Za-z()._-]{4,}$/i;
@@ -89,15 +89,16 @@ const celex = (what = 'CELEX number') =>
     .describe(`${what}, e.g. 32016R0679.`);
 
 // National-corpus ids (e.g. `AT-NOR-10001597`, `SI-JUD-UPRS-2025-I.U.727.2022.`):
-// a two-letter jurisdiction prefix, same as middleware/jurisdiction.js's
-// nationalIdParamGuard (`/^([A-Z]{2})-/`) uses to recognise them on the
-// citation graph. `includeNational`-aware citation tools accept either
+// a two-letter jurisdiction prefix, which is how the API recognises them on
+// the citation graph, then the source's own identifier, letters of any
+// alphabet included (NATIONAL_ID_RE, shared with the workflow tools). The
+// pattern is checked on the composed form (NFC) in a refinement, so it is
+// not published in the JSON schema. `includeNational`-aware citation tools accept either
 // shape; document reads stay celex()-only (lex_get_national_document /
 // lex_list_national_documents cover national documents directly).
-const NATIONAL_ID_RE = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
 const celexOrNationalId = (what = 'identifier') =>
   z.string().trim()
-    .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v),
+    .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v.normalize('NFC')),
       `${what} must be a CELEX number (e.g. 32016R0679) or a national document id (e.g. AT-NOR-12345)`)
     .describe(`${what}: a CELEX number, or (with includeNational) a national document id, e.g. "AT-NOR-12345".`);
 // National law: jurisdiction codes
@@ -120,9 +121,8 @@ const webhookUrl = (d: string) => z.string().trim().superRefine((v, ctx) => {
   const problem = webhookUrlProblem(v);
   if (problem) ctx.addIssue({ code: 'custom', message: problem });
 }).describe(d);
-// The export API's own checks (lex-api exportController parseIsoDate /
-// parseIsoTimestamp), mirrored exactly so the schema accepts what the server
-// accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
+// The export API's own date and timestamp checks, mirrored exactly so the
+// schema accepts what the server accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
 // zone (Z, ±HH:MM or ±HHMM), seconds are optional, a fraction has 1–9 digits.
 const ISO_TS_RE = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2}))?$/;
 export function isApiDate(value: string): boolean {
@@ -228,8 +228,9 @@ const oneArticle = (d = 'Return only this article: "17", "art_17", "Article 17",
   z.string().trim().min(1).max(40).optional().describe(d);
 const acceptLanguages = (d: string) => z.union([z.array(lang()).min(1), z.literal('any')]).optional().describe(d);
 
+/** The id as it is sent: upper case and, for a national id with accented letters, composed (NFC). */
 export function normCelex(v: string): string {
-  return v.trim().replace(/^CELEX:/i, '').toUpperCase();
+  return v.trim().replace(/^CELEX:/i, '').toUpperCase().normalize('NFC');
 }
 
 // ── Tool plumbing ─────────────────────────────────────────────────────

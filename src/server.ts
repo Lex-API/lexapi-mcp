@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { DEFAULT_TIMEOUT_MS, LexAPIClient } from './client.js';
+import type { ClientApp, ClientMode } from './clientHeader.js';
 import { describeError } from './errors.js';
 import { selectTools, type ToolDef } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
@@ -56,7 +57,8 @@ function registerTool(server: McpServer, tool: ToolDef, client: LexAPIClient): v
       inputSchema: tool.inputSchema,
       annotations: { title: tool.title, ...tool.annotations },
     },
-    async (args: Record<string, unknown>, extra: CallExtra) => runTool(tool, args, client, extra),
+    // clientInfo is known once the client has initialized: read per call.
+    async (args: Record<string, unknown>, extra: CallExtra) => runTool(tool, args, client, extra, { app: server.server.getClientVersion() }),
   );
 }
 
@@ -88,11 +90,11 @@ export async function runTool(
   args: Record<string, unknown>,
   client: LexAPIClient,
   extra: CallExtra = {},
-  opts: { timeoutMs?: number; progressIntervalMs?: number } = {},
+  opts: { timeoutMs?: number; progressIntervalMs?: number; app?: ClientApp } = {},
 ) {
   const token = extra._meta?.progressToken;
   const timeoutMs = opts.timeoutMs ?? configuredTimeout() ?? DEFAULT_TIMEOUT_MS;
-  const callClient = client.forCall({ signal: extra.signal, timeoutMs });
+  const callClient = client.forCall({ signal: extra.signal, timeoutMs, tool: tool.name, app: opts.app });
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   if (token !== undefined && extra.sendNotification) {
     let n = 0;
@@ -124,9 +126,10 @@ export function readOnlyFromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /** API-key requests (stdio and hosted): LEXAPI_BASE_URL exactly as 0.3.0 read it. */
-export function clientFromEnv(apiKey: string, env: NodeJS.ProcessEnv = process.env): LexAPIClient {
+export function clientFromEnv(apiKey: string, env: NodeJS.ProcessEnv = process.env, mode?: ClientMode): LexAPIClient {
   return new LexAPIClient({
     apiKey,
+    ...(mode ? { mode } : {}),
     ...(env.LEXAPI_BASE_URL ? { baseUrl: env.LEXAPI_BASE_URL } : {}),
   });
 }

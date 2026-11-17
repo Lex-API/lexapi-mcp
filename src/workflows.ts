@@ -161,9 +161,12 @@ function asThrown(f: Failure): unknown {
 // A national id: a two-letter country code, a hyphen, then whatever the
 // source's own identifier holds (letters of any alphabet included). "EU-…" is
 // not one. Which codes are countries is the API's answer, not this pattern's.
-const NATIONAL_ID_RE = /^[A-Za-z]{2}-[\p{L}\p{N}()./_:+-]+$/u;
+// The citation-graph tools check their ids with the same pattern.
+// An id is checked and sent in its composed form (NFC): the API compares ids
+// as strings, and stores "Ä" as one character, not as "A" and a combining mark.
+export const NATIONAL_ID_RE = /^[A-Za-z]{2}-[\p{L}\p{N}()./_:+-]+$/u;
 export function isNationalId(identifier: string): boolean {
-  const t = identifier.trim();
+  const t = identifier.trim().normalize('NFC');
   return NATIONAL_ID_RE.test(t) && !/^EU-/i.test(t);
 }
 /** Sector, year, type letters, number: what is sent as a CELEX without resolving. */
@@ -171,6 +174,13 @@ const CELEX_SHAPE_RE = /^[0-9CE]\d{4}[A-Z]{1,2}\d[0-9A-Z()._-]*$/;
 
 /** A token that starts with a sector digit: sent as a CELEX as it is, so a mistyped one is answered by the read. */
 const LOOSE_CELEX_RE = /^\d[0-9A-Z()._-]{4,}$/;
+
+/**
+ * A tag after a CELEX number that names a summary or another rendition of the
+ * same work (`_SUM`, `_RES`). The API's resolver answers with the CELEX
+ * without it.
+ */
+const VARIANT_TAG_RE = /_[A-Z]{2,4}$/;
 
 function upperCelex(v: string): string {
   return v.trim().replace(/^(?:uri=)?CELEX[:/]\s*/i, '').toUpperCase();
@@ -437,7 +447,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   const identifier = a.identifier.trim();
   const calls = new Calls(client);
   // A national id starts with the code of a country LexAPI lists; "EU-…" is not one.
-  if (isNationalId(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
+  if (isNationalId(identifier)) return checkNational(identifier.toUpperCase().normalize('NFC'), a, calls);
 
   const out: Obj = { identifier };
   const basis: Obj = {};
@@ -457,6 +467,11 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   if (CELEX_SHAPE_RE.test(celex) || LOOSE_CELEX_RE.test(celex)) {
     out.identifierType = 'celex';
     basis.celex = 'the CELEX as given';
+    const untagged = celex.replace(VARIANT_TAG_RE, '');
+    if (untagged !== celex && (CELEX_SHAPE_RE.test(untagged) || LOOSE_CELEX_RE.test(untagged))) {
+      basis.celex = `the CELEX as given, without its ${celex.slice(untagged.length)} tag (a summary or rendition of the same document)`;
+      celex = untagged;
+    }
   } else {
     const r = await calls.run((c) => c.resolve({ identifier }));
     const type = guessType(identifier);
