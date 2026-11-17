@@ -1,6 +1,7 @@
 // Workflow tools: each does one common job with a few of the API calls the
 // other tools make one at a time. Rules they share:
-//   - every value in a result comes from an API answer. A value the API did
+//   - every value in a result comes from an API answer, except two computed
+//     from such values: onDate.status and celexYear. A value the API did
 //     not return is reported as "unknown" (or "not_reported"), never filled in;
 //   - a call that fails is named in the result with its reason, and the rest
 //     of the result is still returned;

@@ -2,6 +2,9 @@
 // without the in-force fields), and every way one of their calls can fail.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -64,6 +67,15 @@ describe('catalogue', () => {
       expect(byName[name].write).toBeUndefined();
       expect(byName[name].annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
     }
+  });
+
+  it('the texts say what the tools compute themselves, and describe rather than promote', () => {
+    const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8');
+    expect(readme).toMatch(/Two values are computed by the tools from what the API returned: `onDate.status`.*`celexYear`/);
+    expect(readme).not.toMatch(/add no data of their own/);
+    expect(byName.lex_act_history.description).not.toMatch(/webhook/i);
+    expect(byName.lex_check_citation.description).not.toMatch(/Every value comes from an API answer/);
+    expect(byName.lex_verify_citation).toBeUndefined();
   });
 
   it('inputs are checked before any call: dates, CELEX numbers, codes and bounds', () => {

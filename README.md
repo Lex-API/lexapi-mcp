@@ -103,7 +103,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and changes to watched acts (paid plans). | free |
 
-The first three tools are made of the calls the others make and add no data of their own: a value the API did not return is reported as `unknown`, and a part that could not be fetched is named with the reason. The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
+The first three tools are made of the calls the others make: a value the API did not return is reported as `unknown`, and a part that could not be fetched is named with the reason. Two values are computed by the tools from what the API returned: `onDate.status` (a date compared with the returned dates) and `celexYear` (the year in a CELEX number). The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
 
 ## Configuration
 
