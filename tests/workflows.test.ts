@@ -767,7 +767,7 @@ describe('lex_research', () => {
       { jurisdiction: 'EU', kind: 'case_law', call: 'lex_semantic_case_law', status: 'ok', hits: 1 },
     ]);
     expect(data.incomplete).toBeUndefined();
-    expect(data.inForceNote).toMatch(/"unknown" means none was reported/);
+    expect(data.inForceNote).toMatch(/"unknown" means none was reported\. On an EU hit it is the act's/);
     expect(data.scoreNote).toMatch(/separate indexes/);
   });
 
@@ -830,7 +830,39 @@ describe('lex_research', () => {
       reason: 'plan', error: 'LexAPI error 403 (TIER_FORBIDDEN): National-law access is not included in your plan',
     });
     expect(data.incomplete).toBe(true);
-    expect(data.stopped).toBeUndefined();
+    expect(data.stopped).toMatchObject({ reason: 'plan', scope: 'national searches' });
+  });
+
+  it('a plan refusal stops the remaining national searches', async () => {
+    const { data, calls } = await call('lex_research', { query: 'Datenschutz', jurisdictions: ['eu', 'at', 'de', 'nl', 'es', 'cz', 'si', 'pl'] }, (c) => {
+      if (c.url.pathname.endsWith('/national/coverage')) return { body: coverage([['AT', true], ['DE', true], ['NL', true], ['ES', true], ['CZ', true], ['SI', true], ['PL', true]]) };
+      return codeOf(c) === 'eu' ? { body: { success: true, results: [legis(1)] } } : tierForbidden();
+    });
+    const national = data.sources.filter((s: any) => s.jurisdiction !== 'EU');
+    expect(national).toHaveLength(14);
+    expect(national.every((s: any) => s.status !== 'ok' && s.reason === 'plan')).toBe(true);
+    expect(national.filter((s: any) => s.status === 'not_run').length).toBeGreaterThanOrEqual(11);
+    // Fourteen national searches were asked for; only those already under way were sent.
+    expect(calls.filter((c) => codeOf(c) !== 'eu' && !c.url.pathname.endsWith('/coverage')).length).toBeLessThanOrEqual(3);
+    expect(data.sources.filter((s: any) => s.jurisdiction === 'EU').every((s: any) => s.status === 'ok')).toBe(true);
+    expect(data.stopped).toMatchObject({ reason: 'plan', scope: 'national searches' });
+  });
+
+  it('a national hit without its own attribution takes the response\'s; a national decision keeps the inForce the API sent', async () => {
+    const { data } = await call('lex_research', { query: 'Schadenersatz', jurisdictions: ['at'] }, (c) => {
+      if (c.url.pathname.endsWith('/national/coverage')) return { body: coverage([['AT', true]]) };
+      const bare = { ...natLegis('AT', 0.8), attribution: undefined };
+      const bareCase = { ...natCase('AT', 0.7), attribution: null };
+      return kindOf(c) === 'legislation'
+        ? { body: { success: true, attribution: 'Source: RIS (response level).', results: [bare, natLegis('AT', 0.6)] } }
+        : { body: { success: true, attribution: 'Source: RIS (response level).', results: [{ ...bareCase, validTo: '2020-01-01', inForce: false }, natCase('AT', 0.5)] } };
+    });
+    expect(data.results.map((h: any) => h.attribution)).toEqual(['Source: RIS (response level).', 'Source: RIS (response level).', ATTRIBUTION, ATTRIBUTION]);
+    expect(data.results[1]).toMatchObject({ kind: 'case_law', inForce: false, validTo: '2020-01-01' });
+    expect('inForce' in data.results[3]).toBe(false);
+    expect(data.inForceNote).toMatch(/On a national hit it comes from the validity recorded in the national index for the matched text/);
+    expect(data.inForceNote).not.toMatch(/for the act/);
+    expect(byName.lex_research.description).toMatch(/a national decision carries inForce: false once its recorded end of validity has passed/);
   });
 
   it('the national allowance runs out: no further national search, EU unaffected', async () => {

@@ -726,6 +726,8 @@ const RESEARCH_CONCURRENCY = 3;
 export const RESEARCH_RESULT_BUDGET = 60_000;
 const HIT_TEXT_CHARS = 500;
 
+const NATIONAL_STOPS = new Set<FailureReason>(['national_allowance_exhausted', 'terms_not_accepted', 'plan']);
+
 interface Search { code: string; kind: ResearchKind; call: string; report: Obj }
 
 export async function research(a: ResearchArgs, client: LexAPIClient): Promise<Obj> {
@@ -781,7 +783,8 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
       ? (s.kind === 'legislation' ? c.semanticLegislation(compact({ ...body, language: a.language })) : c.semanticCaseLaw(compact({ ...body, language: a.language })))
       : (s.kind === 'legislation' ? c.nationalSemanticLegislation(s.code, body) : c.nationalSemanticCaseLaw(s.code, body))));
     if (r.failure) {
-      if (s.code !== 'eu' && (r.failure.reason === 'national_allowance_exhausted' || r.failure.reason === 'terms_not_accepted')) nationalStopped ??= r.failure;
+      // The allowance, the terms and the plan hold for the account, not for one country.
+      if (s.code !== 'eu' && NATIONAL_STOPS.has(r.failure.reason)) nationalStopped ??= r.failure;
       Object.assign(s.report, r.notRun ? { status: 'not_run', reason: r.failure.reason, error: r.failure.error } : { status: 'failed', ...shown(r.failure) });
       return;
     }
@@ -794,7 +797,7 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
       partial: b.partial,
       partialReason: b.partialReason,
     }));
-    for (const row of rows) hits.push(mergedHit(s, row));
+    for (const row of rows) hits.push(mergedHit(s, row, b.attribution));
   };
 
   let next = 0;
@@ -825,7 +828,7 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
   if (calls.stopped) out.stopped = { reason: calls.stopped.reason, detail: describeError(calls.stopped.cause) };
   else if (nationalStopped) out.stopped = { reason: nationalStopped.reason, scope: 'national searches', detail: describeError(nationalStopped.cause) };
   if (results.some((h) => h.kind === 'legislation')) {
-    out.inForceNote = 'inForce is the status today as the API reported it for the act; "unknown" means none was reported. It does not cover amendments.';
+    out.inForceNote = 'inForce is today\'s status as the API reported it; "unknown" means none was reported. On an EU hit it is the act\'s, as the Publications Office records it, and does not cover amendments. On a national hit it comes from the validity recorded in the national index for the matched text, or from a repeal LexAPI has recorded.';
   }
   if (new Set(results.map((h) => `${String(h.jurisdiction)}/${String(h.kind)}`)).size > 1) {
     out.scoreNote = 'Scores come from separate indexes; the order across sources is approximate.';
@@ -833,7 +836,7 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
   return { ...out, ...calls.footer() };
 }
 
-function mergedHit(s: Search, row: unknown): Obj {
+function mergedHit(s: Search, row: unknown, responseAttribution: unknown): Obj {
   const eu = s.code === 'eu';
   const shaped: Obj = s.kind === 'legislation'
     ? (eu ? shapeLegislationHit(row) : shapeNationalLegislationHit(row))
@@ -846,8 +849,10 @@ function mergedHit(s: Search, row: unknown): Obj {
     const flag = eu ? inForce : nationalInForce;
     hit.inForce = typeof flag === 'boolean' ? flag : 'unknown';
   } else if (inForce !== undefined) {
-    // A national decision LexAPI knows to be no longer valid.
+    // Sent only on a national decision, and only as false: its recorded end of validity has passed.
     hit.inForce = inForce;
   }
+  // The source and its licence stay with every national hit.
+  if (!eu && !hit.attribution && typeof responseAttribution === 'string' && responseAttribution) hit.attribution = responseAttribution;
   return hit;
 }
