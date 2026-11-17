@@ -80,7 +80,7 @@ describe('model-facing text describes behaviour and does not steer the model', (
   });
 
   it('no string in the source steers the model', () => {
-    for (const file of ['tools.ts', 'shape.ts', 'errors.ts', 'server.ts']) {
+    for (const file of ['tools.ts', 'workflows.ts', 'shape.ts', 'errors.ts', 'server.ts']) {
       for (const line of codeLines(file)) expect(line, file).not.toMatch(STEERING);
     }
   });

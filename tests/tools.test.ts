@@ -31,12 +31,12 @@ describe('tool catalogue', () => {
 
   it('covers every public endpoint', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
-      'lex_citation_network', 'lex_citation_path', 'lex_citation_stats', 'lex_cited_by', 'lex_cites',
+      'lex_act_history', 'lex_check_citation', 'lex_citation_network', 'lex_citation_path', 'lex_citation_stats', 'lex_cited_by', 'lex_cites',
       'lex_counterparts', 'lex_create_webhook', 'lex_delete_webhook', 'lex_document_versions', 'lex_export', 'lex_extract_citations',
       'lex_get_document', 'lex_get_document_by_url', 'lex_get_document_version', 'lex_get_documents_batch',
       'lex_get_metadata', 'lex_get_national_document', 'lex_get_webhook', 'lex_info', 'lex_list_national_documents',
       'lex_list_webhooks', 'lex_national_coverage', 'lex_national_semantic_case_law',
-      'lex_national_semantic_legislation', 'lex_recent_documents', 'lex_related',
+      'lex_national_semantic_legislation', 'lex_recent_documents', 'lex_related', 'lex_research',
       'lex_resolve', 'lex_search', 'lex_semantic_case_law', 'lex_semantic_legislation', 'lex_test_webhook',
       'lex_transposition', 'lex_update_webhook',
     ]);
@@ -101,15 +101,15 @@ describe('input validation', () => {
     const tool = byName.lex_semantic_legislation;
     const schema = z.toJSONSchema(z.object(tool.inputSchema)) as { properties: Record<string, { description?: string }> };
     const asOf = schema.properties.asOf.description ?? '';
-    const sentence = 'For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, repealed and since-amended provisions are returned unmarked.';
+    const sentence = 'For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked.';
     expect(tool.description).toContain(sentence);
     expect(SERVER_INSTRUCTIONS).toContain(sentence);
     expect(asOf).toMatch(/Omitted: the indexed texts/);
     // asOf = today is not "current law": consolidated texts are not authentic and some hits stay unresolved.
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
     const unreleased = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/^## /m)[1];
-    expect(readme).toMatch(/repealed and since-amended provisions/);
-    expect(unreleased).toMatch(/repealed and since-amended provisions/);
+    expect(readme).toMatch(/since-amended or repealed provisions are not marked/);
+    expect(unreleased).toMatch(/acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked/);
     for (const text of [tool.description, asOf, SERVER_INSTRUCTIONS, readme, unreleased]) {
       expect(text).not.toMatch(/current law/i);
       expect(text).not.toMatch(/repealed or amended/);

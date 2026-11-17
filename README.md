@@ -72,7 +72,10 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date. For the text in force today, pass today's date (UTC) as `asOf` and use only hits with `asOfResolved: true`. Without `asOf`, repealed and since-amended provisions are returned unmarked. | 5 (+ up to 5 per version fetch with `asOf`) |
+| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 1–6 (+ 0–5 when an article is not matched) |
+| `lex_act_history` | The acts that amend, correct or repeal an EU act, with its in-force status today. | 2–6 (+ 1–5 per date read) |
+| `lex_research` | One query over EU legislation, EU case law and the national law of chosen live countries. | 5 per search |
+| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date. For the text in force today, pass today's date (UTC) as `asOf` and use only hits with `asOfResolved: true`. Without `asOf`, acts no longer in force are marked `inForce: false` where their status is known; since-amended or repealed provisions are not marked. | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
 | `lex_recent_documents` | What was published in the last N days. | 3 per 10 results |
@@ -100,7 +103,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and changes to watched acts (paid plans). | free |
 
-The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
+The first three tools are made of the calls the others make: a value the API did not return is reported as `unknown`, and a part that could not be fetched is named with the reason. Two values are computed by the tools from what the API returned: `onDate.status` (a date compared with the returned dates) and `celexYear` (the year in a CELEX number). The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
 
 ## Configuration
 

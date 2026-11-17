@@ -100,17 +100,20 @@ describe('MCP protocol (in-memory)', () => {
     // and says what holds for several tools once, in the server
     // instructions; the tools that return attribution say it must be kept:
     // every webhook criteria field may be null, as in the API: measured 58.4k.
-    expect(listJson.length).toBeLessThan(58_450);
-    // The instructions are in every client's context too: measured 3.3k.
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_350);
+    // The three workflow tools (lex_check_citation, lex_act_history,
+    // lex_research) add ~6.4k: measured 64.8k.
+    expect(listJson.length).toBeLessThan(64_850);
+    // The instructions are in every client's context too: measured 3.3k;
+    // 3.7k with the workflow tools and the in-force label.
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_750);
 
-    // Read-only mode lists fewer tools: measured 51.1k.
+    // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools.
     const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
     const [ra, rb] = InMemoryTransport.createLinkedPair();
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(51_150);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(57_600);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);
