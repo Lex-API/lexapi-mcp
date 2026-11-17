@@ -57,17 +57,19 @@ function appLabel(app: ClientApp | undefined): string {
 
 /**
  * The header value for one request, or undefined when the package version
- * cannot be sent in it. A part that is not valid is left out; never throws.
+ * is not one the header can carry (it is cut to 24 characters, never
+ * rewritten). A part that is not valid is left out; never throws.
  */
 export function clientHeaderValue(parts: ClientHeaderParts = {}, version: string = PACKAGE_VERSION): string | undefined {
-  const v = String(version).replace(/[^0-9A-Za-z.+_-]/g, '').slice(0, 24);
+  const v = String(version).slice(0, 24);
   if (!VERSION_RE.test(v)) return undefined;
   let value = `${CLIENT_NAME}/${v}`;
   try {
     if (parts.mode === 'hosted' || parts.mode === 'stdio') value += `; mode=${parts.mode}`;
     if (typeof parts.tool === 'string' && TOOL_RE.test(parts.tool)) value += `; tool=${parts.tool}`;
-    // The hosted server does not name the connecting client: LexAPI knows it
-    // from the OAuth connection.
+    // The hosted server does not name the connecting client: on the OAuth
+    // path LexAPI knows it from the connection, and on the API-key path it
+    // is not sent at all.
     const app = parts.mode === 'stdio' ? appLabel(parts.app) : '';
     // The app is the only part that is dropped for length.
     if (app && value.length + '; app='.length + app.length <= MAX_HEADER) value += `; app=${app}`;

@@ -121,8 +121,13 @@ describe('the header value', () => {
     expect(clientHeaderValue({ mode: 'other' as never, tool: 'lex_info' })).toBe(`lexapi-mcp/${PACKAGE_VERSION}; tool=lex_info`);
     expect(clientHeaderValue({ mode: 'stdio', tool: 'lex_info' }, '1.0.0-rc.1+build.5')).toBe('lexapi-mcp/1.0.0-rc.1+build.5; mode=stdio; tool=lex_info');
     // A version the header cannot carry: no header, rather than one the API refuses.
-    expect(clientHeaderValue({ mode: 'stdio' }, '')).toBeUndefined();
-    expect(clientHeaderValue({ mode: 'stdio' }, '-1')).toBeUndefined();
+    // It is never rewritten into another version.
+    for (const version of ['', '-1', '1,2', '1.0.0 beta', 'v1;x', '1.0.0\n', '１.0', '1/2']) {
+      expect(clientHeaderValue({ mode: 'stdio' }, version), JSON.stringify(version)).toBeUndefined();
+    }
+    // A longer one is cut to the 24 characters the header carries.
+    expect(clientHeaderValue({}, `1.0.0-${'a'.repeat(40)}`)).toBe(`lexapi-mcp/1.0.0-${'a'.repeat(18)}`);
+    expect(clientHeaderValue({}, `${'1'.repeat(24)},2`)).toBe(`lexapi-mcp/${'1'.repeat(24)}`);
   });
 
   it('a hostile clientInfo gives a header the API accepts, and never throws', () => {
