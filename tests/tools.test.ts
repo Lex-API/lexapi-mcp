@@ -101,15 +101,15 @@ describe('input validation', () => {
     const tool = byName.lex_semantic_legislation;
     const schema = z.toJSONSchema(z.object(tool.inputSchema)) as { properties: Record<string, { description?: string }> };
     const asOf = schema.properties.asOf.description ?? '';
-    const sentence = 'For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, since-amended provisions are returned unmarked, and repealed ones are marked (inForce: false) only where the API reports the act\'s status.';
+    const sentence = 'For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked.';
     expect(tool.description).toContain(sentence);
     expect(SERVER_INSTRUCTIONS).toContain(sentence);
     expect(asOf).toMatch(/Omitted: the indexed texts/);
     // asOf = today is not "current law": consolidated texts are not authentic and some hits stay unresolved.
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
     const unreleased = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/^## /m)[1];
-    expect(readme).toMatch(/since-amended provisions are returned unmarked/);
-    expect(unreleased).toMatch(/since-amended provisions are returned unmarked/);
+    expect(readme).toMatch(/since-amended or repealed provisions are not marked/);
+    expect(unreleased).toMatch(/acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked/);
     for (const text of [tool.description, asOf, SERVER_INSTRUCTIONS, readme, unreleased]) {
       expect(text).not.toMatch(/current law/i);
       expect(text).not.toMatch(/repealed or amended/);
