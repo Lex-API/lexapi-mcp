@@ -103,10 +103,11 @@ describe('partial national semantic answers', () => {
     expect(complete.data.partialReason).toBeUndefined();
   });
 
-  it('both tool descriptions say results may be incomplete', () => {
+  it('both tool descriptions say the search did not finish, not that documents are missing', () => {
     for (const name of ['lex_national_semantic_case_law', 'lex_national_semantic_legislation']) {
       expect(byName[name].description).toMatch(/SEARCH_INCOMPLETE/);
-      expect(byName[name].description).toMatch(/incomplete/);
+      expect(byName[name].description).toMatch(/this one search did not finish/);
+      expect(byName[name].description).toMatch(/does not indicate a coverage gap/);
     }
   });
 });
