@@ -208,27 +208,163 @@ describe('lex_check_citation', () => {
     expect(data.celex).toBeUndefined();
   });
 
+  const ARTICLES = [
+    { id: 'art_6', number: 'Article 6', title: 'Lawfulness of processing', content: 'x' },
+    { id: 'art_6a', number: 'Article 6a', title: 'Inserted', content: 'x' },
+    { id: 'art_17', number: 'Article 17', title: 'Right to erasure', content: `1. The data subject shall have the right… ${'x'.repeat(600)}` },
+  ];
+
   it('an article that exists is read with the document in one call', async () => {
     const { data, paths, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({
-      body: articleDoc([{ id: 'art_17', number: 'Article 17', title: 'Right to erasure', content: `1. The data subject shall have the right… ${'x'.repeat(600)}` }], { inForce: true }),
-      headers: { 'x-source': 'corpus' },
+      body: articleDoc(ARTICLES, { inForce: true }), headers: { 'x-source': 'corpus' },
     }));
     expect(paths).toEqual(['/documentContent']);
-    expect(calls[0].body).toEqual({ celexNumber: '32016R0679', articleId: '17', include: ['metadata', 'articles'] });
+    // The whole article list is read, so a miss can be told from a text without articles.
+    expect(calls[0].body).toEqual({ celexNumber: '32016R0679', include: ['metadata', 'articles'] });
     expect(data).toMatchObject({ exists: true, inForce: true });
-    expect(data.article).toMatchObject({ requested: '17', found: true, id: 'art_17', number: 'Article 17', title: 'Right to erasure', checkedIn: '32016R0679' });
+    expect(data.article).toEqual({
+      requested: '17', found: true, id: 'art_17', number: 'Article 17', title: 'Right to erasure', checkedIn: '32016R0679',
+      excerpt: expect.any(String),
+    });
     expect(data.article.excerpt.length).toBeLessThanOrEqual(300);
-    expect(data.basis.article).toBe('lex_get_document with articleId');
+    expect(data.basis.article).toBe('lex_get_document: the article units of the text');
   });
 
-  it('an article that does not exist: found false, scoped to the text that was read', async () => {
-    const { data } = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 120' }, () => ({ body: articleDoc([]) }));
+  it('common citation forms are mapped to the article number; a paragraph or point is reported as not checked', async () => {
+    const reply = () => ({ body: articleDoc(ARTICLES) });
+    for (const form of ['Art. 17', 'Art 17', 'art_17', 'ARTICLE 17', 'Article 17(1)', '17(1)(a)', 'Art. 17, para 2']) {
+      const { data } = await call('lex_check_citation', { identifier: '32016R0679', article: form }, reply);
+      expect(data.article, form).toMatchObject({ requested: form, found: true, id: 'art_17' });
+      if (/[(,]/.test(form)) expect(data.article.notChecked, form).toMatch(/only the article was looked up/);
+      else expect(data.article.notChecked, form).toBeUndefined();
+    }
+    const suffix = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 6a' }, reply);
+    expect(suffix.data.article).toMatchObject({ found: true, id: 'art_6a' });
+  });
+
+  it('a form that cannot be mapped is unknown, never "not found", and no document is read for it', async () => {
+    for (const form of ['Annex I', '6 bis', 'recital 4', 'seventeen']) {
+      const { data, paths } = await call('lex_check_citation', { identifier: '32016R0679', article: form }, () => ({ body: metadata() }));
+      expect(paths, form).toEqual(['/documents/metadata']);
+      expect(data.exists).toBe(true);
+      expect(data.article, form).toMatchObject({ requested: form, found: 'unknown' });
+      expect(data.article.note).toMatch(/could not be mapped to one article number/);
+    }
+  });
+
+  it('an article that does not exist: found false, scoped to the article units that were compared', async () => {
+    const { data } = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 120' }, () => ({ body: articleDoc(ARTICLES) }));
     expect(data.exists).toBe(true);
     expect(data.article).toEqual({
       requested: 'Article 120', found: false, checkedIn: '32016R0679',
-      note: 'No article with this id in the text of 32016R0679 as published; an article inserted by a later amendment is only in a consolidated version.',
+      note: 'Article 120 is not among the 3 article units of 32016R0679; only the act as published was compared, and an article inserted by a later amendment is only in a consolidated version.',
     });
     expect(data.inForce).toBe('unknown');
+    const cons = await call('lex_check_citation', { identifier: '02016R0679-20160504', article: '120' }, () => ({ body: articleDoc(ARTICLES, { celex: '02016R0679-20160504' }) }));
+    expect(cons.data.article.note).toBe('Article 120 is not among the 3 article units of 02016R0679-20160504; only this consolidated version was compared.');
+  });
+
+  it('a text without article units (a judgment): the article is unknown, not "not found"', async () => {
+    for (const content of [{ articles: [] }, {}, { paragraphs: [{ number: 1, text: 'x' }] }]) {
+      const { data } = await call('lex_check_citation', { identifier: '62018CJ0311', article: '17' }, () => ({
+        body: articleDoc([], { celex: '62018CJ0311', content }),
+      }));
+      expect(data.exists).toBe(true);
+      expect(data.article).toMatchObject({ requested: '17', found: 'unknown' });
+      expect(data.article.note).toMatch(/has no article units as LexAPI holds it/);
+    }
+  });
+
+  it('a 200 that carries no document is not evidence that it exists', async () => {
+    const replies: Reply[] = [
+      { raw: '' },
+      { raw: '<html><body>OK</body></html>', headers: { 'content-type': 'text/html' } },
+      { body: { success: true } },
+      { body: { success: true, metadata: { title: 'A title without an identifier' } } },
+      { body: { success: false, metadata: { celex: '32016R0679', title: 'GDPR' } } },
+      { body: [] },
+    ];
+    for (const reply of replies) {
+      const { data, result } = await call('lex_check_citation', { identifier: '32016R0679' }, () => reply);
+      expect(result.isError).toBeFalsy();
+      expect(data).toMatchObject({ celex: '32016R0679', exists: 'unknown', inForce: 'unknown' });
+      expect(data.title).toBeUndefined();
+      expect(data.notChecked).toEqual([{
+        what: 'existence, title, in-force status', call: 'lex_get_metadata', reason: 'unreadable_response',
+        note: 'The answer carried no document with an identifier, so it does not show whether 32016R0679 exists.',
+      }]);
+    }
+    const doc = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({ body: { success: true } }));
+    expect(doc.data).toMatchObject({ exists: 'unknown' });
+    expect(doc.data.article).toBeUndefined();
+    const national = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => ({ body: { success: true, document: { title: 'Datenschutzgesetz' } } }));
+    expect(national.data).toMatchObject({ id: 'AT-NOR-1', exists: 'unknown' });
+    expect(national.data.notChecked[0].reason).toBe('unreadable_response');
+    expect(national.data.title).toBeUndefined();
+  });
+
+  it('an answer about a different document is not reported as the one asked for', async () => {
+    const other = () => ({ body: metadata({ celex: '32016R0680', celexNumber: '32016R0680', title: 'Directive (EU) 2016/680', inForce: true }) });
+    const { data } = await call('lex_check_citation', { identifier: '32016R0679' }, other);
+    expect(data).toMatchObject({ celex: '32016R0679', exists: 'unknown', inForce: 'unknown' });
+    expect(data.title).toBeUndefined();
+    expect(data.notChecked[0]).toMatchObject({
+      reason: 'different_document',
+      note: '32016R0679 was asked for and the answer is about 32016R0680; nothing from it is reported.',
+    });
+    // A consolidated version is not its base act, and the other way round.
+    const base = await call('lex_check_citation', { identifier: '02016R0679-20160504' }, () => ({ body: metadata() }));
+    expect(base.data).toMatchObject({ exists: 'unknown' });
+    expect(base.data.notChecked[0].note).toMatch(/02016R0679-20160504 was asked for and the answer is about 32016R0679/);
+    const resolved = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }, (c) => (
+      c.url.pathname.endsWith('/resolve')
+        ? { body: { success: true, identifierType: 'eli', resolvedVia: 'eli-cellar', verified: true, celex: '32016R0679', urls: {} } }
+        : other()
+    ));
+    expect(resolved.data).toMatchObject({ celex: '32016R0679', exists: 'unknown' });
+    expect(resolved.data.notChecked[0].reason).toBe('different_document');
+    const national = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => ({ body: { success: true, document: { id: 'AT-NOR-2', jurisdiction: 'AT', title: 'Another act' } } }));
+    expect(national.data).toMatchObject({ id: 'AT-NOR-1', exists: 'unknown' });
+    expect(national.data.notChecked[0].note).toMatch(/AT-NOR-1 was asked for and the answer is about AT-NOR-2/);
+    expect(national.data.title).toBeUndefined();
+  });
+
+  it('a resolve answer without a CELEX is unknown', async () => {
+    const { data, paths } = await call('lex_check_citation', { identifier: 'ECLI:EU:C:2020:559' }, () => ({ body: { success: true, identifierType: 'ecli' } }));
+    expect(paths).toEqual(['/resolve']);
+    expect(data).toMatchObject({ exists: 'unknown', inForce: 'unknown' });
+    expect(data.notChecked[0]).toMatchObject({ call: 'lex_resolve', reason: 'unreadable_response' });
+    expect(data.celex).toBeUndefined();
+  });
+
+  it('a 404 that is not the API\'s NOT_FOUND answer is unknown, not "does not exist"', async () => {
+    const replies: Reply[] = [
+      { status: 404, raw: '<html><body><h1>404 Not Found</h1>nginx</body></html>', headers: { 'content-type': 'text/html' } },
+      { status: 404, body: { error: 'Not Found' } },
+      { status: 404, body: { success: false, error: { code: 'ROUTE_NOT_FOUND', message: 'No such route' } } },
+    ];
+    for (const reply of replies) {
+      const { data, result } = await call('lex_check_citation', { identifier: '32016R0679' }, () => reply);
+      expect(result.isError).toBeFalsy();
+      expect(data).toMatchObject({ celex: '32016R0679', exists: 'unknown', inForce: 'unknown' });
+      expect(data.notChecked[0]).toMatchObject({ call: 'lex_get_metadata', reason: 'unconfirmed_not_found' });
+      expect(data.notChecked[0].note).toMatch(/not the API's own NOT_FOUND answer/);
+      const national = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => reply);
+      expect(national.data).toMatchObject({ exists: 'unknown' });
+      const eli = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }, () => reply);
+      expect(eli.data).toMatchObject({ exists: 'unknown' });
+      expect(eli.data.notChecked[0]).toMatchObject({ call: 'lex_resolve', reason: 'unconfirmed_not_found' });
+    }
+    // The legacy shape carries the code at the top level.
+    const legacy = await call('lex_check_citation', { identifier: '32016R0697' }, () => ({ status: 404, body: { success: false, code: 'NOT_FOUND', error: 'No document found with CELEX number: 32016R0697' } }));
+    expect(legacy.data.exists).toBe(false);
+  });
+
+  it('a date before a consolidated version\'s own date says nothing about the act', async () => {
+    const { data } = await call('lex_check_citation', { identifier: '02016R0679-20160504', date: '2016-05-01' }, () => ({
+      body: metadata({ celex: '02016R0679-20160504', celexNumber: '02016R0679-20160504', dateOfDocumentISO: '2016-05-04' }),
+    }));
+    expect(data.onDate).toMatchObject({ date: '2016-05-01', status: 'unknown' });
   });
 
   it('no published text: the article is unknown and the consolidated pointer is passed on', async () => {
@@ -341,6 +477,17 @@ describe('lex_check_citation', () => {
     expect(data.onDate).toEqual({ date: '2025-06-01', status: 'after_end_of_validity', endOfValidity: '2024-12-31' });
     const a = await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article: '§17a' }, () => ({ body: nationalDoc() }));
     expect(a.data.article).toMatchObject({ found: true, number: '§ 17a' });
+  });
+
+  it('a national id: a paragraph part is not checked, and a document without units is unknown', async () => {
+    const part = await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article: '§ 1 (2)' }, () => ({ body: nationalDoc() }));
+    expect(part.data.article).toMatchObject({ found: true, number: '§ 1' });
+    expect(part.data.article.notChecked).toMatch(/"\(2\)": only the unit was looked up/);
+    const decision = await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article: '1' }, () => ({
+      body: nationalDoc({ documentKind: 'decision', content: { fullText: '…', articles: [] } }),
+    }));
+    expect(decision.data.article).toMatchObject({ requested: '1', found: 'unknown' });
+    expect(decision.data.article.note).toMatch(/held without numbered units/);
   });
 
   it('a national id LexAPI does not hold, and a country that is not live, are told apart', async () => {

@@ -32,7 +32,7 @@ export type FailureReason =
   | 'credits_exhausted' | 'national_allowance_exhausted' | 'rate_limited' | 'quota_exhausted'
   | 'plan' | 'terms_not_accepted' | 'not_found' | 'withdrawn' | 'semantic_not_enabled'
   | 'search_incomplete' | 'timeout' | 'upstream_error' | 'network' | 'rejected'
-  | 'not_live' | 'not_listed';
+  | 'not_live' | 'not_listed' | 'unconfirmed_not_found' | 'unreadable_response' | 'different_document';
 
 interface Failure {
   reason: FailureReason;
@@ -62,7 +62,8 @@ function failureOf(err: unknown): Failure {
     err.status === 402 ? (err.code === 'NATIONAL_ALLOWANCE_EXHAUSTED' ? 'national_allowance_exhausted' : 'credits_exhausted')
       : err.status === 429 ? (err.code === 'QUOTA_EXHAUSTED' || (err.retryAfterSeconds === undefined && err.resetsAt) ? 'quota_exhausted' : 'rate_limited')
         : err.status === 403 ? (err.code === 'NATIONAL_TERMS_NOT_ACCEPTED' ? 'terms_not_accepted' : 'plan')
-          : err.status === 404 ? 'not_found'
+          // Only the API's own NOT_FOUND is an answer about the document.
+          : err.status === 404 ? (err.code === 'NOT_FOUND' ? 'not_found' : 'unconfirmed_not_found')
             : err.status === 410 ? 'withdrawn'
               : err.status === 409 && err.code === 'NATIONAL_SEMANTIC_NOT_ENABLED' ? 'semantic_not_enabled'
                 : err.status === 422 || d.partialReason === 'SEARCH_INCOMPLETE' ? 'search_incomplete'
@@ -196,8 +197,29 @@ function onDate(date: string, known: { documentDate?: unknown; entryIntoForce?: 
   };
 }
 
-// ── lex_check_citation ────────────────────────────────────────────
+// ── lex_check_citation ─────────────────────────────────────────────
 export interface CheckArgs { identifier: string; article?: string; date?: string }
+
+type Carried = { doc: Obj; problem?: undefined } | { doc?: undefined; problem: { reason: FailureReason; note: string } };
+
+/**
+ * The document an answer carries, when the answer is readable and is about
+ * the document asked for. Anything else is not evidence that it exists.
+ */
+function carriedDocument(body: unknown, key: 'metadata' | 'document', requested: string, idKeys: string[]): Carried {
+  const doc = isObj(body) && body.success !== false && isObj(body[key]) ? body[key] : undefined;
+  const raw = doc ? idKeys.map((k) => doc[k]).find((v) => typeof v === 'string' && v.trim()) : undefined;
+  if (!doc || typeof raw !== 'string') {
+    return { problem: { reason: 'unreadable_response', note: `The answer carried no document with an identifier, so it does not show whether ${requested} exists.` } };
+  }
+  const returned = raw.trim().toUpperCase();
+  if (returned !== requested) {
+    return { problem: { reason: 'different_document', note: `${requested} was asked for and the answer is about ${returned}; nothing from it is reported.` } };
+  }
+  return { doc };
+}
+
+const CELEX_KEYS = ['celex', 'celexNumber'];
 
 const LABEL_WORDS = new Set(['article', 'artikel', 'articulo', 'articolo', 'art', 'clen', 'cl', 'paragraph', 'paragraf', 'par']);
 
@@ -206,6 +228,24 @@ function unitKey(v: unknown): string {
   return String(v ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
     .split(/[^a-z0-9]+/).filter((t) => t && !LABEL_WORDS.has(t)).join('');
 }
+
+interface ArticleRef { number: string; rest?: string }
+
+/**
+ * "Art. 17", "Article 17(1)", "art_17", "6a" → the article number the API
+ * matches on, plus the paragraph or point part, which is not looked up.
+ * Undefined for a form that cannot be mapped to one article number.
+ */
+export function parseArticle(v: string): ArticleRef | undefined {
+  const t = v.trim().toLowerCase().replace(/^art(?:icle|\.)?[\s_]*/, '');
+  const m = /^(\d+[a-z]{0,2})(?![a-z0-9])\s*(.*)$/.exec(t);
+  if (!m) return undefined;
+  const rest = m[2].trim();
+  if (rest && !/^(?:[(,.;§]|para|point|pt\b|lit\b|subpara|sentence)/.test(rest)) return undefined;
+  return rest ? { number: m[1], rest } : { number: m[1] };
+}
+
+const UNMAPPED_ARTICLE = 'This form could not be mapped to one article number (forms read: "17", "Art. 17", "Article 17(1)", "6a"), so nothing was compared.';
 
 function guessType(identifier: string): string {
   if (/^ECLI:/i.test(identifier)) return 'ecli';
@@ -221,7 +261,6 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
 
   const out: Obj = { identifier };
   const basis: Obj = {};
-  const notChecked: Obj[] = [];
   let celex = upperCelex(identifier);
 
   if (CELEX_SHAPE_RE.test(celex)) {
@@ -229,12 +268,13 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
     basis.celex = 'the CELEX as given';
   } else {
     const r = await calls.run((c) => c.resolve({ identifier }));
+    const type = guessType(identifier);
     if (r.failure) {
-      if (r.failure.reason !== 'not_found' && r.failure.reason !== 'rejected') throw asThrown(r.failure);
-      const type = guessType(identifier);
-      const why = type === 'ecli' ? 'LexAPI resolves an ECLI only for case law it holds, so this is not proof that the decision does not exist.'
-        : type === 'eli' ? 'No CELEX was found for this ELI: the Publications Office register has no matching work, or the ELI is not in a form LexAPI reads.'
-          : 'The identifier was not recognised as a CELEX, EUR-Lex URL, ELI or ECLI.';
+      if (!['not_found', 'unconfirmed_not_found', 'rejected'].includes(r.failure.reason)) throw asThrown(r.failure);
+      const why = r.failure.reason === 'unconfirmed_not_found' ? 'The 404 was not the API\'s own NOT_FOUND answer, so it says nothing about the identifier.'
+        : type === 'ecli' ? 'LexAPI resolves an ECLI only for case law it holds, so this is not proof that the decision does not exist.'
+          : type === 'eli' ? 'No CELEX was found for this ELI: the Publications Office register has no matching work, or the ELI is not in a form LexAPI reads.'
+            : 'The identifier was not recognised as a CELEX, EUR-Lex URL, ELI or ECLI.';
       return {
         identifier,
         identifierType: type,
@@ -244,18 +284,34 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
       };
     }
     const b = r.res.body;
-    celex = String(b.celex ?? '').toUpperCase();
-    out.identifierType = b.identifierType;
-    basis.celex = `lex_resolve (${String(b.resolvedVia ?? b.identifierType)}; ${b.verified === true ? 'confirmed by a register' : 'read off the identifier, not looked up'})`;
+    const resolved = isObj(b) && b.success !== false && typeof b.celex === 'string' ? upperCelex(b.celex) : '';
+    if (!CELEX_SHAPE_RE.test(resolved) && !/^[0-9A-Z][0-9A-Z()._-]{4,}$/.test(resolved)) {
+      return {
+        identifier,
+        identifierType: type,
+        exists: 'unknown',
+        inForce: 'unknown',
+        notChecked: [{ what: 'everything: the identifier did not resolve to a document', call: 'lex_resolve', reason: 'unreadable_response', note: 'The answer carried no CELEX number.' }],
+      };
+    }
+    celex = resolved;
+    out.identifierType = typeof b.identifierType === 'string' ? b.identifierType : type;
+    basis.celex = `lex_resolve (${String(b.resolvedVia ?? out.identifierType)}; ${b.verified === true ? 'confirmed by a register' : 'read off the identifier, not looked up'})`;
   }
   out.celex = celex;
 
-  const call = a.article ? 'lex_get_document' : 'lex_get_metadata';
-  const read = await calls.run((c) => (a.article
-    ? c.getDocument({ celexNumber: celex, articleId: a.article, include: ['metadata', 'articles'] })
+  const ref = a.article ? parseArticle(a.article) : undefined;
+  // The whole article list is read, not one article: an empty match cannot
+  // be told from a text without articles otherwise.
+  const call = ref ? 'lex_get_document' : 'lex_get_metadata';
+  const what = `existence, title, in-force status${ref ? ', article' : ''}`;
+  const read = await calls.run((c) => (ref
+    ? c.getDocument({ celexNumber: celex, include: ['metadata', 'articles'] })
     : c.getMetadata({ celexNumber: celex })));
+  const unknownArticle = a.article && !ref ? { article: { requested: a.article, found: 'unknown', note: UNMAPPED_ARTICLE } } : {};
 
   if (read.failure) {
+    // Only the API's own NOT_FOUND says the document does not exist.
     if (read.failure.reason === 'not_found') {
       out.exists = false;
       basis.exists = `${call}: ${read.failure.error}`;
@@ -264,21 +320,36 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
       return { ...out, ...calls.footer() };
     }
     // Nothing was obtained at all: the API error is the answer.
-    if (!calls.succeeded) throw asThrown(read.failure);
-    out.exists = 'unknown';
-    out.inForce = 'unknown';
-    notChecked.push({
-      what: `existence, title, in-force status${a.article ? ', article' : ''}`,
-      call,
-      ...(read.notRun ? { error: read.failure.error, reason: read.failure.reason } : shown(read.failure)),
-    });
-    out.basis = basis;
-    out.notChecked = notChecked;
-    return { ...out, ...calls.footer() };
+    if (!calls.succeeded && read.failure.reason !== 'unconfirmed_not_found') throw asThrown(read.failure);
+    return {
+      ...out,
+      exists: 'unknown',
+      inForce: 'unknown',
+      ...unknownArticle,
+      basis,
+      notChecked: [compact({
+        what,
+        call,
+        ...shown(read.failure),
+        note: read.failure.reason === 'unconfirmed_not_found' ? 'The 404 was not the API\'s own NOT_FOUND answer, so it does not show that the document does not exist.' : undefined,
+      })],
+      ...calls.footer(),
+    };
   }
 
-  const doc = (a.article ? read.res.body.document : read.res.body.metadata);
-  const d: Obj = isObj(doc) ? doc : {};
+  const carried = carriedDocument(read.res.body, ref ? 'document' : 'metadata', celex, CELEX_KEYS);
+  if (carried.problem) {
+    return {
+      ...out,
+      exists: 'unknown',
+      inForce: 'unknown',
+      ...unknownArticle,
+      basis,
+      notChecked: [{ what, call, ...carried.problem }],
+      ...calls.footer(),
+    };
+  }
+  const d = carried.doc;
   const md = shapeMetadata(d, read.res.headers);
   out.exists = true;
   basis.exists = `${call}: document returned${md.source ? ` (source: ${String(md.source)})` : ''}`;
@@ -306,39 +377,50 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   if (Object.keys(pointers).length) Object.assign(out, pointers);
   else if (/^3/.test(celex)) out.latestConsolidated = 'not_reported';
 
-  if (a.article) {
+  const consolidated = consolidatedBaseOf(celex) !== null;
+  if (ref && a.article) {
     const content = isObj(d.content) ? d.content : undefined;
-    const arts = content && Array.isArray(content.articles) ? content.articles.filter(isObj) : [];
+    const units = content && Array.isArray(content.articles) ? content.articles.filter(isObj) : [];
+    const hit = units.find((u) => {
+      const id = String(u.id ?? '').toLowerCase();
+      const number = String(u.number ?? '').toLowerCase();
+      return id === `art_${ref.number}` || id === ref.number || number === `article ${ref.number}` || number === ref.number;
+    });
     if (!content) {
       const ta = isObj(d.textAvailability) ? d.textAvailability : {};
       out.article = { requested: a.article, found: 'unknown', note: `No text was served for ${celex}${ta.reason ? ` (${String(ta.reason)})` : ''}, so the article could not be looked up.` };
-    } else if (arts.length) {
-      const art = arts[0];
-      const text = typeof art.content === 'string' ? art.content : typeof art.text === 'string' ? art.text : undefined;
+    } else if (!units.length) {
+      out.article = { requested: a.article, found: 'unknown', note: `The text of ${celex} has no article units as LexAPI holds it (a judgment, or a text parsed without articles), so the article could not be looked up.` };
+    } else if (hit) {
+      const text = typeof hit.content === 'string' ? hit.content : typeof hit.text === 'string' ? hit.text : undefined;
       out.article = compact({
         requested: a.article,
         found: true,
-        id: art.id,
-        number: art.number,
-        title: art.title,
+        id: hit.id,
+        number: hit.number,
+        title: hit.title,
         excerpt: truncate(text, 300),
         checkedIn: celex,
         language: md.languageFallback ? md.language : undefined,
+        notChecked: ref.rest ? `"${ref.rest}": only the article was looked up, not a paragraph or point of it.` : undefined,
       });
     } else {
       out.article = {
         requested: a.article,
         found: false,
         checkedIn: celex,
-        note: `No article with this id in the text of ${celex}${/^3/.test(celex) ? ' as published; an article inserted by a later amendment is only in a consolidated version' : ''}.`,
+        note: `Article ${ref.number} is not among the ${units.length} article units of ${celex}; only ${consolidated ? 'this consolidated version was' : 'the act as published was'} compared${consolidated ? '' : ', and an article inserted by a later amendment is only in a consolidated version'}.`,
       };
     }
-    basis.article = `${call} with articleId`;
+    basis.article = `${call}: the article units of the text`;
+  } else {
+    Object.assign(out, unknownArticle);
   }
 
   if (a.date) {
     out.onDate = onDate(a.date, {
-      documentDate: d.dateOfDocumentISO,
+      // A consolidated version's date is the consolidation's, not the act's.
+      documentDate: consolidated ? undefined : d.dateOfDocumentISO,
       entryIntoForce: d.entryIntoForce,
       lastDayInForce: d.endOfValidity,
     });
@@ -354,11 +436,11 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
   const read = await calls.run((c) => c.getNationalDocument(code, id, {}));
   if (read.failure) {
     const err = read.failure.cause;
-    if (read.failure.reason !== 'not_found' || !(err instanceof LexAPIError)) throw asThrown(read.failure);
+    if (!['not_found', 'unconfirmed_not_found'].includes(read.failure.reason) || !(err instanceof LexAPIError)) throw asThrown(read.failure);
     const details = isObj(err.details) ? err.details : {};
-    // A document id LexAPI does not hold names its country in the error; a
-    // country that is not live answers as a path that does not exist.
-    if (typeof details.jurisdiction === 'string') {
+    // A document id LexAPI does not hold: the API's NOT_FOUND, naming the
+    // country. A country that is not live answers as a path that does not exist.
+    if (read.failure.reason === 'not_found' && typeof details.jurisdiction === 'string') {
       return { ...out, exists: false, inForce: 'unknown', basis: { exists: `${call}: ${read.failure.error}` } };
     }
     return {
@@ -369,15 +451,20 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         what: 'everything',
         call,
         ...shown(read.failure),
-        note: `LexAPI has no route for ${code}: the country is not live (lex_national_coverage lists the live ones), or the prefix is not a country code.`,
+        note: /Unknown API endpoint/i.test(err.message)
+          ? `LexAPI has no route for ${code}: the country is not live (lex_national_coverage lists the live ones), or the prefix is not a country code.`
+          : 'The 404 was not the API\'s own answer about this document id, so it does not show that the document does not exist.',
       }],
     };
   }
 
-  const doc = isObj(read.res.body.document) ? read.res.body.document : {};
+  const carried = carriedDocument(read.res.body, 'document', id, ['id']);
+  if (carried.problem) {
+    return { ...out, exists: 'unknown', inForce: 'unknown', notChecked: [{ what: 'everything', call, ...carried.problem }], ...calls.footer() };
+  }
+  const doc = carried.doc;
   const basis: Obj = { exists: `${call}: document returned` };
   Object.assign(out, compact({
-    id: doc.id,
     jurisdiction: doc.jurisdiction,
     exists: true,
     documentKind: doc.documentKind,
@@ -402,10 +489,17 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
   if (a.article) {
     const content = isObj(doc.content) ? doc.content : undefined;
     const units = content && Array.isArray(content.articles) ? content.articles.filter(isObj) : [];
-    const want = unitKey(a.article);
+    // The unit number, without a paragraph or point part: "§ 17 (1)" → "17".
+    const cut = a.article.search(/[(,;]/);
+    const want = unitKey(cut < 0 ? a.article : a.article.slice(0, cut));
+    const rest = cut < 0 ? '' : a.article.slice(cut).trim();
     const hit = want ? units.find((u) => unitKey(u.number) === want) : undefined;
     if (!content) {
       out.article = { requested: a.article, found: 'unknown', note: 'No text was served for this document, so the unit could not be looked up.' };
+    } else if (!units.length) {
+      out.article = { requested: a.article, found: 'unknown', note: 'This document is held without numbered units (a decision, or an act its source publishes without units), so the unit could not be looked up.' };
+    } else if (!want) {
+      out.article = { requested: a.article, found: 'unknown', note: `This form could not be mapped to a unit number; the document's units are written like "${String(units[0].number)}".` };
     } else if (hit) {
       out.article = compact({
         requested: a.article,
@@ -416,15 +510,14 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         inForceTo: hit.inForceTo,
         excerpt: truncate(typeof hit.text === 'string' ? hit.text : undefined, 300),
         checkedIn: id,
+        notChecked: rest ? `"${rest}": only the unit was looked up, not a paragraph or point of it.` : undefined,
       });
     } else {
       out.article = {
         requested: a.article,
         found: false,
         checkedIn: id,
-        note: units.length
-          ? `No unit with this number among the ${units.length} units of this document (compared with each unit's number, written like "${String(units[0].number)}").`
-          : 'This document is held without numbered units.',
+        note: `No unit numbered "${want}" among the ${units.length} units of the text LexAPI holds (compared by number; they are written like "${String(units[0].number)}").`,
       };
     }
     basis.article = `${call}: the document's units, compared by number`;
