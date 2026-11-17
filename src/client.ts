@@ -1,3 +1,4 @@
+import { CLIENT_HEADER, clientHeaderValue, type ClientApp, type ClientMode } from './clientHeader.js';
 import { LexAPIError, LexAPITransportError, parseErrorBody } from './errors.js';
 import { PACKAGE_VERSION } from './version.js';
 
@@ -93,6 +94,12 @@ export interface LexAPIClientOptions {
   signal?: AbortSignal;
   /** Injected for tests (the per-call deadline clock). */
   now?: () => number;
+  /** How the server is run; sent in the X-LexAPI-Client header. */
+  mode?: ClientMode;
+  /** The MCP tool these requests are made for; sent in the X-LexAPI-Client header. */
+  tool?: string;
+  /** The MCP client's clientInfo; sent in the X-LexAPI-Client header in stdio mode only. */
+  app?: ClientApp;
 }
 
 /** No retry or 429 sleep is started unless at least this much of the call's deadline would remain. */
@@ -124,6 +131,8 @@ export class LexAPIClient {
   private readonly signal?: AbortSignal;
   private readonly now: () => number;
   private readonly opts: LexAPIClientOptions;
+  /** Fixed for the lifetime of this client: one tool call has its own client (forCall). */
+  private readonly clientHeader: string | undefined;
 
   constructor(opts: LexAPIClientOptions) {
     if (opts.auth) {
@@ -143,14 +152,21 @@ export class LexAPIClient {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetch ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.clientHeader = clientHeaderValue({ mode: opts.mode, tool: opts.tool, app: opts.app });
   }
 
-  /** A client for one MCP request: its cancellation signal and timeout. */
-  forCall(call: { signal?: AbortSignal; timeoutMs?: number }): LexAPIClient {
+  /**
+   * A client for one MCP request: its cancellation signal and timeout, the
+   * tool it executes and the MCP client that asked. A client made from this
+   * one (a workflow tool's calls) keeps the tool and the MCP client.
+   */
+  forCall(call: { signal?: AbortSignal; timeoutMs?: number; tool?: string; app?: ClientApp }): LexAPIClient {
     return new LexAPIClient({
       ...this.opts,
       ...(call.signal ? { signal: call.signal } : {}),
       ...(call.timeoutMs ? { timeoutMs: call.timeoutMs } : {}),
+      ...(call.tool ? { tool: call.tool } : {}),
+      ...(call.app ? { app: call.app } : {}),
     });
   }
 
@@ -188,6 +204,7 @@ export class LexAPIClient {
       accept: opts.ndjson ? 'application/x-ndjson, application/json' : 'application/json',
       'user-agent': `lexapi-mcp/${PACKAGE_VERSION}`,
     };
+    if (this.clientHeader) baseHeaders[CLIENT_HEADER] = this.clientHeader;
     if (opts.body !== undefined) baseHeaders['content-type'] = 'application/json';
 
     const canRetry = opts.retry !== false;

@@ -120,6 +120,7 @@ Error messages state what to do (a 402 gives the credits needed and the reset da
 
 ## Privacy and support
 
+- With each API request the server sends an `X-LexAPI-Client` header naming itself and its version, how it runs (`hosted` or `stdio`), the tool being called and, in stdio mode, the MCP client's name and version.
 - Privacy notice: [lex-api.com/privacy](https://lex-api.com/privacy?ref=npm-mcp)
 - Support: [support@lex-api.com](mailto:support@lex-api.com) · [lex-api.com/support](https://lex-api.com/support?ref=npm-mcp)
 

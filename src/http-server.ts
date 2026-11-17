@@ -300,7 +300,7 @@ async function serveWithApiKey(req: IncomingMessage, res: ServerResponse, apiKey
   res.setHeader('X-Accel-Buffering', 'no');
   res.setHeader('Cache-Control', 'no-store, private');
 
-  const server = createLexServer(clientFromEnv(apiKey, ctx.env), { readOnly: readOnlyFromEnv(ctx.env) });
+  const server = createLexServer(clientFromEnv(apiKey, ctx.env, 'hosted'), { readOnly: readOnlyFromEnv(ctx.env) });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on('close', () => {
     transport.close().catch(() => {});
@@ -400,6 +400,7 @@ async function serveWithOAuth(
   const client = new LexAPIClient({
     auth: new OAuthUpstreamAuth(token, claims.exp, oauth.exchanger, gate, { ip: ctx.clientAddress.derive(req).ip, sub: claims.sub }),
     baseUrl: oauth.cfg.apiBase,
+    mode: 'hosted',
     ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
   });
   const server = createLexServer(client, { readOnly: readOnlyFromEnv(ctx.env) });
