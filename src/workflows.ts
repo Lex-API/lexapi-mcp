@@ -544,6 +544,9 @@ const CHANGE_TYPES = ['repeal', 'amendment', 'corrigendum'] as const;
 type ChangeType = (typeof CHANGE_TYPES)[number];
 const CHANGE_LISTS: Record<ChangeType, string> = { repeal: 'repeals', amendment: 'amendments', corrigendum: 'corrigenda' };
 
+/** Said on every result: what the list can and cannot show. */
+const HISTORY_CAVEAT = "The relations come from LexAPI's citation graph and may be incomplete: an empty or short list is not proof that nothing changed.";
+
 interface Change { type: ChangeType; celex: string; title?: string; celexYear?: number; date?: string; provenance?: unknown[]; dateNotRead?: Obj }
 
 export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<Obj> {
@@ -566,18 +569,24 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
   })));
   // 2. The act itself: title, dates, in-force status, consolidated pointers.
   const meta = await calls.run((c) => c.getMetadata({ celexNumber: celex }));
-  if (edges.failure && meta.failure) throw asThrown(edges.failure);
+  // An act the API says does not exist has no history: its relations, if the
+  // graph holds any for this id, are not shown as the changes of an act.
+  if (meta.failure?.reason === 'not_found') {
+    return { ...out, exists: false, inForce: 'unknown', basis: { exists: `lex_get_metadata: ${meta.failure.error}` }, ...calls.footer() };
+  }
+  if (edges.failure && meta.failure && meta.failure.reason !== 'unconfirmed_not_found') throw asThrown(edges.failure);
 
-  if (meta.failure) {
+  const ACT_PART = 'the act: whether it exists (not confirmed), title, dates, in-force status, end of validity, consolidated versions';
+  const carried = meta.failure ? undefined : carriedDocument(meta.res.body, 'metadata', celex, CELEX_KEYS);
+  if (meta.failure || !carried || carried.problem) {
+    out.exists = 'unknown';
     out.inForce = 'unknown';
-    incomplete.push({
-      part: 'the act: title, dates, in-force status, end of validity, consolidated versions',
-      call: 'lex_get_metadata',
-      ...shown(meta.failure),
-    });
+    incomplete.push({ part: ACT_PART, call: 'lex_get_metadata', ...(meta.failure ? shown(meta.failure) : carried?.problem) });
   } else {
-    const d = isObj(meta.res.body.metadata) ? meta.res.body.metadata : {};
+    const d = carried.doc;
     const md = shapeMetadata(d, meta.res.headers);
+    out.exists = true;
+    basis.exists = 'lex_get_metadata: document returned';
     Object.assign(out, compact({
       title: md.title,
       documentType: md.documentType,
@@ -600,6 +609,7 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
   const changes: Change[] = [];
   if (edges.failure) {
     incomplete.push({ part: 'the changes: amendments, corrigenda, repeals', call: 'lex_cited_by', ...shown(edges.failure) });
+    out.completeness = { note: HISTORY_CAVEAT };
   } else {
     const b = edges.res.body;
     for (const g of (Array.isArray(b.citedBy) ? b.citedBy : []).filter(isObj)) {
@@ -619,11 +629,11 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
     const current = sync && (sync.status === 'fresh' || sync.status === 'refreshed');
     out.completeness = compact({
       relationSync: sync,
-      note: current
-        ? 'The relations were refreshed from the Publications Office within the last 7 days.'
+      note: `${HISTORY_CAVEAT} ${current
+        ? 'The amendment, corrigendum and repeal relations were refreshed from the Publications Office within the last 7 days.'
         : sync && sync.reason === 'not-applicable'
           ? 'These relations are refreshed from the Publications Office for legislation only (CELEX sectors 1–4); for this document only stored relations are returned.'
-          : 'The stored relations were returned without a refresh from the Publications Office; a change recorded since may be missing.',
+          : 'The stored relations were returned without a refresh from the Publications Office; a change recorded since may be missing.'}`,
     });
     basis.changes = 'lex_cited_by with citationType amendment, corrigendum, repeal';
     const total = typeof b.totalEdges === 'number' ? b.totalEdges : undefined;

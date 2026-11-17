@@ -660,6 +660,58 @@ describe('lex_act_history', () => {
     expect(all.filter((c: any) => c.dateNotRead).map((c: any) => c.dateNotRead.reason)).toEqual(['rate_limited', 'rate_limited', 'rate_limited']);
   });
 
+  it('every result carries the completeness caveat, also an empty list and a failed list', async () => {
+    const caveat = /may be incomplete: an empty or short list is not proof that nothing changed/;
+    const full = await call('lex_act_history', { celexNumber: '32006R1907' }, route({}));
+    expect(full.data.completeness.note).toMatch(caveat);
+    const empty = await call('lex_act_history', { celexNumber: '32006R1907' }, route({ edges: { body: citedBy([]) } }));
+    expect(empty.data.changes).toEqual({ repeals: [], amendments: [], corrigenda: [] });
+    expect(empty.data.completeness.note).toMatch(caveat);
+    const pending = await call('lex_act_history', { celexNumber: '32006R1907' }, route({ edges: { body: citedBy([], { relationSync: { source: 'cellar', status: 'pending', syncedAt: null } }) } }));
+    expect(pending.data.completeness.note).toMatch(caveat);
+    const failed = await call('lex_act_history', { celexNumber: '32006R1907' }, route({ edges: { status: 500, body: { success: false, code: 'INTERNAL', error: 'x' } } }));
+    expect(failed.data.completeness.note).toMatch(caveat);
+  });
+
+  it('an act the API says does not exist is not shown as an act without changes', async () => {
+    const { data, result } = await call('lex_act_history', { celexNumber: '32006R1970' }, (c) => (
+      c.url.pathname.includes('/citations/cited-by/')
+        ? { body: citedBy([], { targetDocument: '32006R1970' }) }
+        : notFound('Document 32006R1970 does not exist on EUR-Lex')
+    ));
+    expect(result.isError).toBeFalsy();
+    expect(data).toEqual({
+      celex: '32006R1970', exists: false, inForce: 'unknown',
+      basis: { exists: 'lex_get_metadata: LexAPI error 404 (NOT_FOUND): Document 32006R1970 does not exist on EUR-Lex' },
+    });
+    // Also when the relations call failed.
+    const both = await call('lex_act_history', { celexNumber: '32006R1970' }, (c) => (
+      c.url.pathname.includes('/citations/cited-by/') ? { status: 500, body: { success: false, code: 'INTERNAL', error: 'x' } } : notFound('Document 32006R1970 does not exist on EUR-Lex')
+    ));
+    expect(both.data.exists).toBe(false);
+    expect(both.data.changes).toBeUndefined();
+  });
+
+  it('existence that was not confirmed is said: a failed, unreadable or mismatched metadata answer', async () => {
+    const replies: Array<[Reply, string]> = [
+      [{ status: 504, body: { success: false, error: { code: 'TIMEOUT', message: 'timed out' } } }, 'timeout'],
+      [{ status: 404, raw: '<html>404</html>', headers: { 'content-type': 'text/html' } }, 'unconfirmed_not_found'],
+      [{ body: { success: true } }, 'unreadable_response'],
+      [{ body: metadata({ celex: '32016R0680', celexNumber: '32016R0680', title: 'Another act' }) }, 'different_document'],
+    ];
+    for (const [reply, reason] of replies) {
+      const { data } = await call('lex_act_history', { celexNumber: '32006R1907' }, route({ act: reply }));
+      expect(data.exists, reason).toBe('unknown');
+      expect(data.inForce).toBe('unknown');
+      expect(data.title).toBeUndefined();
+      expect(data.incomplete[0]).toMatchObject({ call: 'lex_get_metadata', reason });
+      expect(data.incomplete[0].part).toMatch(/whether it exists \(not confirmed\)/);
+      expect(data.changes.amendments).toHaveLength(3);
+    }
+    const ok = await call('lex_act_history', { celexNumber: '32006R1907' }, route({}));
+    expect(ok.data.exists).toBe(true);
+  });
+
   it('nothing obtained: the API error is returned as the error', async () => {
     const { result, text, calls } = await call('lex_act_history', { celexNumber: '32006R1907' }, () => exhausted(1));
     expect(result.isError).toBe(true);
