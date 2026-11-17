@@ -196,8 +196,8 @@ function onDate(date: string, known: { documentDate?: unknown; entryIntoForce?: 
   };
 }
 
-// ── lex_verify_citation ────────────────────────────────────────────
-export interface VerifyArgs { identifier: string; article?: string; date?: string }
+// ── lex_check_citation ────────────────────────────────────────────
+export interface CheckArgs { identifier: string; article?: string; date?: string }
 
 const LABEL_WORDS = new Set(['article', 'artikel', 'articulo', 'articolo', 'art', 'clen', 'cl', 'paragraph', 'paragraf', 'par']);
 
@@ -214,10 +214,10 @@ function guessType(identifier: string): string {
   return 'unrecognised';
 }
 
-export async function verifyCitation(a: VerifyArgs, client: LexAPIClient): Promise<Obj> {
+export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise<Obj> {
   const identifier = a.identifier.trim();
   const calls = new Calls(client);
-  if (NATIONAL_ID_RE.test(identifier)) return verifyNational(identifier.toUpperCase(), a, calls);
+  if (NATIONAL_ID_RE.test(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
 
   const out: Obj = { identifier };
   const basis: Obj = {};
@@ -347,7 +347,7 @@ export async function verifyCitation(a: VerifyArgs, client: LexAPIClient): Promi
   return { ...out, ...calls.footer() };
 }
 
-async function verifyNational(id: string, a: VerifyArgs, calls: Calls): Promise<Obj> {
+async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Obj> {
   const code = id.slice(0, 2);
   const call = 'lex_get_national_document';
   const out: Obj = { identifier: id, identifierType: 'national_id', id, jurisdiction: code };

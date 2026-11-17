@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { LexAPIError } from './errors.js';
 import { webhookUrlProblem } from './webhookUrl.js';
-import { actHistory, research, verifyCitation } from './workflows.js';
+import { actHistory, research, checkCitation } from './workflows.js';
 
 import type { Json, LexAPIClient, LexResponse } from './client.js';
 import {
@@ -353,7 +353,7 @@ export const tools: ToolDef[] = [
   // One common job each, made of the calls the tools below make one at a
   // time (src/workflows.ts). They add no data of their own.
   {
-    name: 'lex_verify_citation',
+    name: 'lex_check_citation',
     title: 'Check a citation against the source',
     description:
       'Look a citation up: whether the document exists, its canonical id, title and link, whether a given article is in its text, and whether the act is in force today. Takes a CELEX, EUR-Lex URL, ELI or ECLI, or a national document id. Every value comes from an API answer: exists, inForce and article.found are "unknown" when the API did not answer them, and notChecked lists what could not be checked and why. inForce does not cover amendments and is not recorded for many acts. The article is looked up in the identified text (the act as published, unless a consolidated CELEX is given). latestConsolidated is "not_reported" unless the API has it, which does not mean none exists. A national result carries attribution, which must be kept with republished content (Terms). Cost: 1 credit to resolve a URL, ELI or ECLI (a CELEX is not resolved), plus one read: 1 credit from the corpus, 4 via the Publications Office, 5 live. A national id: 1 credit.',
@@ -364,8 +364,8 @@ export const tools: ToolDef[] = [
     },
     annotations: READ,
     handler: (a, client) => (NATIONAL_ID_RE.test(a.identifier)
-      ? verifyCitation(a, client).catch(explain402(NATIONAL_READ_402))
-      : verifyCitation(a, client)),
+      ? checkCitation(a, client).catch(explain402(NATIONAL_READ_402))
+      : checkCitation(a, client)),
   },
 
   {

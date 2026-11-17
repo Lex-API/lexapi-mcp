@@ -55,15 +55,15 @@ try {
   if (!parsed.content?.articles?.length) throw new Error('lex_get_document returned no article');
   console.log(`lex_get_document → ${parsed.celex} ${parsed.content.articles[0].number}`);
 
-  for (const name of ['lex_verify_citation', 'lex_act_history', 'lex_research']) {
+  for (const name of ['lex_check_citation', 'lex_act_history', 'lex_research']) {
     if (!tools.some((t) => t.name === name)) throw new Error(`${name} is not listed`);
   }
   if (!live) {
-    const check = await client.callTool({ name: 'lex_verify_citation', arguments: { identifier: '32016R0679' } });
-    if (check.isError) throw new Error(`lex_verify_citation failed: ${check.content[0].text}`);
+    const check = await client.callTool({ name: 'lex_check_citation', arguments: { identifier: '32016R0679' } });
+    if (check.isError) throw new Error(`lex_check_citation failed: ${check.content[0].text}`);
     const c = JSON.parse(check.content[0].text);
-    if (c.exists !== true || c.inForce !== 'unknown') throw new Error('lex_verify_citation returned an unexpected result');
-    console.log(`lex_verify_citation → ${c.celex} exists=${c.exists} inForce=${c.inForce}`);
+    if (c.exists !== true || c.inForce !== 'unknown') throw new Error('lex_check_citation returned an unexpected result');
+    console.log(`lex_check_citation → ${c.celex} exists=${c.exists} inForce=${c.inForce}`);
   }
 
   if (live) {

@@ -59,7 +59,7 @@ afterEach(() => { vi.restoreAllMocks(); });
 describe('catalogue', () => {
   it('the workflow tools are read-only and listed in read-only mode', () => {
     const ro = selectTools({ readOnly: true }).map((t) => t.name);
-    for (const name of ['lex_verify_citation', 'lex_act_history', 'lex_research']) {
+    for (const name of ['lex_check_citation', 'lex_act_history', 'lex_research']) {
       expect(ro).toContain(name);
       expect(byName[name].write).toBeUndefined();
       expect(byName[name].annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
@@ -68,8 +68,8 @@ describe('catalogue', () => {
 
   it('inputs are checked before any call: dates, CELEX numbers, codes and bounds', () => {
     const parse = (name: string, args: Record<string, unknown>) => z.object(byName[name].inputSchema).parse(args);
-    expect(() => parse('lex_verify_citation', { identifier: '32016R0679', date: '2024-02-30' })).toThrow(/YYYY-MM-DD/);
-    expect(() => parse('lex_verify_citation', { identifier: 'x' })).toThrow();
+    expect(() => parse('lex_check_citation', { identifier: '32016R0679', date: '2024-02-30' })).toThrow(/YYYY-MM-DD/);
+    expect(() => parse('lex_check_citation', { identifier: 'x' })).toThrow();
     expect(() => parse('lex_act_history', { celexNumber: '!!' })).toThrow(/must look like 32016R0679/);
     expect(() => parse('lex_act_history', { celexNumber: '32016R0679', dates: 11 })).toThrow();
     expect(() => parse('lex_act_history', { celexNumber: '32016R0679', since: '2024' })).toThrow(/YYYY-MM-DD/);
@@ -89,17 +89,17 @@ describe('catalogue', () => {
     const mcp = new Client({ name: 'test', version: '1.0.0' });
     await mcp.connect(b);
     const { tools: listed } = await mcp.listTools();
-    for (const name of ['lex_verify_citation', 'lex_act_history', 'lex_research']) {
+    for (const name of ['lex_check_citation', 'lex_act_history', 'lex_research']) {
       const t = listed.find((x) => x.name === name)!;
       expect(t.annotations, name).toMatchObject({ readOnlyHint: true, openWorldHint: true });
       for (const [key, prop] of Object.entries(t.inputSchema.properties ?? {})) {
         expect((prop as { description?: string }).description, `${name}.${key}`).toBeTruthy();
       }
     }
-    const bad = await mcp.callTool({ name: 'lex_verify_citation', arguments: { identifier: '32016R0679', date: 'yesterday' } });
+    const bad = await mcp.callTool({ name: 'lex_check_citation', arguments: { identifier: '32016R0679', date: 'yesterday' } });
     expect(bad.isError).toBe(true);
     expect(calls).toHaveLength(0);
-    const ok = await mcp.callTool({ name: 'lex_verify_citation', arguments: { identifier: '32016R0679' } });
+    const ok = await mcp.callTool({ name: 'lex_check_citation', arguments: { identifier: '32016R0679' } });
     expect(parseText(ok as any)).toMatchObject({ celex: '32016R0679', exists: true, inForce: true });
     expect(calls).toHaveLength(1);
     await mcp.close();
@@ -127,9 +127,9 @@ describe('the in-force label on the other tools (API 2.19.0)', () => {
   });
 });
 
-describe('lex_verify_citation', () => {
+describe('lex_check_citation', () => {
   it('a CELEX on an API without the in-force fields: exists, in force unknown', async () => {
-    const { data, paths, calls } = await call('lex_verify_citation', { identifier: 'celex:32016r0679' }, () => ({ body: metadata(), headers: { 'x-source': 'corpus' } }));
+    const { data, paths, calls } = await call('lex_check_citation', { identifier: 'celex:32016r0679' }, () => ({ body: metadata(), headers: { 'x-source': 'corpus' } }));
     expect(paths).toEqual(['/documents/metadata']); // a CELEX is not resolved
     expect(calls[0].body).toEqual({ celexNumber: '32016R0679' });
     expect(data).toMatchObject({
@@ -143,32 +143,32 @@ describe('lex_verify_citation', () => {
   });
 
   it('API 2.19.0: the in-force label is passed on as it is', async () => {
-    const inForce = await call('lex_verify_citation', { identifier: '32016R0679' }, () => ({ body: metadata({ inForce: true }) }));
+    const inForce = await call('lex_check_citation', { identifier: '32016R0679' }, () => ({ body: metadata({ inForce: true }) }));
     expect(inForce.data.inForce).toBe(true);
     expect(inForce.data.inForceNote).toBeUndefined();
     expect(inForce.data.basis.inForce).toMatch(/status today.*amendments are not covered/);
 
-    const repealed = await call('lex_verify_citation', { identifier: '31995L0046', date: '2020-01-01' }, () => ({
+    const repealed = await call('lex_check_citation', { identifier: '31995L0046', date: '2020-01-01' }, () => ({
       body: metadata({ celex: '31995L0046', celexNumber: '31995L0046', dateOfDocumentISO: '1995-10-24', inForce: false, notInForceReason: 'no_longer_in_force', endOfValidity: '2018-05-24' }),
     }));
     expect(repealed.data).toMatchObject({ exists: true, inForce: false, notInForceReason: 'no_longer_in_force', endOfValidity: '2018-05-24' });
     expect(repealed.data.onDate).toEqual({ date: '2020-01-01', status: 'after_end_of_validity', endOfValidity: '2018-05-24' });
 
-    const notYet = await call('lex_verify_citation', { identifier: '32024R1689', date: '2024-07-01' }, () => ({
+    const notYet = await call('lex_check_citation', { identifier: '32024R1689', date: '2024-07-01' }, () => ({
       body: metadata({ celex: '32024R1689', dateOfDocumentISO: '2024-06-13', inForce: false, notInForceReason: 'not_yet_in_force', entryIntoForce: '2024-08-01' }),
     }));
     expect(notYet.data.onDate).toEqual({ date: '2024-07-01', status: 'before_entry_into_force', entryIntoForce: '2024-08-01' });
   });
 
   it('a date the returned dates do not settle is unknown, and one before the document date says so', async () => {
-    const open = await call('lex_verify_citation', { identifier: '32016R0679', date: '2019-01-01' }, () => ({ body: metadata({ inForce: true }) }));
+    const open = await call('lex_check_citation', { identifier: '32016R0679', date: '2019-01-01' }, () => ({ body: metadata({ inForce: true }) }));
     expect(open.data.onDate).toMatchObject({ date: '2019-01-01', status: 'unknown' });
-    const early = await call('lex_verify_citation', { identifier: '32016R0679', date: '2010-01-01' }, () => ({ body: metadata() }));
+    const early = await call('lex_check_citation', { identifier: '32016R0679', date: '2010-01-01' }, () => ({ body: metadata() }));
     expect(early.data.onDate).toEqual({ date: '2010-01-01', status: 'before_document_date', documentDate: '2016-04-27' });
   });
 
   it('a mistyped CELEX: the 404 is the answer, nothing else is claimed', async () => {
-    const { data, result, paths } = await call('lex_verify_citation', { identifier: '32016R0697' }, () => notFound('Document 32016R0697 does not exist on EUR-Lex'));
+    const { data, result, paths } = await call('lex_check_citation', { identifier: '32016R0697' }, () => notFound('Document 32016R0697 does not exist on EUR-Lex'));
     expect(result.isError).toBeFalsy();
     expect(paths).toEqual(['/documents/metadata']);
     expect(data).toMatchObject({ celex: '32016R0697', exists: false, inForce: 'unknown' });
@@ -178,7 +178,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('an ELI is resolved first, then read', async () => {
-    const { data, paths, calls } = await call('lex_verify_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }, (c) => (
+    const { data, paths, calls } = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }, (c) => (
       c.url.pathname.endsWith('/resolve')
         ? { body: { success: true, identifier: 'x', identifierType: 'eli', resolvedVia: 'eli-cellar', verified: true, celex: '32016R0679', urls: GDPR_URLS } }
         : { body: metadata({ inForce: true }) }
@@ -190,7 +190,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('a URL is read off, not looked up: existence comes from the read alone', async () => {
-    const { data } = await call('lex_verify_citation', { identifier: 'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0697' }, (c) => (
+    const { data } = await call('lex_check_citation', { identifier: 'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0697' }, (c) => (
       c.url.pathname.endsWith('/resolve')
         ? { body: { success: true, identifierType: 'url', resolvedVia: 'url', verified: false, celex: '32016R0697', urls: {} } }
         : notFound('Document 32016R0697 does not exist on EUR-Lex')
@@ -200,7 +200,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('an ECLI LexAPI cannot resolve is unknown, not "does not exist"', async () => {
-    const { data, paths } = await call('lex_verify_citation', { identifier: 'ECLI:EU:C:2099:1' }, () => notFound('Could not resolve identifier to a CELEX: ECLI:EU:C:2099:1'));
+    const { data, paths } = await call('lex_check_citation', { identifier: 'ECLI:EU:C:2099:1' }, () => notFound('Could not resolve identifier to a CELEX: ECLI:EU:C:2099:1'));
     expect(paths).toEqual(['/resolve']);
     expect(data).toMatchObject({ identifierType: 'ecli', exists: 'unknown', inForce: 'unknown' });
     expect(data.notChecked[0]).toMatchObject({ call: 'lex_resolve', reason: 'not_found' });
@@ -209,7 +209,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('an article that exists is read with the document in one call', async () => {
-    const { data, paths, calls } = await call('lex_verify_citation', { identifier: '32016R0679', article: '17' }, () => ({
+    const { data, paths, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({
       body: articleDoc([{ id: 'art_17', number: 'Article 17', title: 'Right to erasure', content: `1. The data subject shall have the right… ${'x'.repeat(600)}` }], { inForce: true }),
       headers: { 'x-source': 'corpus' },
     }));
@@ -222,7 +222,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('an article that does not exist: found false, scoped to the text that was read', async () => {
-    const { data } = await call('lex_verify_citation', { identifier: '32016R0679', article: 'Article 120' }, () => ({ body: articleDoc([]) }));
+    const { data } = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 120' }, () => ({ body: articleDoc([]) }));
     expect(data.exists).toBe(true);
     expect(data.article).toEqual({
       requested: 'Article 120', found: false, checkedIn: '32016R0679',
@@ -233,7 +233,7 @@ describe('lex_verify_citation', () => {
 
   it('no published text: the article is unknown and the consolidated pointer is passed on', async () => {
     const ta = { available: false, reason: 'too_large', latestConsolidated: { celex: '02006R1907-20260622', date: '2026-06-22', source: 'cellar' } };
-    const { data } = await call('lex_verify_citation', { identifier: '32006R1907', article: '57' }, () => ({
+    const { data } = await call('lex_check_citation', { identifier: '32006R1907', article: '57' }, () => ({
       body: { success: true, document: { celex: '32006R1907', title: 'REACH', urls: {}, content: null, textAvailability: ta } },
     }));
     expect(data.exists).toBe(true);
@@ -244,7 +244,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('a consolidated CELEX is labelled, with its base act', async () => {
-    const { data, calls } = await call('lex_verify_citation', { identifier: '02016R0679-20160504' }, () => ({
+    const { data, calls } = await call('lex_check_citation', { identifier: '02016R0679-20160504' }, () => ({
       body: metadata({ celex: '02016R0679-20160504', celexNumber: '02016R0679-20160504', inForce: true }),
     }));
     expect(calls[0].body).toEqual({ celexNumber: '02016R0679-20160504' });
@@ -256,12 +256,12 @@ describe('lex_verify_citation', () => {
 
   it('a consolidated pointer the metadata carries is passed on', async () => {
     const latest = { celex: '02016R0679-20160504', date: '2016-05-04', source: 'cellar' };
-    const { data } = await call('lex_verify_citation', { identifier: '32016R0679' }, () => ({ body: metadata({ latestConsolidated: latest }) }));
+    const { data } = await call('lex_check_citation', { identifier: '32016R0679' }, () => ({ body: metadata({ latestConsolidated: latest }) }));
     expect(data.latestConsolidated).toEqual(latest);
   });
 
   it('partial: resolved, but the read could not be paid for', async () => {
-    const { data, result, paths } = await call('lex_verify_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj', article: '17' }, (c) => (
+    const { data, result, paths } = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj', article: '17' }, (c) => (
       c.url.pathname.endsWith('/resolve')
         ? { body: { success: true, identifierType: 'eli', resolvedVia: 'eli-cellar', verified: true, celex: '32016R0679', urls: GDPR_URLS } }
         : exhausted()
@@ -282,7 +282,7 @@ describe('lex_verify_citation', () => {
       [{ status: 504, body: { success: false, error: { code: 'TIMEOUT', message: 'Upstream EUR-Lex fetch timed out' } } }, 'timeout'],
       [rateLimited(), 'rate_limited'],
     ] as const) {
-      const { data } = await call('lex_verify_citation', { identifier: 'ECLI:EU:C:2020:559' }, (c) => (
+      const { data } = await call('lex_check_citation', { identifier: 'ECLI:EU:C:2020:559' }, (c) => (
         c.url.pathname.endsWith('/resolve')
           ? { body: { success: true, identifierType: 'ecli', resolvedVia: 'ecli-corpus', verified: true, celex: '62018CJ0311', urls: {} } }
           : reply
@@ -293,14 +293,14 @@ describe('lex_verify_citation', () => {
   });
 
   it('nothing obtained: the API error is returned as the error', async () => {
-    const noCredits = await call('lex_verify_citation', { identifier: '32016R0679' }, () => exhausted());
+    const noCredits = await call('lex_check_citation', { identifier: '32016R0679' }, () => exhausted());
     expect(noCredits.result.isError).toBe(true);
     expect(noCredits.text).toMatch(/LexAPI error 402 \(CREDITS_EXHAUSTED\)/);
-    const limited = await call('lex_verify_citation', { identifier: 'ECLI:EU:C:2020:559' }, () => rateLimited());
+    const limited = await call('lex_check_citation', { identifier: 'ECLI:EU:C:2020:559' }, () => rateLimited());
     expect(limited.result.isError).toBe(true);
     expect(limited.text).toMatch(/Per-minute rate limit/);
     expect(limited.calls).toHaveLength(1);
-    const badKey = await call('lex_verify_citation', { identifier: '32016R0679' }, () => ({ status: 401, body: { error: 'Invalid API key' } }));
+    const badKey = await call('lex_check_citation', { identifier: '32016R0679' }, () => ({ status: 401, body: { error: 'Invalid API key' } }));
     expect(badKey.text).toMatch(/LexAPI error 401/);
   });
 
@@ -320,7 +320,7 @@ describe('lex_verify_citation', () => {
   });
 
   it('a national id: one document read, attribution kept, no end of validity is unknown', async () => {
-    const { data, paths } = await call('lex_verify_citation', { identifier: 'at-nor-10001597', article: 'Art. 1' }, () => ({
+    const { data, paths } = await call('lex_check_citation', { identifier: 'at-nor-10001597', article: 'Art. 1' }, () => ({
       body: nationalDoc(), headers: { 'x-national-limit': '30', 'x-national-remaining': '12', 'x-national-reset': '2026-12-01T00:00:00.000Z' },
     }));
     expect(paths).toEqual(['/at/documents/AT-NOR-10001597']);
@@ -332,23 +332,23 @@ describe('lex_verify_citation', () => {
   });
 
   it('a national id: a repealed act, a unit that is not there, a date after the end', async () => {
-    const { data } = await call('lex_verify_citation', { identifier: 'AT-NOR-10001597', article: '99', date: '2025-06-01' }, () => ({
+    const { data } = await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article: '99', date: '2025-06-01' }, () => ({
       body: nationalDoc({ validTo: '2024-12-31', inForce: false }),
     }));
     expect(data).toMatchObject({ exists: true, inForce: false, validTo: '2024-12-31' });
     expect(data.article).toMatchObject({ requested: '99', found: false, checkedIn: 'AT-NOR-10001597' });
     expect(data.article.note).toMatch(/among the 2 units.*written like "§ 1"/);
     expect(data.onDate).toEqual({ date: '2025-06-01', status: 'after_end_of_validity', endOfValidity: '2024-12-31' });
-    const a = await call('lex_verify_citation', { identifier: 'AT-NOR-10001597', article: '§17a' }, () => ({ body: nationalDoc() }));
+    const a = await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article: '§17a' }, () => ({ body: nationalDoc() }));
     expect(a.data.article).toMatchObject({ found: true, number: '§ 17a' });
   });
 
   it('a national id LexAPI does not hold, and a country that is not live, are told apart', async () => {
-    const missing = await call('lex_verify_citation', { identifier: 'AT-NOR-999' }, () => ({
+    const missing = await call('lex_check_citation', { identifier: 'AT-NOR-999' }, () => ({
       status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'No document AT-NOR-999', details: { id: 'AT-NOR-999', jurisdiction: 'AT' } } },
     }));
     expect(missing.data).toMatchObject({ id: 'AT-NOR-999', exists: false, inForce: 'unknown' });
-    const notLive = await call('lex_verify_citation', { identifier: 'FR-LEGI-1' }, () => ({
+    const notLive = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, () => ({
       status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'Unknown API endpoint' } },
     }));
     expect(notLive.data).toMatchObject({ id: 'FR-LEGI-1', exists: 'unknown' });
@@ -356,12 +356,12 @@ describe('lex_verify_citation', () => {
   });
 
   it('a national id behind a plan gate, or withdrawn, is the API error', async () => {
-    const gated = await call('lex_verify_citation', { identifier: 'AT-NOR-1' }, () => tierForbidden());
+    const gated = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => tierForbidden());
     expect(gated.result.isError).toBe(true);
     expect(gated.text).toMatch(/LexAPI error 403 \(TIER_FORBIDDEN\).*plan or subscription does not allow/);
-    const used = await call('lex_verify_citation', { identifier: 'AT-NOR-1' }, () => allowanceExhausted());
+    const used = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => allowanceExhausted());
     expect(used.text).toMatch(/monthly allowance of national-law calls/);
-    const gone = await call('lex_verify_citation', { identifier: 'AT-NOR-1' }, () => ({
+    const gone = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => ({
       status: 410, body: { success: false, error: { code: 'DOCUMENT_WITHDRAWN', message: 'Withdrawn', details: { id: 'AT-NOR-1', jurisdiction: 'AT' } } },
     }));
     expect(gone.result.isError).toBe(true);

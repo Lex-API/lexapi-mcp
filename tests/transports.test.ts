@@ -100,7 +100,7 @@ describe('MCP protocol (in-memory)', () => {
     // and says what holds for several tools once, in the server
     // instructions; the tools that return attribution say it must be kept:
     // every webhook criteria field may be null, as in the API: measured 58.4k.
-    // The three workflow tools (lex_verify_citation, lex_act_history,
+    // The three workflow tools (lex_check_citation, lex_act_history,
     // lex_research) add ~6.1k: measured 64.5k.
     expect(listJson.length).toBeLessThan(64_600);
     // The instructions are in every client's context too: measured 3.3k;

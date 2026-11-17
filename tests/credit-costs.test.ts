@@ -33,7 +33,7 @@ const FREE: Expected = { ops: [], says: ['Free'] };
 
 const EXPECTED: Record<string, Expected> = {
   lex_info: { ops: ['info'], says: [`Free (${w.info} credits)`] },
-  lex_verify_citation: {
+  lex_check_citation: {
     ops: ['resolve', 'document_fetch', 'document_metadata'],
     settles: true,
     says: [`Cost: ${credits(w.resolve)} to resolve a URL, ELI or ECLI`, `one read: ${credits(fx.corpusHit)} from the corpus, ${fx.cellarHit} via the Publications Office, ${w.document_fetch} live`, `A national id: ${credits(fx.corpusHit)}.`],
@@ -143,7 +143,7 @@ describe('credit costs outside the descriptions match the weights too', () => {
   });
 
   it('the workflow tools charge what the calls they are made of charge', () => {
-    // One price for every search lex_research runs, and one for both reads lex_verify_citation can make.
+    // One price for every search lex_research runs, and one for both reads lex_check_citation can make.
     expect(w.semantic_case_law).toBe(w.semantic_legis);
     expect(w.document_metadata).toBe(w.document_fetch);
   });
@@ -156,7 +156,7 @@ describe('credit costs outside the descriptions match the weights too', () => {
   it('402 on a national document read: what is reserved and what it settles at', async () => {
     const r = await run('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-1' }, () => exhausted(w.document_fetch));
     expect(r.content[0].text).toContain(`reserves ${credits(w.document_fetch)} and settles at ${fx.corpusHit}, so the pool must hold ${w.document_fetch}`);
-    const v = await run('lex_verify_citation', { identifier: 'AT-NOR-1' }, () => exhausted(w.document_fetch));
+    const v = await run('lex_check_citation', { identifier: 'AT-NOR-1' }, () => exhausted(w.document_fetch));
     expect(v.content[0].text).toContain(`reserves ${credits(w.document_fetch)} and settles at ${fx.corpusHit}, so the pool must hold ${w.document_fetch}`);
   });
 
@@ -183,7 +183,7 @@ describe('credit costs outside the descriptions match the weights too', () => {
     }
     const doc = `${fx.corpusHit} · ${fx.cellarHit} · ${w.document_fetch}`;
     expect(column).toEqual({
-      '`lex_verify_citation`': `${fx.corpusHit}–${w.resolve + w.document_fetch}`,
+      '`lex_check_citation`': `${fx.corpusHit}–${w.resolve + w.document_fetch}`,
       '`lex_act_history`': `${w.citation_cited_by + fx.corpusHit}–${w.citation_cited_by + w.document_metadata} (+ ${fx.corpusHit}–${w.document_metadata} per date read)`,
       '`lex_research`': `${w.semantic_legis} per search`,
       '`lex_semantic_legislation`': `${w.semantic_legis} (+ up to ${w.document_fetch} per version fetch with \`asOf\`)`,
