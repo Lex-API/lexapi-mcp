@@ -513,7 +513,8 @@ describe('honest descriptions', () => {
 
   it('counterparts: BUSINESS+, live countries only, 20 credits, not a finding', () => {
     const d = byName.lex_counterparts.description;
-    expect(d).toMatch(/BUSINESS, SCALE and ENTERPRISE only/);
+    expect(d).toMatch(/BUSINESS\+ only/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/BUSINESS\+ means the BUSINESS, SCALE and ENTERPRISE plans; a BUSINESS\+ feature returns 403/);
     expect(d).toMatch(/Only live countries are returned/);
     expect(d).toMatch(/lex_national_coverage/);
     expect(d).toMatch(/20 credits/);

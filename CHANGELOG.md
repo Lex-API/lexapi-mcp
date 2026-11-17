@@ -5,10 +5,23 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 ## 0.5.2 — unreleased
 
 ### Changed
-- Shorter README; several tool descriptions trimmed. No change to tool names, input schemas or annotations; the only output text that changes is `asOfCaveat.note` (below).
+- Shorter README; several tool descriptions trimmed. No tool or parameter is renamed and no tool is removed; the schema and output changes are listed below.
 - `lex_national_semantic_case_law` / `lex_national_semantic_legislation`: `partial: true` is described as a search that did not finish, not as a coverage gap.
-- `lex_semantic_legislation`: the description, the `asOf` parameter and the server instructions say that a search without `asOf` returns the indexed texts as they are, with repealed or amended provisions unmarked, and that today's date as `asOf` gives current law. The `asOf` range reads "to today (UTC)".
+- `lex_semantic_legislation`: the description, the server instructions and the README say: "For the text in force today, pass today's date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, repealed and since-amended provisions are returned unmarked." The `asOf` range reads "to today (UTC)".
 - `asOfCaveat.note` calls the text of unresolved hits the indexed text (was "the LATEST text").
+- **Output:** `lex_get_document_version` returns the date a snapshot was looked up for as `snapshotDate` (was `asOf`); it is not an in-force date. `lex_export` results carry a `billing` line.
+- **Stricter input** (a key that had no effect is now a validation error): `lex_semantic_case_law.filters` accepts `court`, `date_from`, `date_to`, `case_number`, `ecli` and `language` only, so `dateFrom` is refused instead of ignored; `lex_semantic_legislation.filters` accepts `language` only, the one key the legislation index reads; `lex_update_webhook.searchCriteria` has the same typed fields as `lex_create_webhook`.
+- `lex_national_semantic_case_law` no longer lists `hyde`, which never had an effect there; a call that still sends it works as before.
+- `lex_national_semantic_legislation` says what a hit carries instead of "current text only": `in_force`, with `valid_from` / `valid_to` where the index has them.
+- `lex_semantic_legislation` says that only an `article_ref` of the form `art_N` is an `articleId`; `anx_N`, `rct_a-b` and `j_N` are annex, recital and text-window matches, read with `include`.
+- `language` on the national tools is described as the country's own language (any other value is an error); `lex_get_national_document.language` no longer says "default en".
+- `domain` / `subdomain` on `lex_search`, `lex_recent_documents` and `lex_export` say that `NATIONAL_LAW` and the `national-*` values are EUR-Lex's own collections and that member-state law is in the `lex_national_*` tools.
+- `lex_update_webhook`: `watchCelex` and `searchCriteria` each say that they replace what is stored.
+- Plan limits are no longer listed per tool; `lex_info` returns the caller's (`maxPages`, `maxBatchSize`, `maxWebhooks`). What holds for every national tool (live countries, attribution, the monthly allowance, `includeNational`, and BUSINESS+ meaning BUSINESS, SCALE and ENTERPRISE) is said once, in the server instructions.
+- `lex_counterparts`, `lex_transposition`, `lex_get_national_document` and `lex_export` state their cost only; what is reserved or refunded is said in the error text (402: what was reserved; 403: no credits charged; 404: at most 1 credit) and in the `lex_export` result.
+- Every parameter has a description. Date and CELEX formats are stated in the descriptions and checked as before; they are no longer repeated as regular expressions in the schema.
+- With `LEXAPI_MCP_READ_ONLY`, the remaining descriptions do not name the hidden tools.
+- A test compares the credit costs in the descriptions with the API's operation weights (`tests/fixtures/operation-weights.json`, refreshed with `scripts/refresh-operation-weights.mjs`).
 
 ## 0.5.1 — 2026-11-16
 

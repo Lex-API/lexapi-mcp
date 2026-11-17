@@ -195,7 +195,7 @@ export function describeError(err: unknown): string {
         const url = d && typeof d.acceptUrl === 'string' ? ` (${d.acceptUrl})` : '';
         return `${head} The account must accept the national-source terms once in the LexAPI dashboard${url} before national documents are served; retrying before that does not help. Nothing was charged.`;
       }
-      return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). Plans are compared at ${PRICING_URL}.`;
+      return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
       // National 404s take three shapes, none of which point at lex_resolve
       // or lex_search (both EU-only): the typed document-id miss (`details:
@@ -213,9 +213,9 @@ export function describeError(err: unknown): string {
         // not only an unlaunched country — these tools only ever build
         // known routes, so that's the near-certain cause here, but the
         // hedge keeps the message honest if that ever changes.
-        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents) — or the route itself is wrong.`;
+        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents) — or the route itself is wrong. A not-found answer costs at most 1 credit.`;
       }
-      return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title).`;
+      return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title). A not-found answer costs at most 1 credit.`;
     }
     case 409:
       // National semantic search not yet enabled for a live country

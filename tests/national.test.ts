@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { runTool } from '../src/server.js';
+import { runTool, SERVER_INSTRUCTIONS } from '../src/server.js';
 import { selectTools, tools, type ToolDef } from '../src/tools.js';
 import { clientWith, parseText } from './helpers.js';
 
@@ -74,13 +74,35 @@ describe('national-law tools', () => {
     }
   });
 
-  it('point at lex_national_coverage for live countries, and state their cost (except the coverage tool itself)', () => {
+  it('state their cost; what holds for every national tool is said once, in the server instructions', () => {
     expect(byName.lex_national_coverage.description).toMatch(/only the countries listed as live/i);
     for (const name of NATIONAL_TOOLS.filter((n) => n !== 'lex_national_coverage')) {
       const d = byName[name].description;
-      expect(d, name).toMatch(/lex_national_coverage/);
-      expect(d, name).toMatch(/not yet live/i);
       expect(d, name).toMatch(/[Cc]ost/);
+      expect(d, name).not.toMatch(/not yet live|attribution to be kept|national-law allowance/i);
+    }
+    expect(SERVER_INSTRUCTIONS).toMatch(/serve only the countries lex_national_coverage lists as live/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/a call for a country not yet live returns an error/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/Terms require this attribution to be kept with republished content/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/FREE, STARTER and PROFESSIONAL plans national-law calls also count against a separate monthly allowance/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/BUSINESS\+ means the BUSINESS, SCALE and ENTERPRISE plans/);
+  });
+
+  it('a 402 on a national document read says that 5 credits are reserved', async () => {
+    const { result } = await call('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-1' }, () => ({
+      status: 402,
+      body: { success: false, error: { code: 'CREDITS_EXHAUSTED', message: 'Credit pool exhausted', details: { weight: 5, available: 3 } } },
+    }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/reserves 5 credits and settles at 1/);
+  });
+
+  it('language is described per country, not as "default en"', () => {
+    for (const name of ['lex_national_semantic_case_law', 'lex_national_semantic_legislation', 'lex_get_national_document']) {
+      const schema = z.toJSONSchema(z.object(byName[name].inputSchema), { io: 'input' }) as { properties: Record<string, { description?: string }> };
+      const d = schema.properties.language.description ?? '';
+      expect(d, name).toMatch(/country's own language/);
+      expect(d, name).not.toMatch(/default en/);
     }
   });
 });
@@ -358,12 +380,21 @@ describe('lex_get_national_document', () => {
 });
 
 describe('lex_national_semantic_case_law', () => {
-  it('sends jurisdiction, filters and hyde, and keeps attribution on each hit', async () => {
+  it('has no hyde parameter; a caller that still sends it is not refused, and it is not forwarded', async () => {
+    expect(byName.lex_national_semantic_case_law.inputSchema).not.toHaveProperty('hyde');
+    const { calls, result } = await call('lex_national_semantic_case_law', { jurisdiction: 'at', query: 'data protection fine', hyde: true }, () => ({
+      body: { success: true, jurisdiction: 'AT', resultCount: 0, results: [] },
+    }));
+    expect(result.isError).toBeFalsy();
+    expect(calls[0].body).not.toHaveProperty('hyde');
+  });
+
+  it('sends jurisdiction and filters, and keeps attribution on each hit', async () => {
     const { calls, data } = await call('lex_national_semantic_case_law', {
-      jurisdiction: 'at', query: 'data protection fine', hyde: true, filters: { court: 'OGH' },
+      jurisdiction: 'at', query: 'data protection fine', filters: { court: 'OGH' },
     }, () => ({
       body: {
-        success: true, searchType: 'semantic-case-law', jurisdiction: 'AT', resultCount: 1, hyde: false,
+        success: true, searchType: 'semantic-case-law', jurisdiction: 'AT', resultCount: 1,
         results: [{
           documentId: 'AT-JUD-OGH-1', jurisdiction: 'AT', score: 0.81, case_name: 'X v Y', court: 'OGH',
           case_number: '6 Ob 123/24x', decision_date: '2024-01-01',
@@ -379,8 +410,7 @@ describe('lex_national_semantic_case_law', () => {
     }));
     expect(calls[0].method).toBe('POST');
     expect(calls[0].url.pathname).toBe('/api/v1/at/search/semantic');
-    expect(calls[0].body).toMatchObject({ query: 'data protection fine', limit: 10, hyde: true, filters: { court: 'OGH' } });
-    expect(data.hyde).toBe(false);
+    expect(calls[0].body).toEqual({ query: 'data protection fine', limit: 10, filters: { court: 'OGH' } });
     expect(data.results[0].documentId).toBe('AT-JUD-OGH-1');
     expect(data.results[0].attribution).toMatch(/RIS/);
     // Uniform fields: documentKind/ecli/dateOfDocument from LexAPI's record (the hit's
@@ -432,8 +462,11 @@ describe('lex_national_semantic_legislation', () => {
     for (const k of ['section', 'valid_from', 'valid_to', 'law_type']) expect(data.results[0]).not.toHaveProperty(k);
   });
 
-  it('has no asOf parameter', () => {
+  it('has no asOf parameter, and says what a hit carries instead', () => {
     expect(byName.lex_national_semantic_legislation.inputSchema).not.toHaveProperty('asOf');
+    const d = byName.lex_national_semantic_legislation.description;
+    expect(d).toMatch(/in_force \(omitted when unknown\) says whether the provision is in force today/);
+    expect(d).not.toMatch(/current text only/);
   });
 });
 

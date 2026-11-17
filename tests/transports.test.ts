@@ -96,7 +96,10 @@ describe('MCP protocol (in-memory)', () => {
     // each filter's values listed once, in its enum) and the title
     // `language` on the seven citation tools that take it: measured 55.4k.
     // v0.5.1 adds annotations.title to every tool: measured 57.4k.
-    expect(listJson.length).toBeLessThan(58_500);
+    // v0.5.2 describes every parameter, types the webhook update criteria
+    // and says what holds for several tools once, in the server
+    // instructions: measured 57.3k.
+    expect(listJson.length).toBeLessThan(57_500);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);

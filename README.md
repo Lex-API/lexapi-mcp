@@ -72,7 +72,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date (today's date for current law); without `asOf`, hits are the indexed texts and repealed or amended provisions are not marked. | 5 (+ up to 5 per version fetch with `asOf`) |
+| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date. For the text in force today, pass today's date (UTC) as `asOf` and use only hits with `asOfResolved: true`. Without `asOf`, repealed and since-amended provisions are returned unmarked. | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
 | `lex_recent_documents` | What was published in the last N days. | 3 per 10 results |
@@ -94,7 +94,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_export` | Corpus rows by type, author, collection, language or date (BUSINESS+). | 1 per row, at least 1 per call |
 | `lex_national_coverage` | Which countries' national law is live, with sources and licences. | free |
 | `lex_list_national_documents` | Browse a country's national legislation and case law. | 3 |
-| `lex_get_national_document` | A national document by id. | 5 → 1 |
+| `lex_get_national_document` | A national document by id. | 1 |
 | `lex_national_semantic_case_law` · `lex_national_semantic_legislation` | Semantic search over one country's case law / legislation. | 5 |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
@@ -131,6 +131,8 @@ npm install
 npm test            # build + tests (mocked API, no network)
 npm run typecheck && npm run lint
 ```
+
+`tests/fixtures/operation-weights.json` holds the API's credit weights, which a test compares with the costs in the tool descriptions. After a weight changes in the API: `node scripts/refresh-operation-weights.mjs <path to the API's operationWeights.js>`.
 
 ## License
 
