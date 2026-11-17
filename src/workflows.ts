@@ -158,7 +158,14 @@ function asThrown(f: Failure): unknown {
 }
 
 // ── Identifiers ────────────────────────────────────────────────────
-const NATIONAL_ID_RE = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
+// A national id: a two-letter country code, a hyphen, then whatever the
+// source's own identifier holds (letters of any alphabet included). "EU-…" is
+// not one. Which codes are countries is the API's answer, not this pattern's.
+const NATIONAL_ID_RE = /^[A-Za-z]{2}-[\p{L}\p{N}()./_:+-]+$/u;
+export function isNationalId(identifier: string): boolean {
+  const t = identifier.trim();
+  return NATIONAL_ID_RE.test(t) && !/^EU-/i.test(t);
+}
 /** Sector, year, type letters, number: what is sent as a CELEX without resolving. */
 const CELEX_SHAPE_RE = /^[0-9CE]\d{4}[A-Z]{1,2}\d[0-9A-Z()._-]*$/;
 
@@ -166,7 +173,7 @@ const CELEX_SHAPE_RE = /^[0-9CE]\d{4}[A-Z]{1,2}\d[0-9A-Z()._-]*$/;
 const LOOSE_CELEX_RE = /^\d[0-9A-Z()._-]{4,}$/;
 
 function upperCelex(v: string): string {
-  return v.trim().replace(/^CELEX:\s*/i, '').toUpperCase();
+  return v.trim().replace(/^(?:uri=)?CELEX[:/]\s*/i, '').toUpperCase();
 }
 
 /** The year in a CELEX number; none for a corrigendum, whose number is that of the corrected act. */
@@ -228,14 +235,14 @@ type Carried = { doc: Obj; problem?: undefined } | { doc?: undefined; problem: {
  * The document an answer carries, when the answer is readable and is about
  * the document asked for. Anything else is not evidence that it exists.
  */
-function carriedDocument(body: unknown, key: 'metadata' | 'document', requested: string, idKeys: string[]): Carried {
+function carriedDocument(body: unknown, key: 'metadata' | 'document', requested: string, idKeys: string[], alsoAccepted?: string): Carried {
   const doc = isObj(body) && body.success !== false && isObj(body[key]) ? body[key] : undefined;
   const raw = doc ? idKeys.map((k) => doc[k]).find((v) => typeof v === 'string' && v.trim()) : undefined;
   if (!doc || typeof raw !== 'string') {
     return { problem: { reason: 'unreadable_response', note: `The answer carried no document with an identifier, so it does not show whether ${requested} exists.` } };
   }
   const returned = raw.trim().toUpperCase();
-  if (returned !== requested) {
+  if (returned !== requested && returned !== alsoAccepted) {
     return { problem: { reason: 'different_document', note: `${requested} was asked for and the answer is about ${returned}; nothing from it is reported.` } };
   }
   return { doc };
@@ -403,10 +410,15 @@ export function matchUnit(requested: string, numbers: unknown[]): UnitMatch {
 
 const UNMAPPED_ARTICLE = 'This form could not be mapped to one article number (forms read: "17", "Art. 17", "Article 17(1)", "6a"), so nothing was compared.';
 
+/**
+ * What the API's resolver would take the identifier for: an ECLI, an ELI
+ * path, or anything URL-like (a EUR-Lex or data.europa.eu address with or
+ * without a scheme, a uri= parameter). Anything else it cannot resolve.
+ */
 function guessType(identifier: string): string {
   if (/^ECLI:/i.test(identifier)) return 'ecli';
-  if (/^https?:\/\//i.test(identifier)) return /\/eli\//i.test(identifier) ? 'eli' : 'url';
-  if (/(^|\/)eli\//i.test(identifier)) return 'eli';
+  if (/(^|\/)eli\/[a-z_]+\/\d{4}\/\d+/i.test(identifier)) return 'eli';
+  if (/eur-lex\.europa\.eu|data\.europa\.eu|[?&]uri=|\/eli\//i.test(identifier)) return 'url';
   return 'unrecognised';
 }
 
@@ -414,7 +426,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   const identifier = a.identifier.trim();
   const calls = new Calls(client);
   // A national id starts with the code of a country LexAPI lists; "EU-…" is not one.
-  if (NATIONAL_ID_RE.test(identifier) && !/^EU-/i.test(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
+  if (isNationalId(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
 
   const out: Obj = { identifier };
   const basis: Obj = {};
@@ -664,12 +676,18 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
     };
   }
 
-  const carried = carriedDocument(read.res.body, 'document', id, ['id']);
+  // The API restores the final dot a Slovenian decision id easily loses, for those ids only.
+  const withDot = id.startsWith('SI-JUD-') && !id.endsWith('.') ? `${id}.` : undefined;
+  const carried = carriedDocument(read.res.body, 'document', id, ['id'], withDot);
   if (carried.problem) {
     return { ...out, exists: 'unknown', inForce: 'unknown', notChecked: [{ what: 'everything', call, ...carried.problem }], ...calls.footer() };
   }
   const doc = carried.doc;
   const basis: Obj = { exists: `${call}: document returned` };
+  if (String(doc.id).trim().toUpperCase() !== id) {
+    out.id = String(doc.id).trim().toUpperCase();
+    basis.id = `${call}: the id as LexAPI holds it, with its final dot`;
+  }
   Object.assign(out, compact({
     jurisdiction: doc.jurisdiction,
     exists: true,

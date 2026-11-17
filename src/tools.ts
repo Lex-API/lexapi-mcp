@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { LexAPIError } from './errors.js';
 import { webhookUrlProblem } from './webhookUrl.js';
-import { actHistory, research, checkCitation } from './workflows.js';
+import { actHistory, checkCitation, isNationalId, research } from './workflows.js';
 
 import type { Json, LexAPIClient, LexResponse } from './client.js';
 import {
@@ -363,7 +363,7 @@ export const tools: ToolDef[] = [
       date: isoDate('Compare this date (YYYY-MM-DD) with the document date, entry into force and end of validity the API returns (onDate).').optional(),
     },
     annotations: READ,
-    handler: (a, client) => (NATIONAL_ID_RE.test(a.identifier)
+    handler: (a, client) => (isNationalId(a.identifier)
       ? checkCitation(a, client).catch(explain402(NATIONAL_READ_402))
       : checkCitation(a, client)),
   },

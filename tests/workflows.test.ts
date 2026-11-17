@@ -561,6 +561,51 @@ describe('lex_check_citation', () => {
     expect(typo.data).toMatchObject({ celex: '3206R0679', exists: false });
   });
 
+  it('what the API can resolve is sent to it: a URL without a scheme, a uri= parameter, a bare ELI path', async () => {
+    const resolveOk = (c: Call): Reply => (c.url.pathname.endsWith('/resolve')
+      ? { body: { success: true, identifierType: 'url', resolvedVia: 'url', verified: false, celex: '32016R0679', urls: {} } }
+      : { body: metadata() });
+    for (const identifier of [
+      'eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679',
+      'www.eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32016R0679',
+      'legal-content/EN/TXT/?uri=CELEX:32016R0679',
+      'data.europa.eu/eli/reg/2016/679/oj',
+      'eli/reg/2016/679/oj',
+    ]) {
+      const { data, paths, calls } = await call('lex_check_citation', { identifier }, resolveOk);
+      expect(paths, identifier).toEqual(['/resolve', '/documents/metadata']);
+      expect(calls[0].body).toEqual({ identifier });
+      expect(data, identifier).toMatchObject({ celex: '32016R0679', exists: true });
+    }
+    // A CELEX with its usual prefixes is read as the CELEX, without a resolve.
+    for (const identifier of ['uri=CELEX:32016R0679', 'CELEX/32016R0679', 'celex:32016r0679']) {
+      const { data, paths } = await call('lex_check_citation', { identifier }, resolveOk);
+      expect(paths, identifier).toEqual(['/documents/metadata']);
+      expect(data.celex).toBe('32016R0679');
+    }
+  });
+
+  it('a national id with letters outside ASCII is a national id', async () => {
+    const id = 'AT-JUD-JJT-20200101-OGH0002-PRÄ0000-001';
+    const { data, calls } = await call('lex_check_citation', { identifier: id.toLowerCase() }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id, documentKind: 'decision' }) }));
+    expect(decodeURIComponent(calls[1].url.pathname)).toBe(`/api/v1/at/documents/${id}`);
+    expect(data).toMatchObject({ identifierType: 'national_id', id, exists: true });
+  });
+
+  it('a Slovenian decision id answered with its final dot restored is the same document; nothing else is', async () => {
+    const reply = (returned: string) => (c: Call): Reply => (isCoverage(c)
+      ? { body: { jurisdictions: [{ code: 'SI', live: true }, { code: 'AT', live: true }] } }
+      : { body: nationalDoc({ id: returned, jurisdiction: returned.slice(0, 2), documentKind: 'decision' }) });
+    const si = await call('lex_check_citation', { identifier: 'SI-JUD-UPRS-2025-I.U.727.2022' }, reply('SI-JUD-UPRS-2025-I.U.727.2022.'));
+    expect(si.data).toMatchObject({ exists: true, identifier: 'SI-JUD-UPRS-2025-I.U.727.2022', id: 'SI-JUD-UPRS-2025-I.U.727.2022.' });
+    expect(si.data.basis.id).toMatch(/final dot/);
+    const act = await call('lex_check_citation', { identifier: 'SI-PRED-ZAKO1263' }, reply('SI-PRED-ZAKO1263.'));
+    expect(act.data).toMatchObject({ exists: 'unknown' });
+    expect(act.data.notChecked[0].reason).toBe('different_document');
+    const at = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, reply('AT-NOR-1.'));
+    expect(at.data.exists).toBe('unknown');
+  });
+
   it('the description says what "unknown" and found: true mean', () => {
     const d = byName.lex_check_citation.description;
     expect(d).toMatch(/"unknown" when the check could not be made, which does not mean that the document or article does not exist/);
