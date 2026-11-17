@@ -162,9 +162,11 @@ function asThrown(f: Failure): unknown {
 // source's own identifier holds (letters of any alphabet included). "EU-…" is
 // not one. Which codes are countries is the API's answer, not this pattern's.
 // The citation-graph tools check their ids with the same pattern.
+// An id is checked and sent in its composed form (NFC): the API compares ids
+// as strings, and stores "Ä" as one character, not as "A" and a combining mark.
 export const NATIONAL_ID_RE = /^[A-Za-z]{2}-[\p{L}\p{N}()./_:+-]+$/u;
 export function isNationalId(identifier: string): boolean {
-  const t = identifier.trim();
+  const t = identifier.trim().normalize('NFC');
   return NATIONAL_ID_RE.test(t) && !/^EU-/i.test(t);
 }
 /** Sector, year, type letters, number: what is sent as a CELEX without resolving. */
@@ -445,7 +447,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   const identifier = a.identifier.trim();
   const calls = new Calls(client);
   // A national id starts with the code of a country LexAPI lists; "EU-…" is not one.
-  if (isNationalId(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
+  if (isNationalId(identifier)) return checkNational(identifier.toUpperCase().normalize('NFC'), a, calls);
 
   const out: Obj = { identifier };
   const basis: Obj = {};

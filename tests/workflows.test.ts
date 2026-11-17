@@ -639,6 +639,20 @@ describe('lex_check_citation', () => {
     expect(data).toMatchObject({ identifierType: 'national_id', id, exists: true });
   });
 
+  it('a national id in decomposed form (NFD) is read in its composed form (NFC)', async () => {
+    const id = 'AT-JUD-JJT-20200101-OGH0002-PRÄ0000-001';
+    const nfd = id.normalize('NFD');
+    expect(nfd).not.toBe(id);
+    for (const identifier of [nfd, nfd.toLowerCase(), ` ${nfd} `]) {
+      const { data, calls } = await call('lex_check_citation', { identifier }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id, documentKind: 'decision' }) }));
+      expect(calls[1].url.pathname).toBe(`/api/v1/at/documents/${encodeURIComponent(id)}`);
+      expect(data).toMatchObject({ identifierType: 'national_id', id, exists: true });
+    }
+    // The composed id is sent as before.
+    const same = await call('lex_check_citation', { identifier: id }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id, documentKind: 'decision' }) }));
+    expect(same.calls[1].url.pathname).toBe('/api/v1/at/documents/AT-JUD-JJT-20200101-OGH0002-PR%C3%840000-001');
+  });
+
   it('a Slovenian decision id answered with its final dot restored is the same document; nothing else is', async () => {
     const reply = (returned: string) => (c: Call): Reply => (isCoverage(c)
       ? { body: { jurisdictions: [{ code: 'SI', live: true }, { code: 'AT', live: true }] } }

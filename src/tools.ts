@@ -92,13 +92,13 @@ const celex = (what = 'CELEX number') =>
 // a two-letter jurisdiction prefix, which is how the API recognises them on
 // the citation graph, then the source's own identifier, letters of any
 // alphabet included (NATIONAL_ID_RE, shared with the workflow tools). The
-// pattern is checked in a refinement, so it is not published in the JSON
-// schema. `includeNational`-aware citation tools accept either
+// pattern is checked on the composed form (NFC) in a refinement, so it is
+// not published in the JSON schema. `includeNational`-aware citation tools accept either
 // shape; document reads stay celex()-only (lex_get_national_document /
 // lex_list_national_documents cover national documents directly).
 const celexOrNationalId = (what = 'identifier') =>
   z.string().trim()
-    .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v),
+    .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v.normalize('NFC')),
       `${what} must be a CELEX number (e.g. 32016R0679) or a national document id (e.g. AT-NOR-12345)`)
     .describe(`${what}: a CELEX number, or (with includeNational) a national document id, e.g. "AT-NOR-12345".`);
 // National law: jurisdiction codes
@@ -229,8 +229,9 @@ const oneArticle = (d = 'Return only this article: "17", "art_17", "Article 17",
   z.string().trim().min(1).max(40).optional().describe(d);
 const acceptLanguages = (d: string) => z.union([z.array(lang()).min(1), z.literal('any')]).optional().describe(d);
 
+/** The id as it is sent: upper case and, for a national id with accented letters, composed (NFC). */
 export function normCelex(v: string): string {
-  return v.trim().replace(/^CELEX:/i, '').toUpperCase();
+  return v.trim().replace(/^CELEX:/i, '').toUpperCase().normalize('NFC');
 }
 
 // ── Tool plumbing ─────────────────────────────────────────────────────

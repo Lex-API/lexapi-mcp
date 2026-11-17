@@ -573,6 +573,39 @@ describe('identifiers of the citation-graph tools', () => {
     await mcp.close();
   });
 
+  it('an id in decomposed form (NFD) is accepted and sent composed (NFC); composed and ASCII ids are sent as before', async () => {
+    const nfd = UMLAUT.normalize('NFD');
+    expect(nfd).not.toBe(UMLAUT);
+    expect(nfd).toContain('A\u0308');
+    const { client, calls } = clientWith(() => ({ body: { success: true } }));
+    const server = createLexServer(client);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(a);
+    const mcp = new Client({ name: 'test', version: '1.0.0' });
+    await mcp.connect(b);
+    // [given, the bytes sent in the path]
+    const cases: Array<[string, string]> = [
+      [nfd, encodeURIComponent(UMLAUT)],
+      [nfd.toLowerCase(), encodeURIComponent(UMLAUT)],
+      [UMLAUT, 'AT-JUD-JJT_20200101_OGH0002_PR%C3%840000_001'],
+      ['AT-NOR-10001597', 'AT-NOR-10001597'],
+      ['SI-JUD-UPRS-2025-I.U.727.2022.', 'SI-JUD-UPRS-2025-I.U.727.2022.'],
+      ['32013R0952R(04)', '32013R0952R(04)'],
+      ['02016R0679-20180524', '02016R0679-20180524'],
+    ];
+    for (const [given, sent] of cases) {
+      for (const [name, params, path] of GRAPH) {
+        const from = calls.length;
+        const res = await mcp.callTool({ name, arguments: argsFor(params, given) });
+        expect(res.isError, `${name} ${given}`).toBeFalsy();
+        expect(calls[from].url.pathname, `${name} ${given}`).toBe(`/api/v1${path}${params.map(() => sent).join('/')}`);
+      }
+    }
+    await mcp.close();
+    // A combining mark that does not compose with its letter is still refused.
+    for (const [name, params] of GRAPH) expect(ok(name, argsFor(params, 'AT-NOR-Q\u0308-1')), name).toBe(false);
+  });
+
   it('every id accepted before is still accepted', () => {
     const before = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
     const ids = [
