@@ -20,7 +20,7 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 - `lex_update_webhook`: `watchCelex` and `searchCriteria` each say that they replace what is stored.
 - The page, batch and webhook limits are no longer listed per tool; `lex_info` returns the caller's (`maxPages`, `maxBatchSize`, `maxWebhooks`). The semantic result caps stay on the `limit` parameters. What holds for every national tool (live countries, the monthly allowance, `includeNational`, and BUSINESS+ meaning BUSINESS, SCALE and ENTERPRISE) is said once, in the server instructions; the tools that return `attribution` still say it must be kept with republished content.
 - `lex_counterparts`, `lex_transposition`, `lex_get_national_document` and `lex_export` state their cost only; what is reserved or refunded is said in the error text (402 on `lex_export` and `lex_get_national_document`: what is reserved; 403: no credits charged; 404: at most 1 credit) and, on credit plans, in the `lex_export` result.
-- Every parameter has a description. Date and CELEX formats are stated in the descriptions and checked as before; they are no longer repeated as regular expressions in the schema.
+- Every parameter has a description; the fields inside `lex_update_webhook.searchCriteria` are described once, on `lex_create_webhook`, and the parameter points there. Date and CELEX formats are stated in the descriptions and checked as before; they are no longer repeated as regular expressions in the schema.
 - With `LEXAPI_MCP_READ_ONLY`, the remaining descriptions do not name the hidden tools.
 - A test compares the credit costs in the descriptions with the API's operation weights (`tests/fixtures/operation-weights.json`, refreshed with `scripts/refresh-operation-weights.mjs`).
 

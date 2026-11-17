@@ -98,12 +98,11 @@ describe('MCP protocol (in-memory)', () => {
     // v0.5.1 adds annotations.title to every tool: measured 57.4k.
     // v0.5.2 describes every parameter, types the webhook update criteria
     // and says what holds for several tools once, in the server
-    // instructions; the update criteria carry the same field descriptions
-    // as create, and the tools that return attribution say it must be kept:
-    // measured 58.7k.
-    expect(listJson.length).toBeLessThan(58_800);
+    // instructions; the tools that return attribution say it must be kept:
+    // measured 58.0k.
+    expect(listJson.length).toBeLessThan(58_100);
     // The instructions are in every client's context too: measured 3.3k.
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_400);
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_350);
 
     // Read-only mode lists fewer tools: measured 51.1k.
     const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
@@ -111,7 +110,7 @@ describe('MCP protocol (in-memory)', () => {
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(51_200);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(51_150);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);

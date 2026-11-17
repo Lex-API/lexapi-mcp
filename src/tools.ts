@@ -193,19 +193,24 @@ const nationalLanguage = lang('Not needed. Only the country\'s own language is a
 // forms on create and update.
 const criteriaYear = z.union([z.number().int().min(1950).max(2100), z.string().regex(/^\d{4}$/, 'a 4-digit year')]);
 const oneOrList = () => z.union([z.string(), z.array(z.string())]).optional();
-const webhookCriteria = z.object({
-  query: z.string().nullable().optional().describe('Words that must all appear in the title (whole words; 4+ characters match word starts; trailing * for prefixes).'),
-  documentType: oneOrList().describe('Document type(s), lex_search values.'),
-  author: oneOrList().describe('Issuing institution(s), lex_search values.'),
-  subdomain: oneOrList().describe('Replaces the default (EU law, no consolidated texts); "consolidated" = consolidated texts only.'),
-  dateFrom: isoDate('Lower bound on the document date (YYYY-MM-DD).').optional(),
-  dateTo: isoDate('Upper bound on the document date (YYYY-MM-DD).').optional(),
-  year: z.union([criteriaYear, z.array(criteriaYear)]).optional().describe('Document year(s).'),
-  textScope: z.enum(['title', 'title-text', 'any']).optional().describe('Accepted for compatibility; every value matches titles.'),
-  domain: z.string().refine((v) => ['EU_LAW', 'ALL'].includes(v.toUpperCase()), 'EU_LAW or ALL').optional()
-    .describe('EU_LAW or ALL. Accepted for compatibility; only EU law is matched.'),
-  language: z.string().optional().describe('Accepted for compatibility; no effect.'),
-}).strict();
+// The field descriptions are published once, on lex_create_webhook; the
+// update tool takes the same schema and points there.
+const webhookCriteria = (describe: boolean) => {
+  const d = <T extends z.ZodType>(schema: T, text: string): T => (describe ? schema.describe(text) : schema);
+  return z.object({
+    query: d(z.string().nullable().optional(), 'Words that must all appear in the title (whole words; 4+ characters match word starts; trailing * for prefixes).'),
+    documentType: d(oneOrList(), 'Document type(s), lex_search values.'),
+    author: d(oneOrList(), 'Issuing institution(s), lex_search values.'),
+    subdomain: d(oneOrList(), 'Replaces the default (EU law, no consolidated texts); "consolidated" = consolidated texts only.'),
+    dateFrom: d(isoDate().optional(), 'Lower bound on the document date (YYYY-MM-DD).'),
+    dateTo: d(isoDate().optional(), 'Upper bound on the document date (YYYY-MM-DD).'),
+    year: d(z.union([criteriaYear, z.array(criteriaYear)]).optional(), 'Document year(s).'),
+    textScope: d(z.enum(['title', 'title-text', 'any']).optional(), 'Accepted for compatibility; every value matches titles.'),
+    domain: d(z.string().refine((v) => ['EU_LAW', 'ALL'].includes(v.toUpperCase()), 'EU_LAW or ALL').optional(),
+      'EU_LAW or ALL. Accepted for compatibility; only EU law is matched.'),
+    language: d(z.string().optional(), 'Accepted for compatibility; no effect.'),
+  }).strict();
+};
 
 const view = z.enum(['auto', 'outline', 'full']).default('auto').describe(
   'auto: the body if it fits maxChars, else an outline. full: body up to maxChars, then offset to continue.',
@@ -1178,7 +1183,7 @@ export const tools: ToolDef[] = [
     inputSchema: {
       name: z.string().trim().min(1).max(200).describe('Label.'),
       url: webhookUrl('Must be a public https URL (port 443 or 8443, a public domain name or address); it receives the POSTs.'),
-      searchCriteria: webhookCriteria.optional().describe('Filters for documents.new, in the lex_search vocabulary.'),
+      searchCriteria: webhookCriteria(true).optional().describe('Filters for documents.new, in the lex_search vocabulary.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional().describe('Base acts to watch (not consolidated versions or corrigenda).'),
       secret: z.string().min(16).max(256).optional().describe('Own signing secret; generated when omitted.'),
     },
@@ -1209,7 +1214,7 @@ export const tools: ToolDef[] = [
       id: webhookId,
       name: z.string().trim().min(1).max(200).optional().describe('New label.'),
       url: webhookUrl('Must be a public https URL.').optional().describe('Must be a public https URL.'),
-      searchCriteria: webhookCriteria.nullable().optional().describe('Replaces the stored criteria as a whole; null removes them.'),
+      searchCriteria: webhookCriteria(false).nullable().optional().describe('Replaces the stored criteria as a whole; null removes them. Same fields as searchCriteria on lex_create_webhook, described there.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional().describe('Replaces the whole watch list; [] empties it.'),
       status: z.enum(['ACTIVE', 'PAUSED']).optional().describe('ACTIVE re-enables, PAUSED stops deliveries.'),
     },

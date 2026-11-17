@@ -125,9 +125,15 @@ describe('input validation', () => {
 
   it('every parameter has a description', () => {
     const missing: string[] = [];
+    // The one exemption: the criteria fields of lex_update_webhook are described
+    // on lex_create_webhook, and the parameter says so. Both tools are always
+    // listed together (read-only mode hides both).
+    const describedElsewhere = (name: string, path: string[]) => name === 'lex_update_webhook' && path[0] === 'searchCriteria';
+    expect((byName.lex_update_webhook.inputSchema.searchCriteria as any).description).toMatch(/Same fields as searchCriteria on lex_create_webhook, described there/);
+    expect(Boolean(byName.lex_create_webhook.write)).toBe(Boolean(byName.lex_update_webhook.write));
     const walk = (name: string, path: string[], s: any) => {
       for (const [k, v] of Object.entries<any>(s?.properties ?? {})) {
-        if (!v.description) missing.push(`${name}.${[...path, k].join('.')}`);
+        if (!v.description && !describedElsewhere(name, path)) missing.push(`${name}.${[...path, k].join('.')}`);
         walk(name, [...path, k], v);
       }
       // Nested objects behind a union (e.g. criteria | null) count too.
