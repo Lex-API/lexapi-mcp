@@ -78,7 +78,7 @@ export const CITATION_RESOLUTIONS = ['id', 'key', 'abbreviation', 'text-pattern'
 
 const CONTENT_PARTS = ['metadata', 'fullText', 'articles', 'recitals', 'paragraphs', 'sections', 'tables', 'annexes'] as const;
 
-// Mirrors the API's isValidCelexToken (corrigenda `32013R0952R(04)` and
+// The CELEX form the API accepts (corrigenda `32013R0952R(04)` and
 // consolidated `02016R0679-20180524` included), case-insensitive; an
 // optional `CELEX:` prefix is stripped before sending.
 const CELEX_RE = /^(?:CELEX:)?[0-9A-Za-z][0-9A-Za-z()._-]{4,}$/i;
@@ -121,9 +121,8 @@ const webhookUrl = (d: string) => z.string().trim().superRefine((v, ctx) => {
   const problem = webhookUrlProblem(v);
   if (problem) ctx.addIssue({ code: 'custom', message: problem });
 }).describe(d);
-// The export API's own checks (lex-api exportController parseIsoDate /
-// parseIsoTimestamp), mirrored exactly so the schema accepts what the server
-// accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
+// The export API's own date and timestamp checks, mirrored exactly so the
+// schema accepts what the server accepts and nothing else: a calendar-valid YYYY-MM-DD; a date-time needs a
 // zone (Z, ±HH:MM or ±HHMM), seconds are optional, a fraction has 1–9 digits.
 const ISO_TS_RE = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2}))?$/;
 export function isApiDate(value: string): boolean {
