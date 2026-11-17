@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { runTool } from '../src/server.js';
+import { runTool, SERVER_INSTRUCTIONS } from '../src/server.js';
 import { selectTools, tools, type ToolDef } from '../src/tools.js';
 import { clientWith, fakeDocument, parseText } from './helpers.js';
 
@@ -78,6 +78,16 @@ describe('input validation', () => {
     expect(ok('lex_get_document', { celexNumber: '32016r0679' })).toBe(true);
     expect(ok('lex_get_document', { celexNumber: 'CELEX:32016R0679' })).toBe(true);
     expect(ok('lex_get_document', { celexNumber: 'GDPR!' })).toBe(false);
+  });
+
+  it('says what a search without asOf returns', () => {
+    const tool = byName.lex_semantic_legislation;
+    const schema = z.toJSONSchema(z.object(tool.inputSchema)) as { properties: Record<string, { description?: string }> };
+    const asOf = schema.properties.asOf.description ?? '';
+    expect(tool.description).toMatch(/pass today's date/);
+    expect(asOf).toMatch(/Omitted: the indexed texts/);
+    expect(asOf).not.toMatch(/current law/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/today's date for current law/);
   });
 
   it('validates asOf as a date', () => {
