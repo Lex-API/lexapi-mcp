@@ -780,7 +780,7 @@ describe('review round 2', () => {
 
   it('F5 (review): the timestamp/date schema accepts exactly what the API accepts', () => {
     const s = z.object(byName.lex_export.inputSchema);
-    // Verdicts of lex-api's parseIsoTimestamp (exportController, #303 head).
+    // What the API's timestamp check accepts and refuses.
     const accepted = [
       '2026-05-11', '2026-05-11T10:00Z', '2026-05-11T10:00:00Z', '2026-05-11T10:00:00.123456789Z',
       '2026-05-11T10:00:00+0200', '2026-05-11T10:00:00-02:00', '2026-05-11T23:59:59.5+23:59',
@@ -857,5 +857,35 @@ describe('errors reach the model as actionable tool errors', () => {
     }));
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/needs 5 credits.*1 are available.*2026-11-01/);
+  });
+});
+
+describe('whole-number parameters without an upper bound', () => {
+  // [tool, parameter, lowest value accepted]
+  const PARAMS: Array<[string, string, number]> = [
+    ['lex_get_document', 'offset', 0], ['lex_get_document_by_url', 'offset', 0], ['lex_get_document_version', 'offset', 0],
+    ['lex_get_document_version', 'version', 1], ['lex_list_national_documents', 'page', 1], ['lex_get_national_document', 'offset', 0],
+    ['lex_act_history', 'offset', 0], ['lex_cited_by', 'offset', 0], ['lex_cites', 'offset', 0], ['lex_citation_network', 'offset', 0],
+    ['lex_transposition', 'offset', 0], ['lex_counterparts', 'offset', 0], ['lex_get_webhook', 'deliveriesOffset', 0],
+  ];
+
+  it('are published as integers with a minimum and no maximum', () => {
+    const listed = JSON.stringify(tools.map((t) => z.toJSONSchema(z.object(t.inputSchema), { io: 'input' })));
+    expect(listed).not.toContain(String(Number.MAX_SAFE_INTEGER));
+    for (const [tool, param, min] of PARAMS) {
+      const schema = z.toJSONSchema(z.object(byName[tool].inputSchema), { io: 'input' }) as { properties: Record<string, Record<string, unknown>> };
+      expect(schema.properties[param], `${tool}.${param}`).toMatchObject({ type: 'integer', minimum: min });
+      expect(schema.properties[param], `${tool}.${param}`).not.toHaveProperty('maximum');
+    }
+  });
+
+  it('still accept only whole numbers from the minimum up', () => {
+    for (const [tool, param, min] of PARAMS) {
+      const s = byName[tool].inputSchema[param] as z.ZodType;
+      for (const ok of [min, min + 1, 250_000, Number.MAX_SAFE_INTEGER]) expect(s.safeParse(ok).success, `${tool}.${param} ${ok}`).toBe(true);
+      for (const bad of [min - 1, -1, 1.5, min + 0.5, 2 ** 53, 1e300, Infinity, -Infinity, NaN, '3', null, true]) {
+        expect(s.safeParse(bad).success, `${tool}.${param} ${String(bad)}`).toBe(false);
+      }
+    }
   });
 });

@@ -941,6 +941,24 @@ describe('lex_act_history', () => {
     expect(data).toMatchObject({ celex: '32006R1907', requested: '02006R1907-20260622' });
   });
 
+  it('a CELEX with a variant tag (_SUM, _RES) is read as the act without it, as lex_check_citation reads it', async () => {
+    for (const [given, requested] of [['32006R1907_SUM', '32006R1907_SUM'], ['celex:32006r1907_sum', '32006R1907_SUM'], ['32006R1907_RES', '32006R1907_RES']]) {
+      const { data, paths } = await call('lex_act_history', { celexNumber: given }, route({}));
+      expect(paths[0], given).toBe('/citations/cited-by/32006R1907');
+      expect(data, given).toMatchObject({ celex: '32006R1907', requested });
+    }
+    const both = await call('lex_act_history', { celexNumber: '02006R1907-20260622_SUM' }, route({}));
+    expect(both.paths[0]).toBe('/citations/cited-by/32006R1907');
+    expect(both.data).toMatchObject({ celex: '32006R1907', requested: '02006R1907-20260622_SUM' });
+    // A corrigendum or a suffix that is not such a tag is another document: read as given.
+    for (const given of ['32013R0952R(04)', '32006R1907_1', '32006R1907_ABCDE']) {
+      const { data, paths } = await call('lex_act_history', { celexNumber: given }, route({}));
+      expect(decodeURIComponent(paths[0]), given).toBe(`/citations/cited-by/${given}`);
+      expect(data.celex, given).toBe(given);
+      expect(data, given).not.toHaveProperty('requested');
+    }
+  });
+
   it('consolidated pointers are shown when the metadata carries them', async () => {
     const latest = { celex: '02006R1907-20260622', date: '2026-06-22', source: 'cellar' };
     const upcoming = { celex: '02006R1907-20270101', date: '2027-01-01', source: 'cellar' };

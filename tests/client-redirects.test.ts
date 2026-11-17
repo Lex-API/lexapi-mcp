@@ -198,6 +198,8 @@ describe('a redirect to another host', () => {
       expect(apiSeen, String(status)).toHaveLength(1); // not retried
       const text = describeError(err);
       expect(text).toContain(otherOrigin);
+      expect(text).toMatch(/^Redirect not followed: .* not retryable\./);
+      expect(text).not.toMatch(/Could not reach|and retry/);
       for (const t of [err.message, text, String(err.stack)]) {
         expect(t).not.toContain(KEY);
         expect(t).not.toContain('token=abc');
@@ -222,8 +224,6 @@ describe('a redirect to another host', () => {
       `https://127.0.0.1:${port}/api/v1/info`, // the same host and port over https is another origin
       `//${new URL(otherOrigin).host}/x`,
       'https://user:pw@other.example/x',
-      'ftp://127.0.0.1/x',
-      'javascript:alert(1)',
     ]) {
       apiSeen.length = 0;
       routes = { '/api/v1/info': () => ({ status: 302, location }) };
@@ -234,6 +234,46 @@ describe('a redirect to another host', () => {
       expect(apiSeen, location).toHaveLength(1);
     }
     expect(otherSeen).toHaveLength(0);
+  });
+
+  it('a target that is not http or https is refused by its scheme, never as "(null)"', async () => {
+    for (const [location, scheme] of [
+      ['ftp://127.0.0.1/x', 'ftp:'],
+      ['javascript:alert(1)', 'javascript:'],
+      ['data:text/plain,secret-data', 'data:'],
+      ['file:///etc/passwd', 'file:'],
+      ['mailto:someone@other.example', 'mailto:'],
+    ]) {
+      apiSeen.length = 0;
+      routes = { '/api/v1/info': () => ({ status: 302, location }) };
+      const e = await client({ maxRetries: 3 }).info().catch((x) => x);
+      expect(e, location).toBeInstanceOf(LexAPITransportError);
+      expect(e.message, location).toBe(`the API answered with a redirect to a target that is not http or https (${scheme}), which is not followed`);
+      expect(describeError(e), location).not.toMatch(/null|alert|secret-data|passwd|someone|and retry/);
+      expect(apiSeen, location).toHaveLength(1); // not retried
+    }
+    expect(otherSeen).toHaveLength(0);
+  });
+
+  it('a same-origin target with a user name or password is refused at once, without them in the error', async () => {
+    const { host } = new URL(apiOrigin);
+    for (const location of [`http://user:pw-secret@${host}/api/v1/info2`, `http://user-secret@${host}/api/v1/info2`]) {
+      apiSeen.length = 0;
+      routes = { '/api/v1/info': () => ({ status: 302, location }) };
+      const e = await client({ maxRetries: 3 }).info().catch((x) => x);
+      expect(e, location).toBeInstanceOf(LexAPITransportError);
+      expect(e.message, location).toBe(`the API answered with a redirect whose target carries a user name or password (${apiOrigin}), which is not followed`);
+      expect(apiSeen.map((s) => s.path), location).toEqual(['/api/v1/info']); // one request: not followed, not retried
+      const text = describeError(e);
+      expect(text).toMatch(/^Redirect not followed: /);
+      for (const t of [e.message, text]) expect(t).not.toMatch(/secret|and retry/);
+    }
+  });
+
+  it('a redirect loop is described as not retryable too', async () => {
+    routes = { '/api/v1/info': () => ({ status: 302, location: '/api/v1/info' }) };
+    const text = describeError(await client().info().catch((x) => x));
+    expect(text).toMatch(/^Redirect not followed: the API answered with more than 5 redirects in a row\. .* not retryable\./);
   });
 
   it('through a tool call: a tool error that names the origin, without the key', async () => {

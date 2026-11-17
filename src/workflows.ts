@@ -182,6 +182,12 @@ const LOOSE_CELEX_RE = /^\d[0-9A-Z()._-]{4,}$/;
  */
 const VARIANT_TAG_RE = /_[A-Z]{2,4}$/;
 
+/** The CELEX without such a tag, when what remains is still a CELEX; otherwise as given. */
+function withoutVariantTag(celex: string): string {
+  const untagged = celex.replace(VARIANT_TAG_RE, '');
+  return untagged !== celex && (CELEX_SHAPE_RE.test(untagged) || LOOSE_CELEX_RE.test(untagged)) ? untagged : celex;
+}
+
 function upperCelex(v: string): string {
   return v.trim().replace(/^(?:uri=)?CELEX[:/]\s*/i, '').toUpperCase();
 }
@@ -467,8 +473,8 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   if (CELEX_SHAPE_RE.test(celex) || LOOSE_CELEX_RE.test(celex)) {
     out.identifierType = 'celex';
     basis.celex = 'the CELEX as given';
-    const untagged = celex.replace(VARIANT_TAG_RE, '');
-    if (untagged !== celex && (CELEX_SHAPE_RE.test(untagged) || LOOSE_CELEX_RE.test(untagged))) {
+    const untagged = withoutVariantTag(celex);
+    if (untagged !== celex) {
       basis.celex = `the CELEX as given, without its ${celex.slice(untagged.length)} tag (a summary or rendition of the same document)`;
       celex = untagged;
     }
@@ -813,7 +819,9 @@ interface Change { type: ChangeType; celex: string; title?: string; celexYear?: 
 
 export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<Obj> {
   const requested = upperCelex(a.celexNumber);
-  const celex = consolidatedBaseOf(requested)?.base ?? requested;
+  // A summary or rendition tag (_SUM, _RES) names the same act; a consolidated CELEX is read as its base act.
+  const untagged = withoutVariantTag(requested);
+  const celex = consolidatedBaseOf(untagged)?.base ?? untagged;
   const limit = a.limit ?? 100;
   const offset = a.offset ?? 0;
   const calls = new Calls(client);

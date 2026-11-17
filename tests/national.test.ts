@@ -384,14 +384,38 @@ describe('lex_get_national_document', () => {
   });
 });
 
+describe('national ids and title searches in decomposed form (NFD)', () => {
+  const ID = 'AT-JUD-JJT_20200101_OGH0002_PR\u00c40000_001';
+  const nfd = ID.normalize('NFD');
+
+  it('lex_get_national_document sends the id composed (NFC), and keeps its case', async () => {
+    expect(nfd).not.toBe(ID);
+    for (const [given, sent] of [[nfd, ID], [ID, ID], [nfd.toLowerCase(), ID.toLowerCase()], ['AT-NOR-10001597', 'AT-NOR-10001597'], ['at-nor-1', 'at-nor-1']]) {
+      const { calls, result } = await call('lex_get_national_document', { jurisdiction: 'at', id: given }, () => ({ body: { success: true, document: { id: sent, jurisdiction: 'AT', title: 'T' } } }));
+      expect(result.isError, given).toBeFalsy();
+      expect(decodeURIComponent(calls[0].url.pathname), given).toBe(`/api/v1/at/documents/${sent}`);
+    }
+  });
+
+  it('lex_list_national_documents sends q and documentType composed (NFC)', async () => {
+    const { calls } = await call('lex_list_national_documents', { jurisdiction: 'at', q: 'A\u0308rztegesetz', documentType: 'Erla\u0308uterung' }, () => ({
+      body: { success: true, jurisdiction: 'AT', results: [] },
+    }));
+    expect(calls[0].url.searchParams.get('q')).toBe('\u00c4rztegesetz');
+    expect(calls[0].url.searchParams.get('type')).toBe('Erl\u00e4uterung');
+  });
+});
+
 describe('lex_national_semantic_case_law', () => {
   it('has no hyde parameter; a caller that still sends it is not refused, and it is not forwarded', async () => {
     expect(byName.lex_national_semantic_case_law.inputSchema).not.toHaveProperty('hyde');
-    const { calls, result } = await call('lex_national_semantic_case_law', { jurisdiction: 'at', query: 'data protection fine', hyde: true }, () => ({
+    const { calls, result, data } = await call('lex_national_semantic_case_law', { jurisdiction: 'at', query: 'data protection fine', hyde: true }, () => ({
       body: { success: true, jurisdiction: 'AT', resultCount: 0, results: [] },
     }));
     expect(result.isError).toBeFalsy();
     expect(calls[0].body).not.toHaveProperty('hyde');
+    // Nothing is sent, so nothing about it is reported.
+    expect(data).toEqual({ jurisdiction: 'AT', resultCount: 0 });
   });
 
   it('sends jurisdiction and filters, and keeps attribution on each hit', async () => {
