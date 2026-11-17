@@ -516,16 +516,56 @@ describe('lex_check_citation', () => {
     },
   });
 
-  it('a national id: one document read, attribution kept, no end of validity is unknown', async () => {
-    const { data, paths } = await call('lex_check_citation', { identifier: 'at-nor-10001597', article: 'Art. 1' }, () => ({
+  const AT_LIVE = { updatedAt: '2026-11-17T00:00:00.000Z', jurisdictions: [{ code: 'AT', name: 'Austria', live: true }, { code: 'FR', name: 'France', live: false }] };
+  const isCoverage = (c: Call) => c.url.pathname.endsWith('/national/coverage');
+
+  it('a national id: coverage (free) then one document read, attribution kept, no end of validity is unknown', async () => {
+    const { data, paths } = await call('lex_check_citation', { identifier: 'at-nor-10001597', article: 'Art. 1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : {
       body: nationalDoc(), headers: { 'x-national-limit': '30', 'x-national-remaining': '12', 'x-national-reset': '2026-12-01T00:00:00.000Z' },
     }));
-    expect(paths).toEqual(['/at/documents/AT-NOR-10001597']);
+    expect(paths).toEqual(['/national/coverage', '/at/documents/AT-NOR-10001597']);
     expect(data).toMatchObject({ identifierType: 'national_id', id: 'AT-NOR-10001597', jurisdiction: 'AT', exists: true, title: 'Datenschutzgesetz', inForce: 'unknown' });
     expect(data.inForceNote).toMatch(/not a statement that it is in force/);
     expect(data.article).toMatchObject({ found: true, number: '§ 1', title: 'Grundrecht auf Datenschutz', inForceFrom: '2018-05-25' });
     expect(data.attribution).toMatch(/RIS/);
     expect(data.allowance).toEqual({ limit: 30, remaining: 12, resetsAt: '2026-12-01T00:00:00.000Z' });
+  });
+
+  it('an id of a country LexAPI does not list, or that is not live, costs no document read', async () => {
+    const notLive = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, () => ({ body: AT_LIVE }));
+    expect(notLive.paths).toEqual(['/national/coverage']);
+    expect(notLive.data).toMatchObject({ id: 'FR-LEGI-1', exists: 'unknown', inForce: 'unknown' });
+    expect(notLive.data.notChecked[0]).toMatchObject({ call: 'lex_national_coverage', reason: 'not_live' });
+    const unlisted = await call('lex_check_citation', { identifier: 'XX-2016-679' }, () => ({ body: AT_LIVE }));
+    expect(unlisted.paths).toEqual(['/national/coverage']);
+    expect(unlisted.data.notChecked[0]).toMatchObject({ reason: 'not_listed', note: 'LexAPI lists no country XX, so this is not a national document id it can look up.' });
+    // The coverage call is rate limited: the error, and no document read.
+    const limited = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => rateLimited());
+    expect(limited.result.isError).toBe(true);
+    expect(limited.calls).toHaveLength(1);
+  });
+
+  it('identifier routing: a spaced CELEX prefix is a CELEX, "EU-…" is not a national id, an unknown shape is not sent', async () => {
+    const spaced = await call('lex_check_citation', { identifier: 'celex: 32016R0679' }, () => ({ body: metadata() }));
+    expect(spaced.paths).toEqual(['/documents/metadata']);
+    expect(spaced.data).toMatchObject({ identifierType: 'celex', celex: '32016R0679', exists: true });
+    for (const identifier of ['EU-2016/679', 'GDPR', 'Regulation 2016/679', 'EU-2016-679']) {
+      const { data, calls } = await call('lex_check_citation', { identifier }, () => ({ body: metadata() }));
+      expect(calls, identifier).toHaveLength(0);
+      expect(data, identifier).toMatchObject({ identifierType: 'unrecognised', exists: 'unknown', inForce: 'unknown' });
+      expect(data.notChecked[0].note).toMatch(/no call was made/);
+    }
+    // A mistyped CELEX is sent as it is: the read answers, without a resolve.
+    const typo = await call('lex_check_citation', { identifier: '3206R0679' }, () => notFound('Document 3206R0679 does not exist on EUR-Lex'));
+    expect(typo.paths).toEqual(['/documents/metadata']);
+    expect(typo.data).toMatchObject({ celex: '3206R0679', exists: false });
+  });
+
+  it('the description says what "unknown" and found: true mean', () => {
+    const d = byName.lex_check_citation.description;
+    expect(d).toMatch(/"unknown" when the check could not be made, which does not mean that the document or article does not exist/);
+    expect(d).toMatch(/article\.found: true shows that the article unit is in the text compared, not that the citation supports a claim/);
+    expect(d).toMatch(/For an EU act \(CELEX sector 3\), latestConsolidated is "not_reported" unless the API has it/);
   });
 
   it('a national id: a repealed act, a unit that is not there, a date after the end', async () => {

@@ -162,8 +162,11 @@ const NATIONAL_ID_RE = /^[A-Za-z]{2}-[0-9A-Za-z()./_-]+$/;
 /** Sector, year, type letters, number: what is sent as a CELEX without resolving. */
 const CELEX_SHAPE_RE = /^[0-9CE]\d{4}[A-Z]{1,2}\d[0-9A-Z()._-]*$/;
 
+/** A token that starts with a sector digit: sent as a CELEX as it is, so a mistyped one is answered by the read. */
+const LOOSE_CELEX_RE = /^\d[0-9A-Z()._-]{4,}$/;
+
 function upperCelex(v: string): string {
-  return v.trim().replace(/^CELEX:/i, '').toUpperCase();
+  return v.trim().replace(/^CELEX:\s*/i, '').toUpperCase();
 }
 
 /** The year in a CELEX number; none for a corrigendum, whose number is that of the corrected act. */
@@ -319,13 +322,25 @@ function guessType(identifier: string): string {
 export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise<Obj> {
   const identifier = a.identifier.trim();
   const calls = new Calls(client);
-  if (NATIONAL_ID_RE.test(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
+  // A national id starts with the code of a country LexAPI lists; "EU-…" is not one.
+  if (NATIONAL_ID_RE.test(identifier) && !/^EU-/i.test(identifier)) return checkNational(identifier.toUpperCase(), a, calls);
 
   const out: Obj = { identifier };
   const basis: Obj = {};
   let celex = upperCelex(identifier);
 
-  if (CELEX_SHAPE_RE.test(celex)) {
+  // A shape that is none of the identifiers read here is not sent anywhere.
+  if (!CELEX_SHAPE_RE.test(celex) && !LOOSE_CELEX_RE.test(celex) && guessType(identifier) === 'unrecognised') {
+    return {
+      identifier,
+      identifierType: 'unrecognised',
+      exists: 'unknown',
+      inForce: 'unknown',
+      notChecked: [{ what: 'everything', reason: 'rejected', note: 'The identifier is not in the form of a CELEX number, EUR-Lex URL, ELI, ECLI or national document id, so no call was made.' }],
+    };
+  }
+
+  if (CELEX_SHAPE_RE.test(celex) || LOOSE_CELEX_RE.test(celex)) {
     out.identifierType = 'celex';
     basis.celex = 'the CELEX as given';
   } else {
@@ -511,6 +526,28 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
   const code = id.slice(0, 2);
   const call = 'lex_get_national_document';
   const out: Obj = { identifier: id, identifierType: 'national_id', id, jurisdiction: code };
+  // Which countries LexAPI lists and which are live: a free call, so an id of
+  // a country that is not served costs nothing and is named as such.
+  const cov = await calls.runList('jurisdictions', (c) => c.nationalCoverage());
+  if (calls.stopped) throw asThrown(calls.stopped);
+  if (!cov.failure) {
+    const listed = (cov.res.body.jurisdictions as unknown[]).filter(isObj).find((j) => String(j.code ?? '').toUpperCase() === code);
+    if (!listed || listed.live !== true) {
+      return {
+        ...out,
+        exists: 'unknown',
+        inForce: 'unknown',
+        notChecked: [{
+          what: 'everything',
+          call: 'lex_national_coverage',
+          reason: listed ? 'not_live' : 'not_listed',
+          note: listed
+            ? `${code} is listed by LexAPI but not live, so its documents cannot be looked up.`
+            : `LexAPI lists no country ${code}, so this is not a national document id it can look up.`,
+        }],
+      };
+    }
+  }
   const read = await calls.run((c) => c.getNationalDocument(code, id, {}));
   if (read.failure) {
     const err = read.failure.cause;
