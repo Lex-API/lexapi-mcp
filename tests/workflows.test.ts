@@ -172,6 +172,23 @@ describe('lex_check_citation', () => {
     expect(notYet.data.onDate).toEqual({ date: '2024-07-01', status: 'before_entry_into_force', entryIntoForce: '2024-08-01' });
   });
 
+  it('in-force fields that contradict each other are unknown, with a note', async () => {
+    for (const fields of [{ inForce: true, notInForceReason: 'no_longer_in_force', endOfValidity: '2018-05-24' }, { inForce: false }, { inForce: false, endOfValidity: '2018-05-24' }]) {
+      const { data } = await call('lex_check_citation', { identifier: '32016R0679' }, () => ({ body: metadata(fields) }));
+      expect(data.inForce).toBe('unknown');
+      expect(data.inForceNote).toMatch(/contradict each other/);
+      expect(data.notInForceReason).toBeUndefined();
+      expect(data.basis.inForce).toBeUndefined();
+      const history = await call('lex_act_history', { celexNumber: '32016R0679' }, (c) => (
+        c.url.pathname.includes('/cited-by/') ? { body: { success: true, citedBy: [] } } : { body: metadata(fields) }
+      ));
+      expect(history.data.inForce).toBe('unknown');
+      expect(history.data.inForceNote).toMatch(/contradict each other/);
+      const search = await call('lex_research', { query: 'data protection', kinds: ['legislation'] }, () => ({ body: { success: true, results: [{ law_id: '32016R0679', article_ref: 'art_1', score: 0.9, ...fields }] } }));
+      expect(search.data.results[0].inForce).toBe('unknown');
+    }
+  });
+
   it('a date the returned dates do not settle is unknown, and one before the document date says so', async () => {
     const open = await call('lex_check_citation', { identifier: '32016R0679', date: '2019-01-01' }, () => ({ body: metadata({ inForce: true }) }));
     expect(open.data.onDate).toMatchObject({ date: '2019-01-01', status: 'unknown' });
@@ -722,6 +739,16 @@ describe('lex_act_history', () => {
     expect(data.stopped.reason).toBe('rate_limited');
     const all = [...data.changes.repeals, ...data.changes.amendments, ...data.changes.corrigenda];
     expect(all.filter((c: any) => c.dateNotRead).map((c: any) => c.dateNotRead.reason)).toEqual(['rate_limited', 'rate_limited', 'rate_limited']);
+  });
+
+  it('an absent refresh status is said to be absent, and the repeal typing is in the note', async () => {
+    const { data } = await call('lex_act_history', { celexNumber: '32006R1907' }, route({ edges: { body: citedBy([], { relationSync: undefined }) } }));
+    expect(data.completeness.relationSync).toBeUndefined();
+    expect(data.completeness.note).toMatch(/The refresh status of the relations was not reported\.$/);
+    expect(data.completeness.note).not.toMatch(/without a refresh/);
+    expect(data.completeness.note).toMatch(/A partial repeal is typed as an amendment, so an empty repeals list does not exclude one/);
+    expect(byName.lex_act_history.description).toMatch(/from LexAPI's citation graph/);
+    expect(byName.lex_act_history.description).not.toMatch(/as the Publications Office records them/);
   });
 
   it('every result carries the completeness caveat, also an empty list and a failed list', async () => {

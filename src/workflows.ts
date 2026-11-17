@@ -175,9 +175,14 @@ function celexYear(celex: string): number | undefined {
 
 const IN_FORCE_UNKNOWN = 'No in-force status was returned for this document: none is recorded, the document type has none, or the API version does not report it.';
 
+const IN_FORCE_CONTRADICTORY = 'The in-force fields returned contradict each other (inForce and notInForceReason), so no status is reported.';
+
 /** inForce as the API gave it, or "unknown"; with the fields that qualify it. */
 function inForceOf(o: Obj): Obj {
   if (typeof o.inForce !== 'boolean') return { inForce: 'unknown' };
+  // The API sends a reason with every false and never with a true.
+  const reason = typeof o.notInForceReason === 'string' && o.notInForceReason ? o.notInForceReason : undefined;
+  if (o.inForce === (reason !== undefined)) return { inForce: 'unknown', inForceNote: IN_FORCE_CONTRADICTORY };
   return compact({
     inForce: o.inForce,
     notInForceReason: o.notInForceReason,
@@ -427,7 +432,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   }));
 
   Object.assign(out, inForceOf(d));
-  if (out.inForce === 'unknown') out.inForceNote = IN_FORCE_UNKNOWN;
+  if (out.inForce === 'unknown') out.inForceNote ??= IN_FORCE_UNKNOWN;
   else basis.inForce = `${call}: the act's status today, as recorded by the Publications Office${md.baseCelex ? ` for ${String(md.baseCelex)}` : ''}; amendments are not covered`;
 
   const pointers = consolidatedPointers(d);
@@ -618,7 +623,7 @@ type ChangeType = (typeof CHANGE_TYPES)[number];
 const CHANGE_LISTS: Record<ChangeType, string> = { repeal: 'repeals', amendment: 'amendments', corrigendum: 'corrigenda' };
 
 /** Said on every result: what the list can and cannot show. */
-const HISTORY_CAVEAT = "The relations come from LexAPI's citation graph and may be incomplete: an empty or short list is not proof that nothing changed.";
+const HISTORY_CAVEAT = "The relations come from LexAPI's citation graph and may be incomplete: an empty or short list is not proof that nothing changed. A partial repeal is typed as an amendment, so an empty repeals list does not exclude one.";
 
 interface Change { type: ChangeType; celex: string; title?: string; celexYear?: number; date?: string; provenance?: unknown[]; dateNotRead?: Obj }
 
@@ -669,7 +674,7 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
       url: md.url,
     }));
     Object.assign(out, inForceOf(d));
-    if (out.inForce === 'unknown') out.inForceNote = IN_FORCE_UNKNOWN;
+    if (out.inForce === 'unknown') out.inForceNote ??= IN_FORCE_UNKNOWN;
     else basis.inForce = "lex_get_metadata: the act's status today, as recorded by the Publications Office";
     const pointers = consolidatedPointers(d);
     if (Object.keys(pointers).length) {
@@ -705,7 +710,8 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
       relationSync: sync,
       note: `${HISTORY_CAVEAT} ${current
         ? 'The amendment, corrigendum and repeal relations were refreshed from the Publications Office within the last 7 days.'
-        : sync && sync.reason === 'not-applicable'
+        : !sync ? 'The refresh status of the relations was not reported.'
+        : sync.reason === 'not-applicable'
           ? 'These relations are refreshed from the Publications Office for legislation only (CELEX sectors 1–4); for this document only stored relations are returned.'
           : 'The stored relations were returned without a refresh from the Publications Office; a change recorded since may be missing.'}`,
     });
@@ -928,7 +934,7 @@ function mergedHit(s: Search, row: unknown, responseAttribution: unknown): Obj {
   if (typeof snippet === 'string') hit.snippet = truncate(snippet, HIT_TEXT_CHARS);
   if (typeof summary === 'string') hit.summary = truncate(summary, HIT_TEXT_CHARS);
   if (s.kind === 'legislation') {
-    const flag = eu ? inForce : nationalInForce;
+    const flag = eu ? inForceOf(shaped).inForce : nationalInForce;
     hit.inForce = typeof flag === 'boolean' ? flag : 'unknown';
   } else if (inForce !== undefined) {
     // Sent only on a national decision, and only as false: its recorded end of validity has passed.
