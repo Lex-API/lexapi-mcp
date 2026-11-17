@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -6,6 +10,7 @@ import { selectTools, tools, type ToolDef } from '../src/tools.js';
 import { clientWith, fakeDocument, parseText } from './helpers.js';
 
 const byName = Object.fromEntries(tools.map((t) => [t.name, t])) as Record<string, ToolDef>;
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Validate args the way the MCP SDK does (defaults applied), then run. */
 async function call(name: string, args: Record<string, unknown>, reply: Parameters<typeof clientWith>[0]) {
@@ -48,6 +53,18 @@ describe('tool catalogue', () => {
     expect(ro).toHaveLength(tools.length - 5);
   });
 
+  it('read-only mode does not name the tools it hides', () => {
+    const hidden = tools.filter((t) => t.write).map((t) => t.name);
+    const shown = selectTools({ readOnly: true });
+    for (const t of shown) {
+      const text = `${t.description} ${JSON.stringify(z.toJSONSchema(z.object(t.inputSchema), { io: 'input' }))}`;
+      for (const name of hidden) expect(text, t.name).not.toContain(name);
+    }
+    for (const name of hidden) expect(SERVER_INSTRUCTIONS).not.toContain(name);
+    // The full catalogue keeps the pointer.
+    expect(byName.lex_cites.description).toContain('lex_extract_citations');
+  });
+
   it('annotates writes honestly', () => {
     for (const t of tools) {
       if (t.write) expect(t.annotations.readOnlyHint, t.name).toBe(false);
@@ -84,10 +101,46 @@ describe('input validation', () => {
     const tool = byName.lex_semantic_legislation;
     const schema = z.toJSONSchema(z.object(tool.inputSchema)) as { properties: Record<string, { description?: string }> };
     const asOf = schema.properties.asOf.description ?? '';
-    expect(tool.description).toMatch(/pass today's date/);
+    const sentence = 'For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, repealed and since-amended provisions are returned unmarked.';
+    expect(tool.description).toContain(sentence);
+    expect(SERVER_INSTRUCTIONS).toContain(sentence);
     expect(asOf).toMatch(/Omitted: the indexed texts/);
-    expect(asOf).not.toMatch(/current law/i);
-    expect(SERVER_INSTRUCTIONS).toMatch(/today's date for current law/);
+    // asOf = today is not "current law": consolidated texts are not authentic and some hits stay unresolved.
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const unreleased = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/^## /m)[1];
+    expect(readme).toMatch(/repealed and since-amended provisions/);
+    expect(unreleased).toMatch(/repealed and since-amended provisions/);
+    for (const text of [tool.description, asOf, SERVER_INSTRUCTIONS, readme, unreleased]) {
+      expect(text).not.toMatch(/current law/i);
+      expect(text).not.toMatch(/repealed or amended/);
+    }
+  });
+
+  it('semantic filters are strict: a misspelt key is an error, not a silent no-op', () => {
+    expect(ok('lex_semantic_case_law', { query: 'data transfers', filters: { date_from: '2020-01-01', court: 'Court of Justice', case_number: 'C-311/18', ecli: 'ECLI:EU:C:2020:559', date_to: '2024-12-31', language: 'fr' } })).toBe(true);
+    expect(ok('lex_semantic_case_law', { query: 'data transfers', filters: { dateFrom: '2020-01-01' } })).toBe(false);
+    expect(ok('lex_semantic_legislation', { query: 'own funds', filters: { language: 'de' } })).toBe(true);
+    expect(ok('lex_semantic_legislation', { query: 'own funds', filters: { documentType: 'regulation' } })).toBe(false);
+  });
+
+  it('every parameter has a description', () => {
+    const missing: string[] = [];
+    // The one exemption: the criteria fields of lex_update_webhook are described
+    // on lex_create_webhook, and the parameter says so. Both tools are always
+    // listed together (read-only mode hides both).
+    const describedElsewhere = (name: string, path: string[]) => name === 'lex_update_webhook' && path[0] === 'searchCriteria';
+    expect((byName.lex_update_webhook.inputSchema.searchCriteria as any).description).toMatch(/Same fields as searchCriteria on lex_create_webhook, described there/);
+    expect(Boolean(byName.lex_create_webhook.write)).toBe(Boolean(byName.lex_update_webhook.write));
+    const walk = (name: string, path: string[], s: any) => {
+      for (const [k, v] of Object.entries<any>(s?.properties ?? {})) {
+        if (!v.description && !describedElsewhere(name, path)) missing.push(`${name}.${[...path, k].join('.')}`);
+        walk(name, [...path, k], v);
+      }
+      // Nested objects behind a union (e.g. criteria | null) count too.
+      for (const alt of s?.anyOf ?? []) walk(name, path, alt);
+    };
+    for (const t of tools) walk(t.name, [], z.toJSONSchema(z.object(t.inputSchema), { io: 'input' }));
+    expect(missing).toEqual([]);
   });
 
   it('validates asOf as a date', () => {
@@ -576,6 +629,9 @@ describe('identity, versions, info, export', () => {
     expect(byDate.calls[0].url.pathname).toBe('/api/v1/documents/32016R0679/at/2026-06-15');
     expect(byDate.data.content.articles).toHaveLength(2);
     expect(byDate.data.semantics).toMatch(/not a legal in-force/);
+    // The date the snapshot was looked up for is not an in-force date.
+    expect(byDate.data.snapshotDate).toBe('2026-06-15');
+    expect(byDate.data).not.toHaveProperty('asOf');
     const byVersion = await call('lex_get_document_version', { celexNumber: '32016R0679', version: 2 }, reply);
     expect(byVersion.calls[0].url.pathname).toBe('/api/v1/documents/32016R0679/versions/2');
     const neither = await call('lex_get_document_version', { celexNumber: '32016R0679' }, reply);
@@ -608,6 +664,8 @@ describe('identity, versions, info, export', () => {
       headers: { 'content-type': 'application/x-ndjson' },
     }));
     expect(Object.fromEntries(calls[0].url.searchParams)).toEqual({ documentType: 'Regulation', includeContent: 'false', limit: '20' });
+    // No settled charge on the trailer (a plan without credits): no billing line.
+    expect(data).not.toHaveProperty('billing');
     expect(data).toEqual({ totalMatching: 120, returned: 1, truncated: true, skippedStubs: 0, rows: [{ celex: '32016R0679', title: 'GDPR', documentType: 'Regulation', lastSeenAt: '2026-10-01' }] });
   });
 });
@@ -630,6 +688,36 @@ describe('webhook tools', () => {
   it('criteria are strict (unknown keys are refused, as the API would)', () => {
     const s = z.object(byName.lex_create_webhook.inputSchema);
     expect(s.safeParse({ name: 'x', url: 'https://e.com', searchCriteria: { query: 'AI', bogus: 1 } }).success).toBe(false);
+  });
+
+  it('update takes the same typed criteria as create, and says what it replaces', () => {
+    const s = z.object(byName.lex_update_webhook.inputSchema);
+    expect(s.safeParse({ id: 'w1', searchCriteria: { query: 'AI', documentType: ['regulation'], year: 2026 } }).success).toBe(true);
+    const bad = s.safeParse({ id: 'w1', searchCriteria: { query: 'AI', bogus: 1 } });
+    expect(bad.success).toBe(false);
+    // The message names the failing key, not just "Invalid input".
+    expect(JSON.stringify(bad.error?.issues)).toMatch(/bogus/);
+    const badDate = s.safeParse({ id: 'w1', searchCriteria: { dateFrom: '1 June' } });
+    expect(badDate.error?.issues[0].path).toEqual(['searchCriteria', 'dateFrom']);
+    expect(badDate.error?.issues[0].message).toMatch(/YYYY-MM-DD/);
+    expect(s.safeParse({ id: 'w1', searchCriteria: null }).success).toBe(true);
+    // Value forms the API accepts are accepted on create and update alike.
+    const create = z.object(byName.lex_create_webhook.inputSchema);
+    for (const criteria of [{ year: '2026' }, { year: ['2025', 2026] }, { domain: 'eu_law' }, { query: null, documentType: 'regulation' },
+      { dateFrom: null, year: null, documentType: null }, { year: 1900 },
+      { query: null, documentType: null, author: null, subdomain: null, dateFrom: null, dateTo: null, year: null, textScope: null, domain: null, language: null }]) {
+      expect(s.safeParse({ id: 'w1', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(true);
+      expect(create.safeParse({ name: 'n', url: 'https://e.com', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(true);
+    }
+    // A refused year says what is expected.
+    expect(JSON.stringify(s.safeParse({ id: 'w1', searchCriteria: { year: 26 } }).error?.issues)).toMatch(/4-digit year/);
+    expect((byName.lex_create_webhook.inputSchema.searchCriteria as any).unwrap().shape.domain.description).toMatch(/EU_LAW or ALL/);
+    for (const criteria of [{ year: '26' }, { year: 12345 }, { domain: 'NATIONAL_LAW' }, { textScope: 'text' }]) {
+      expect(s.safeParse({ id: 'w1', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(false);
+      expect(create.safeParse({ name: 'n', url: 'https://e.com', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(false);
+    }
+    expect((byName.lex_update_webhook.inputSchema.watchCelex as any).description).toMatch(/Replaces the whole watch list/);
+    expect((byName.lex_update_webhook.inputSchema.searchCriteria as any).description).toMatch(/Replaces the stored criteria as a whole/);
   });
 
   it('update forwards only the given fields, including searchCriteria: null', async () => {
@@ -726,12 +814,23 @@ describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
     expect(d).toMatch(/refreshed on read/);
   });
 
-  it('N9 (API 2.3.0): export billing is stated exactly; documentType is a case-insensitive exact label', () => {
+  it('N9 (API 2.3.0): export billing is stated exactly; documentType is a case-insensitive exact label', async () => {
     const t = byName.lex_export;
     expect(t.description).toMatch(/1 credit per row returned, at least 1 per call/);
-    expect(t.description).toMatch(/admitted for 1 credit/);
-    expect(t.description).toMatch(/402 before returning anything/);
-    expect(t.description).toMatch(/refunded/);
+    // The reservation is explained where it bites: on the 402.
+    const { result } = await call('lex_export', { limit: 200 }, () => ({
+      status: 402,
+      body: { success: false, error: { code: 'CREDITS_EXHAUSTED', message: 'Credit pool exhausted', details: { weight: 200, available: 40 } } },
+    }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/admitted for 1 credit/);
+    expect(result.content[0].text).toMatch(/before any row is returned; once the rows have been counted the 1-credit admission is kept/);
+    // Only the credit-pool 402 gets the sentence.
+    const other = await call('lex_export', { limit: 200 }, () => ({
+      status: 402, body: { success: false, error: { code: 'PAYMENT_REQUIRED', message: 'x' } },
+    }));
+    expect(other.result.content[0].text).not.toMatch(/admitted for 1 credit/);
+    expect(result.content[0].text).toMatch(/needs 200 credits.*40 are available/);
     expect((t.inputSchema.documentType as any).description).toMatch(/matched exactly but ignoring case/);
     expect(t.description).not.toMatch(/No document-date filter/);
     expect(z.object(t.inputSchema).safeParse({ dateFrom: '2024-01-01' }).success).toBe(true);

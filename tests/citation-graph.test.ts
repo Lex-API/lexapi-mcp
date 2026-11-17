@@ -508,12 +508,14 @@ describe('honest descriptions', () => {
     expect(d).toMatch(/Every plan/);
     expect(d).toMatch(/5 credits/);
     expect(d).toMatch(/live countries only/);
+    expect(d).toMatch(/source\.cellar\.attribution is the attribution for the Cellar data and must be kept with republished content \(Terms\)/);
     expect(byName.lex_transposition.annotations.readOnlyHint).toBe(true);
   });
 
   it('counterparts: BUSINESS+, live countries only, 20 credits, not a finding', () => {
     const d = byName.lex_counterparts.description;
-    expect(d).toMatch(/BUSINESS, SCALE and ENTERPRISE only/);
+    expect(d).toMatch(/BUSINESS\+ only/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/BUSINESS\+ means the BUSINESS, SCALE and ENTERPRISE plans\. BUSINESS\+ tools and includeNational return 403 on the other plans; lex_transposition instead returns its BUSINESS\+ fields as null/);
     expect(d).toMatch(/Only live countries are returned/);
     expect(d).toMatch(/lex_national_coverage/);
     expect(d).toMatch(/20 credits/);
