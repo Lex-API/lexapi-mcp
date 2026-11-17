@@ -367,6 +367,7 @@ describe('lex_semantic_legislation', () => {
     expect(c.retryable).toEqual(['32013R0575 art_1 (fetch_pending)']);
     expect(c.needsCredits).toEqual(['32016R0679 art_1 (insufficient_credits)']);
     expect(c.unavailable).toEqual(['32006R1907 art_1 (article_not_in_version)']);
+    expect(c.note).toBe('Unresolved hits carry the indexed text, not the text in force on 2019-06-01.');
     expect(c.guidance.join(' ')).toMatch(/not in force on 2019-06-01.*that is the answer/);
     expect(c.guidance.join(' ')).toMatch(/call again shortly/);
     expect(c.guidance.join(' ')).toMatch(/credit pool could not cover/);

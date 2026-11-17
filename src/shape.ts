@@ -537,7 +537,7 @@ const AS_OF_USER_ACTION = new Set(['insufficient_credits']);
 
 /**
  * One instruction per class of unresolved hit present. Every unresolved
- * hit carries the LATEST text; what the model should do differs:
+ * hit carries the indexed text; what the model should do differs:
  *   - not in force on the date → that IS the answer (say so);
  *   - transient → retry shortly, or with a smaller limit;
  *   - credits → the pool could not pay for the fetch;
@@ -562,7 +562,7 @@ export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
   if (groups.unavailable.length) guidance.push(`unavailable: the version in force on ${asOf} could not be read (see asOfReason); the returned text is not the law on that date.`);
   if (!guidance.length) return undefined;
   return compact({
-    note: `Unresolved hits carry the LATEST text, not the text in force on ${asOf}.`,
+    note: `Unresolved hits carry the indexed text, not the text in force on ${asOf}.`,
     ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
     guidance,
   });

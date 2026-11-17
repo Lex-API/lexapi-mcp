@@ -72,7 +72,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date (today's date for current law). | 5 (+ up to 5 per version fetch with `asOf`) |
+| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date (today's date for current law); without `asOf`, hits are the indexed texts and repealed or amended provisions are not marked. | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
 | `lex_recent_documents` | What was published in the last N days. | 3 per 10 results |
