@@ -41,7 +41,7 @@ function round3(v: unknown): number | undefined {
   return n === undefined ? undefined : Math.round(n * 1000) / 1000;
 }
 
-function truncate(s: string | undefined, max: number): string | undefined {
+export function truncate(s: string | undefined, max: number): string | undefined {
   if (!s) return s;
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
@@ -101,6 +101,18 @@ export function consolidatedLabel(celex: unknown): Obj | undefined {
   };
 }
 
+// ── In-force label ─────────────────────────────────────────────────
+// Whether an act is in force today, on EU legislation (API 2.19.0). All
+// four fields are absent when the status is unknown; nothing is derived here.
+export const IN_FORCE_KEYS = ['inForce', 'notInForceReason', 'endOfValidity', 'entryIntoForce'] as const;
+
+/** The in-force fields an API object carries, as they are ({} when it has none). */
+export function inForceFields(o: Obj): Obj {
+  const out: Obj = {};
+  for (const k of IN_FORCE_KEYS) if (o[k] !== undefined && o[k] !== null) out[k] = o[k];
+  return out;
+}
+
 // ── Document metadata ──────────────────────────────────────────────
 const META_KEYS = [
   'title', 'titleLanguage', 'documentType', 'documentTypeCode', 'author',
@@ -108,6 +120,7 @@ const META_KEYS = [
   'ecli', 'eli', 'caseNumber', 'parties', 'subject',
   'language', 'languageRequested', 'languageFallback', 'version', 'fetchedAt',
   'latestConsolidated', 'upcomingConsolidated', 'newestConsolidated',
+  ...IN_FORCE_KEYS,
 ] as const;
 
 export function shapeMetadata(doc: Obj, headers: LexResponse['headers'] = {}): Obj {
@@ -506,6 +519,8 @@ export function shapeLegislationHit(r: unknown): Obj {
     asOfReason: r.asOfReason,
     asOfVersion: r.asOfVersion,
     matchedVersion: r.matchedVersion,
+    // The act's in-force status today; absent when unknown.
+    ...inForceFields(r),
   });
 }
 

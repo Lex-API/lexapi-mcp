@@ -31,6 +31,8 @@ if (live) {
           content: { articles: [{ id: 'art_17', number: 'Article 17', title: 'Right to erasure', content: '1. The data subject shall have the right…' }] },
         },
       }));
+    } else if (req.url.startsWith('/api/v1/documents/metadata')) {
+      res.end(JSON.stringify({ success: true, metadata: { celex: '32016R0679', title: 'GDPR', urls: {} } }));
     } else {
       res.statusCode = 404;
       res.end(JSON.stringify({ success: false, error: { code: 'NOT_FOUND', message: 'not mocked' } }));
@@ -52,6 +54,17 @@ try {
   const parsed = JSON.parse(doc.content[0].text);
   if (!parsed.content?.articles?.length) throw new Error('lex_get_document returned no article');
   console.log(`lex_get_document → ${parsed.celex} ${parsed.content.articles[0].number}`);
+
+  for (const name of ['lex_verify_citation', 'lex_act_history', 'lex_research']) {
+    if (!tools.some((t) => t.name === name)) throw new Error(`${name} is not listed`);
+  }
+  if (!live) {
+    const check = await client.callTool({ name: 'lex_verify_citation', arguments: { identifier: '32016R0679' } });
+    if (check.isError) throw new Error(`lex_verify_citation failed: ${check.content[0].text}`);
+    const c = JSON.parse(check.content[0].text);
+    if (c.exists !== true || c.inForce !== 'unknown') throw new Error('lex_verify_citation returned an unexpected result');
+    console.log(`lex_verify_citation → ${c.celex} exists=${c.exists} inForce=${c.inForce}`);
+  }
 
   if (live) {
     const sem = await client.callTool({ name: 'lex_semantic_legislation', arguments: { query: 'own funds requirements', asOf: '2019-06-01', limit: 3 } });

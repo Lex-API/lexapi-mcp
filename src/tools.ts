@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { LexAPIError } from './errors.js';
 import { webhookUrlProblem } from './webhookUrl.js';
+import { actHistory, research, verifyCitation } from './workflows.js';
 
 import type { Json, LexAPIClient, LexResponse } from './client.js';
 import {
@@ -168,9 +169,9 @@ const csvOf = <T extends readonly [string, ...string[]]>(values: T, d: string) =
 };
 // Two-letter codes (lower-cased), e.g. ["eu","at"]. Which national codes
 // are live is the server's call (lex_national_coverage), not listed here.
-const codeList = (d: string) => z.union([z.string(), z.array(z.string()).min(1).max(30)])
+const codeList = (d: string, max = 30) => z.union([z.string(), z.array(z.string()).min(1).max(max)])
   .transform((v) => splitList(v).map((x) => x.toLowerCase()))
-  .refine((v) => v.length > 0 && v.length <= 30 && v.every((x) => /^[a-z]{2}$/.test(x)), 'two-letter codes, e.g. ["eu","at"]')
+  .refine((v) => v.length > 0 && v.length <= max && v.every((x) => /^[a-z]{2}$/.test(x)), `two-letter codes, e.g. ["eu","at"] (at most ${max})`)
   .describe(d);
 
 /** The edge filters shared by the graph tools (API 2.11.0). */
@@ -267,6 +268,8 @@ function explain402(why: string) {
   };
 }
 
+const NATIONAL_READ_402 = 'A national document read reserves 5 credits and settles at 1, so the pool must hold 5.';
+
 /** Attach the low-credit notice (if any) to a shaped result. */
 function withNotice(res: LexResponse<Json>, shaped: Record<string, unknown>): Record<string, unknown> {
   const notice = creditNotice(res.body);
@@ -344,6 +347,59 @@ export const tools: ToolDef[] = [
         supportedLanguages: Array.isArray(b.supportedLanguages) ? b.supportedLanguages.join(',') : undefined,
       });
     },
+  },
+
+  // ── Workflows ───────────────────────────────────────────────────────
+  // One common job each, made of the calls the tools below make one at a
+  // time (src/workflows.ts). They add no data of their own.
+  {
+    name: 'lex_verify_citation',
+    title: 'Check a citation against the source',
+    description:
+      'Look a citation up: whether the document exists, its canonical id, title and link, whether a given article is in its text, and whether the act is in force today. Takes a CELEX, EUR-Lex URL, ELI or ECLI, or a national document id. Every value comes from an API answer: exists, inForce and article.found are "unknown" when the API did not answer them, and notChecked lists what could not be checked and why. inForce does not cover amendments and is not recorded for many acts. The article is looked up in the identified text (the act as published, unless a consolidated CELEX is given). latestConsolidated is "not_reported" unless the API has it, which does not mean none exists. A national result carries attribution, which must be kept with republished content (Terms). Cost: 1 credit to resolve a URL, ELI or ECLI (a CELEX is not resolved), plus one read: 1 credit from the corpus, 4 via the Publications Office, 5 live. A national id: 1 credit.',
+    inputSchema: {
+      identifier: z.string().trim().min(3).max(2000).describe('CELEX, EUR-Lex URL, ELI URI or ECLI, or a national document id such as "AT-NOR-12345".'),
+      article: oneArticle('Also look this article up in the text: "17", "art_17", "Article 17"; for a national id, the unit number as the source writes it, e.g. "§ 17".'),
+      date: isoDate('Compare this date (YYYY-MM-DD) with the document date, entry into force and end of validity the API returns (onDate).').optional(),
+    },
+    annotations: READ,
+    handler: (a, client) => (NATIONAL_ID_RE.test(a.identifier)
+      ? verifyCitation(a, client).catch(explain402(NATIONAL_READ_402))
+      : verifyCitation(a, client)),
+  },
+
+  {
+    name: 'lex_act_history',
+    title: 'Changes to an EU act',
+    description:
+      'The acts that amend, correct (corrigenda) or repeal an EU act, as the Publications Office records them, with the act\'s title, dates, in-force status today and end of validity. Repeated calls show what changed, for clients that cannot receive a webhook. Limits of the data: a relation carries no date, so each entry has the year of its CELEX number (corrigenda have none) and a document date only where dates read it, and since filters on those; a partial repeal is recorded as an amendment; relations are as current as their last refresh (completeness); consolidated versions are shown only when the API reports them ("not_reported" otherwise), never as a full list. An empty list is not proof that nothing changed. Cost: 1 credit per page of relations, plus the act\'s metadata (1 credit from the corpus, 4 via the Publications Office, 5 live), plus the same for each date read.',
+    inputSchema: {
+      celexNumber: celex('CELEX number of the act').describe('CELEX number of the act, e.g. 32016R0679; a consolidated CELEX is read as its base act.'),
+      since: isoDate('Keep changes from this date on (YYYY-MM-DD): by CELEX year, and by document date where one was read.').optional(),
+      dates: z.number().int().min(0).max(10).default(0).describe('Read the document date of up to this many listed acts (one metadata read each), first those the year cannot place.'),
+      limit: z.number().int().min(1).max(500).default(100).describe('Relations per page.'),
+      offset: edgeOffset,
+      language: titleLanguage,
+    },
+    annotations: READ,
+    handler: (a, client) => actHistory(a, client),
+  },
+
+  {
+    name: 'lex_research',
+    title: 'Search EU and national law in one call',
+    description:
+      'One query run as semantic searches over EU legislation, EU case law and the legislation and case law of chosen live countries, returned as one list. Each hit names its jurisdiction and kind and keeps its identifiers; a national hit keeps its attribution, which must be kept with republished content (Terms). Legislation hits carry inForce ("unknown" when no status is reported); case law has none. sources lists every search as ok, failed or not_run with the reason (country not live, plan, national allowance, rate limit, credits): a search that did not run is not shown as empty, and none starts once credits or the rate limit run out. Scores come from separate indexes, so the order across sources is approximate. Cost: 5 credits per search run; searches = jurisdictions × kinds (default 2).',
+    inputSchema: {
+      query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision or legal issue.'),
+      jurisdictions: codeList('Where to search: "eu" and/or national codes, e.g. ["eu","at","de"] (default ["eu"]; at most 8).', 8).optional(),
+      kinds: z.array(z.enum(['legislation', 'case_law'])).min(1).optional().describe('What to search in each jurisdiction (default both).'),
+      limit: z.number().int().min(1).max(20).default(5).describe('Max hits per search (plan caps as on the semantic tools).'),
+      min_score: z.number().min(0).max(1).optional().describe('Similarity floor for every search (default ≈0.7).'),
+      language: z.enum(SEMANTIC_LANGUAGES).optional().describe('Preferred language of EU texts (default en); a national search uses the country\'s own language.'),
+    },
+    annotations: { ...READ, idempotentHint: false },
+    handler: (a, client) => research(a, client),
   },
 
   // ── Search ──────────────────────────────────────────────────────────
@@ -613,7 +669,7 @@ export const tools: ToolDef[] = [
     name: 'lex_semantic_legislation',
     title: 'Semantic search over EU legislation',
     description:
-      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref, law_title, score, snippet. An article_ref art_N is the articleId for lex_get_document; any other form (anx_N annex, rct_a-b recitals, par_N / j_N text windows) is not an article id, and lex_get_document include reads those parts. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a date. For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, repealed and since-amended provisions are returned unmarked. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
+      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref, law_title, score, snippet. An article_ref art_N is the articleId for lex_get_document; any other form (anx_N annex, rct_a-b recitals, par_N / j_N text windows) is not an article id, and lex_get_document include reads those parts. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a date. For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, since-amended provisions are returned unmarked, and repealed ones are marked (inForce: false) only where the API reports the act\'s status. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
     inputSchema: {
       query: z.string().trim().min(1).max(1000).describe('Natural-language description of the provision you are looking for.'),
       asOf: isoDate('The law as in force on this date (YYYY-MM-DD, 1952-01-01 to today (UTC)). Hits then carry the version in force (asOfResolved: true, asOfVersion). Unresolved hits keep the indexed text with an asOfReason, explained in asOfCaveat. Omitted: the indexed texts as they are (the act as published, or its latest consolidated version where indexed).').optional(),
@@ -757,7 +813,7 @@ export const tools: ToolDef[] = [
     annotations: READ,
     handler: async (a, client) => {
       const res = await client.getNationalDocument(a.jurisdiction, a.id, compact({ language: a.language }))
-        .catch(explain402('A national document read reserves 5 credits and settles at 1, so the pool must hold 5.'));
+        .catch(explain402(NATIONAL_READ_402));
       const shaped = shapeNationalDocument(res.body.document, contentOpts(a));
       return withAllowance(res, withNotice(res, shaped));
     },
