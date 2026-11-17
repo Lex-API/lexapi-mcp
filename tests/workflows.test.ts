@@ -315,8 +315,9 @@ describe('lex_check_citation', () => {
       expect(data.exists).toBe(true);
       expect(data.article).toMatchObject({ requested: '17', found: 'unknown' });
       expect(data.article.note).toMatch(/has no article units as LexAPI holds it/);
-      // No articles key at all: the text has no article units, and no second read is spent.
+      // The second read is skipped only when the answer has no articles key at all.
       expect(calls).toHaveLength('articles' in content ? 2 : 1);
+      expect(data.basis.article).toBe('articles' in content ? 'lex_get_document with articleId, then the article list of the text' : 'lex_get_document with articleId');
     }
   });
 
@@ -326,6 +327,7 @@ describe('lex_check_citation', () => {
     }));
     expect(calls).toHaveLength(1);
     expect(data.article).toEqual({ requested: '17', found: 'unknown', note: 'A unit of 32016R0679 carries the id "art_17" and the number "Article 18", which disagree, so it is not reported as Article 17.' });
+    expect(data.basis.article).toBe('lex_get_document with articleId');
     // The number decides when the id is in another form or absent.
     const numbered = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({ body: articleDoc([{ number: 'Article 17', content: 'x' }]) }));
     expect(numbered.data.article).toMatchObject({ found: true, number: 'Article 17' });
@@ -341,6 +343,7 @@ describe('lex_check_citation', () => {
       expect(data.article).toMatchObject({ requested: '120', found: 'unknown' });
       expect(data.article.note).toMatch(/could not be read/);
       expect(data.notChecked[0]).toMatchObject({ what: 'article', call: 'lex_get_document', reason });
+      expect(data.basis.article).toBe('lex_get_document with articleId, then a read of the article list that failed');
     }
   });
 
@@ -453,6 +456,7 @@ describe('lex_check_citation', () => {
     expect(data.exists).toBe(true);
     expect(data.article).toMatchObject({ requested: '57', found: 'unknown' });
     expect(data.article.note).toMatch(/No text was served for 32006R1907 \(too_large\)/);
+    expect(data.basis.article).toBe('lex_get_document with articleId');
     expect(data.latestConsolidated).toEqual(ta.latestConsolidated);
     expect(data.textAvailability).toEqual(ta);
   });
@@ -686,6 +690,42 @@ describe('lex_check_citation', () => {
       expect(a, form).toMatchObject({ requested: form, found: 'unknown' });
       expect(a.note, form).toMatch(/could not be read as one unit/);
     }
+  });
+
+  it('ordinal marks and ordinal dots are not part of the number, on either side', async () => {
+    for (const form of ['Artículo 1.º', 'art. 1º', 'Artículo 1', '1.º', '1', 'artículo 1.°', 'Art. 1.']) {
+      expect(await unit(form, '1', '2'), form).toMatchObject({ found: true, number: '1' });
+      expect(await unit(form, '1.º', '2.º'), form).toMatchObject({ found: true, number: '1.º' });
+      expect(await unit(form, 'Artículo 1.º', 'Artículo 2.º'), form).toMatchObject({ found: true, number: 'Artículo 1.º' });
+      expect(await unit(form, '1.', '2.'), form).toMatchObject({ found: true, number: '1.' });
+    }
+    expect(await unit('art. 2º', '1', '2')).toMatchObject({ found: true, number: '2' });
+    expect(await unit('disposición 2ª', '1', '2')).toMatchObject({ found: 'unknown' });
+    // A dot closing a stored number.
+    expect(await unit('§ 5', '§ 4.', '§ 5.')).toMatchObject({ found: true, number: '§ 5.' });
+    expect(await unit('§ 5. Abs. 2', '§ 5')).toMatchObject({ found: true, number: '§ 5' });
+    expect(await unit('§ 9', '§ 4.', '§ 5.')).toMatchObject({ found: false });
+  });
+
+  it('a superscript, a fraction or a ligature is never read as a digit or a letter', async () => {
+    for (const form of ['§ 5²', '§ 5½', '§ ５', '§ 5ª²', 'ﬁ 5', '§ 5 ²']) {
+      const a = await unit(form, '§ 5', '§ 52', '§ 512');
+      expect(a.found, form).toBe('unknown');
+    }
+    // On the stored side such a unit is not a match and not a miss.
+    for (const stored of ['§ 5²', '§ 5½', '§ 5a²']) {
+      expect((await unit('§ 5', '§ 4', stored)).found, stored).toBe('unknown');
+      expect((await unit('§ 52', '§ 4', stored)).found, stored).toBe(false);
+    }
+  });
+
+  it('a unit stored without a label does not answer for a label when a sibling carries another one', async () => {
+    const mixed = await unit('§ 5', '5', 'Art. 5');
+    expect(mixed).toEqual({ requested: '§ 5', found: 'unknown', note: 'Number 5 is written "5", "Art. 5" here, without the label asked for and under another one, so the unit meant could not be told.' });
+    expect(await unit('Art. 5', '5', 'Art. 5')).toMatchObject({ found: true, number: 'Art. 5' });
+    // A document that stores bare numbers only keeps matching.
+    expect(await unit('§ 5', '4', '5')).toMatchObject({ found: true, number: '5' });
+    expect(await unit('Artículo 5', '4', '5')).toMatchObject({ found: true, number: '5' });
   });
 
   it('a reference written exactly as the document writes a unit is found', async () => {

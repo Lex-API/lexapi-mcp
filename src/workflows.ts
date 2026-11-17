@@ -280,8 +280,13 @@ const SUBDIVISION_RE = /^(?:\(|(?:abs|absatz|z|ziff|ziffer|zif|lit|litera|satz|n
 
 interface UnitRef { label?: 'section' | 'article'; number: string; rest?: string }
 
+/**
+ * Lower case, without accents and without ordinal marks ("1.º", "2ª" → "1.",
+ * "2"). Canonical decomposition only: a superscript, a fraction or a ligature
+ * stays what it is, so it is never read as a digit or a letter.
+ */
 function plain(v: unknown): string {
-  return String(v ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').trim();
+  return String(v ?? '').replace(/[ºª°]/g, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
 /**
@@ -309,8 +314,9 @@ export function parseUnit(v: unknown): UnitRef | undefined {
     rest = rest.slice(tail[0].length).trim();
   }
   const number = `${m[1]}${m[2] ?? ''}`;
-  if (!rest) return { label, number };
-  const sub = rest.replace(/^[,;]\s*(?=[a-z(])/, '');
+  // "1." and "§ 5.": an ordinal dot closing the number.
+  if (!rest || rest === '.') return { label, number };
+  const sub = rest.replace(/^[,;.]\s*(?=[a-z(])/, '');
   if (!SUBDIVISION_RE.test(sub)) return undefined;
   return { label, number, rest };
 }
@@ -387,7 +393,10 @@ export function matchUnit(requested: string, numbers: unknown[]): UnitMatch {
     && (u.open || u.numbers.includes(n) || (u.numbers.length >= 2 && Math.min(...u.numbers) <= n && n <= Math.max(...u.numbers))));
   const matches = want.label === undefined
     ? (labels.size === 1 ? numbered : [])
-    : numbered.filter((u) => u.single?.label === want.label || u.single?.label === undefined);
+    : numbered.filter((u) => u.single?.label === want.label).length
+      ? numbered.filter((u) => u.single?.label === want.label)
+      // A unit stored without a label, unless a sibling of that number carries another label.
+      : labels.size === 1 ? numbered.filter((u) => u.single?.label === undefined) : [];
 
   if (nested.length) {
     return { found: 'unknown', note: `This document numbers units inside other units (${quoted(nested)}), so "${requested}" does not name one unit.` };
@@ -398,7 +407,9 @@ export function matchUnit(requested: string, numbers: unknown[]): UnitMatch {
       found: 'unknown',
       note: want.label === undefined
         ? `Number ${want.number} is carried by units with different labels (${quoted(numbered)}), so the one meant could not be told.`
-        : `Number ${want.number} is written ${quoted(numbered)} here, under another label than the one asked for; the two labels number different units.`,
+        : labels.has(undefined)
+          ? `Number ${want.number} is written ${quoted(numbered)} here, without the label asked for and under another one, so the unit meant could not be told.`
+          : `Number ${want.number} is written ${quoted(numbered)} here, under another label than the one asked for; the two labels number different units.`,
     };
   }
   if (unread.length) {
@@ -576,12 +587,17 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
     let hit = units.find(matchesRef);
     let odd = units.find(disagrees);
     let listFailure: Obj | undefined;
-    // The API leaves the articles key out for a text without article units: no second read then.
+    let listRead: 'read' | 'failed' | undefined;
+    // The article list is read whenever the article was not matched. Only an
+    // answer without an articles key at all is taken as a text without
+    // article units; the API sends an empty list also for those.
     if (!hit && !odd && isObj(d.content) && 'articles' in d.content) {
       const list = await calls.run((c) => c.getDocument({ celexNumber: celex, include: ['articles'] }));
+      listRead = 'read';
       const got = list.failure ? undefined : carriedDocument(list.res.body, 'document', celex, CELEX_KEYS);
       if (list.failure) listFailure = shown(list.failure);
       else if (!got || got.problem) listFailure = got?.problem;
+      if (listFailure || !got?.doc) listRead = 'failed';
       else {
         units = unitsOf(got.doc);
         hit = units.find(matchesRef);
@@ -619,7 +635,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
         note: `Article ${ref.number} is not among the ${units.length} article units of ${celex} (written like "${String(units[0].number ?? units[0].id)}"); only ${consolidated ? 'this consolidated version was' : 'the act as published was'} compared${consolidated ? '' : ', and an article inserted by a later amendment is only in a consolidated version'}.`,
       };
     }
-    basis.article = `${call} with articleId${hit ? '' : ', then the article list of the text'}`;
+    basis.article = `${call} with articleId${listRead === 'read' ? ', then the article list of the text' : listRead === 'failed' ? ', then a read of the article list that failed' : ''}`;
   } else {
     Object.assign(out, unknownArticle);
   }
