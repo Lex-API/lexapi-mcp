@@ -222,28 +222,71 @@ function carriedDocument(body: unknown, key: 'metadata' | 'document', requested:
 
 const CELEX_KEYS = ['celex', 'celexNumber'];
 
-const LABEL_WORDS = new Set(['article', 'artikel', 'articulo', 'articolo', 'art', 'clen', 'cl', 'paragraph', 'paragraf', 'par']);
-
-/** "§ 17a", "Art. 17a", "17a. člen" → "17a": a unit number without its label. */
-function unitKey(v: unknown): string {
-  return String(v ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
-    .split(/[^a-z0-9]+/).filter((t) => t && !LABEL_WORDS.has(t)).join('');
-}
-
 interface ArticleRef { number: string; rest?: string }
 
 /**
- * "Art. 17", "Article 17(1)", "art_17", "6a" → the article number the API
- * matches on, plus the paragraph or point part, which is not looked up.
- * Undefined for a form that cannot be mapped to one article number.
+ * "Art. 17", "Article 17(1)", "art_17", "6a", "017" → the article number the
+ * API matches on, plus the paragraph or point part, which is not looked up.
+ * Undefined for a form that cannot be mapped to one article number (an
+ * ordinal, an annex, a list).
  */
 export function parseArticle(v: string): ArticleRef | undefined {
   const t = v.trim().toLowerCase().replace(/^art(?:icle|\.)?[\s_]*/, '');
-  const m = /^(\d+[a-z]{0,2})(?![a-z0-9])\s*(.*)$/.exec(t);
+  const m = /^0*(\d+)([a-z]{0,2})(?![a-z0-9])\s*(.*)$/.exec(t);
+  if (!m || ['st', 'nd', 'rd', 'th'].includes(m[2])) return undefined;
+  const rest = m[3].trim();
+  if (rest && !/^(?:\(|[,.;]?\s*(?:§|para|point|pt\b|lit\b|subpara|sentence))/.test(rest)) return undefined;
+  const number = `${m[1]}${m[2]}`;
+  return rest ? { number, rest } : { number };
+}
+
+// National unit numbers ("§ 5", "Art. 5", "Artikel 2", "5. člen"): a label,
+// one number with an optional letter, and nothing else. Labels fall in two
+// classes, so "§ 2" and "Artikel 2" of one document are told apart.
+const UNIT_LABELS: Record<string, 'section' | 'article'> = {
+  '§': 'section', paragraph: 'section', paragraf: 'section', par: 'section',
+  article: 'article', artikel: 'article', articulo: 'article', articolo: 'article', artigo: 'article', art: 'article', clen: 'article', cl: 'article',
+};
+/** Words that open a paragraph, point or sentence inside a unit: not looked up. */
+const SUBDIVISION_RE = /^(?:\(|(?:abs|absatz|z|ziff|ziffer|zif|lit|litera|satz|nr|nummer|odst|odstavec|odstavek|pism|pismeno|tocka|para|paragraph|point|pt|punkt|pkt|ust|ustep|lid|onder|sub|apartado|numero|num|comma|lett|lettera|al|alinea|alineja|sentence|subpara|halbsatz|unterabs|unterabsatz)\b)/;
+/** What follows the number when several units are meant: a list or a range. */
+const SEVERAL_RE = /^(?:[,;/&+–—-]|und\b|and\b|bis\b|to\b|oder\b|or\b|en\b|et\b|y\b|e\b|a\b|i\b|in\b|ter\b|oraz\b|ff\b|f\b)/;
+
+interface UnitRef { label?: 'section' | 'article'; number: string; rest?: string }
+
+function plain(v: unknown): string {
+  return String(v ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+/**
+ * One national unit reference → its label class, number and the part after
+ * it. Undefined when it is not one unit: an unknown label, a list, a range,
+ * or a remainder that is not a paragraph or point.
+ */
+export function parseUnit(v: unknown): UnitRef | undefined {
+  let t = plain(v);
+  let label: UnitRef['label'];
+  const lead = /^(§+|[a-z]+)\.?\s*(?=\d)/.exec(t);
+  if (lead) {
+    label = UNIT_LABELS[lead[1]];
+    if (!label) return undefined; // "§§", "Anl.", "Annex": not one article or section
+    t = t.slice(lead[0].length);
+  }
+  const m = /^0*(\d+)([a-z]?)(?![a-z0-9])\s*(.*)$/.exec(t);
   if (!m) return undefined;
-  const rest = m[2].trim();
-  if (rest && !/^(?:[(,.;§]|para|point|pt\b|lit\b|subpara|sentence)/.test(rest)) return undefined;
-  return rest ? { number: m[1], rest } : { number: m[1] };
+  let rest = m[3].trim();
+  // "5. člen": the label after the number.
+  const tail = /^\.?\s*(clen|cl)\b\.?\s*/.exec(rest);
+  if (tail && !label) {
+    label = 'article';
+    rest = rest.slice(tail[0].length).trim();
+  }
+  const number = `${m[1]}${m[2]}`;
+  if (!rest) return { label, number };
+  const sub = rest.replace(/^[,;]\s*(?=[a-z(])/, '');
+  if (SEVERAL_RE.test(rest) && !SUBDIVISION_RE.test(sub)) return undefined;
+  if (!SUBDIVISION_RE.test(sub)) return undefined;
+  return { label, number, rest };
 }
 
 const UNMAPPED_ARTICLE = 'This form could not be mapped to one article number (forms read: "17", "Art. 17", "Article 17(1)", "6a"), so nothing was compared.';
@@ -410,7 +453,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
         requested: a.article,
         found: false,
         checkedIn: celex,
-        note: `Article ${ref.number} is not among the ${units.length} article units of ${celex}; only ${consolidated ? 'this consolidated version was' : 'the act as published was'} compared${consolidated ? '' : ', and an article inserted by a later amendment is only in a consolidated version'}.`,
+        note: `Article ${ref.number} is not among the ${units.length} article units of ${celex} (written like "${String(units[0].number ?? units[0].id)}"); only ${consolidated ? 'this consolidated version was' : 'the act as published was'} compared${consolidated ? '' : ', and an article inserted by a later amendment is only in a consolidated version'}.`,
       };
     }
     basis.article = `${call}: the article units of the text`;
@@ -490,18 +533,26 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
   if (a.article) {
     const content = isObj(doc.content) ? doc.content : undefined;
     const units = content && Array.isArray(content.articles) ? content.articles.filter(isObj) : [];
-    // The unit number, without a paragraph or point part: "§ 17 (1)" → "17".
-    const cut = a.article.search(/[(,;]/);
-    const want = unitKey(cut < 0 ? a.article : a.article.slice(0, cut));
-    const rest = cut < 0 ? '' : a.article.slice(cut).trim();
-    const hit = want ? units.find((u) => unitKey(u.number) === want) : undefined;
+    const want = parseUnit(a.article);
+    const parsed = units.map((u) => ({ unit: u, ref: parseUnit(u.number) })).filter((x) => x.ref && !x.ref.rest);
+    const sameNumber = want ? parsed.filter((x) => x.ref?.number === want.number) : [];
+    const labels = new Set(sameNumber.map((x) => x.ref?.label));
+    // With a label asked for, units of that label, or units without one; a
+    // bare number matches only when every unit of that number has one label.
+    const sameLabel = want?.label ? sameNumber.filter((x) => x.ref?.label === want.label || x.ref?.label === undefined) : [];
+    const matches = sameLabel.length ? sameLabel : labels.size === 1 ? sameNumber : [];
+    const otherLabel = matches.length > 0 && !sameLabel.length && want?.label !== undefined;
+    const example = `"${String(units[0]?.number)}"`;
     if (!content) {
       out.article = { requested: a.article, found: 'unknown', note: 'No text was served for this document, so the unit could not be looked up.' };
     } else if (!units.length) {
       out.article = { requested: a.article, found: 'unknown', note: 'This document is held without numbered units (a decision, or an act its source publishes without units), so the unit could not be looked up.' };
     } else if (!want) {
-      out.article = { requested: a.article, found: 'unknown', note: `This form could not be mapped to a unit number; the document's units are written like "${String(units[0].number)}".` };
-    } else if (hit) {
+      out.article = { requested: a.article, found: 'unknown', note: `This form could not be read as one unit (one number, with a paragraph or point at most; not a list or a range), so nothing was compared. The document's units are written like ${example}.` };
+    } else if (!parsed.length) {
+      out.article = { requested: a.article, found: 'unknown', note: `The unit numbers of this document are not in a form that could be compared (they are written like ${example}).` };
+    } else if (matches.length) {
+      const hit = matches[0].unit;
       out.article = compact({
         requested: a.article,
         found: true,
@@ -511,14 +562,22 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         inForceTo: hit.inForceTo,
         excerpt: truncate(typeof hit.text === 'string' ? hit.text : undefined, 300),
         checkedIn: id,
-        notChecked: rest ? `"${rest}": only the unit was looked up, not a paragraph or point of it.` : undefined,
+        unitsWithThisNumber: matches.length > 1 ? matches.length : undefined,
+        notChecked: want.rest ? `"${want.rest}": only the unit was looked up, not a paragraph or point of it.` : undefined,
+        note: otherLabel ? `Matched by number: the document has one unit numbered ${want.number} and writes it "${String(hit.number)}".` : undefined,
       });
+    } else if (sameNumber.length) {
+      out.article = {
+        requested: a.article,
+        found: 'unknown',
+        note: `Number ${want.number} is carried by units with different labels (${[...new Set(sameNumber.map((x) => `"${String(x.unit.number)}"`))].join(', ')}), so the one meant could not be told.`,
+      };
     } else {
       out.article = {
         requested: a.article,
         found: false,
         checkedIn: id,
-        note: `No unit numbered "${want}" among the ${units.length} units of the text LexAPI holds (compared by number; they are written like "${String(units[0].number)}").`,
+        note: `No unit numbered ${want.number} among the ${parsed.length} numbered units of the text LexAPI holds (compared by number; they are written like ${example}).`,
       };
     }
     basis.article = `${call}: the document's units, compared by number`;

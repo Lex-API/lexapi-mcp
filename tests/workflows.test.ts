@@ -250,12 +250,14 @@ describe('lex_check_citation', () => {
       if (/[(,]/.test(form)) expect(data.article.notChecked, form).toMatch(/only the article was looked up/);
       else expect(data.article.notChecked, form).toBeUndefined();
     }
+    const zeros = await call('lex_check_citation', { identifier: '32016R0679', article: 'Art. 017' }, reply);
+    expect(zeros.data.article).toMatchObject({ found: true, id: 'art_17' });
     const suffix = await call('lex_check_citation', { identifier: '32016R0679', article: 'Article 6a' }, reply);
     expect(suffix.data.article).toMatchObject({ found: true, id: 'art_6a' });
   });
 
   it('a form that cannot be mapped is unknown, never "not found", and no document is read for it', async () => {
-    for (const form of ['Annex I', '6 bis', 'recital 4', 'seventeen']) {
+    for (const form of ['Annex I', '6 bis', 'recital 4', 'seventeen', '17th', 'Article 1st', '17 and 18', '17-19']) {
       const { data, paths } = await call('lex_check_citation', { identifier: '32016R0679', article: form }, () => ({ body: metadata() }));
       expect(paths, form).toEqual(['/documents/metadata']);
       expect(data.exists).toBe(true);
@@ -269,11 +271,11 @@ describe('lex_check_citation', () => {
     expect(data.exists).toBe(true);
     expect(data.article).toEqual({
       requested: 'Article 120', found: false, checkedIn: '32016R0679',
-      note: 'Article 120 is not among the 3 article units of 32016R0679; only the act as published was compared, and an article inserted by a later amendment is only in a consolidated version.',
+      note: 'Article 120 is not among the 3 article units of 32016R0679 (written like "Article 6"); only the act as published was compared, and an article inserted by a later amendment is only in a consolidated version.',
     });
     expect(data.inForce).toBe('unknown');
     const cons = await call('lex_check_citation', { identifier: '02016R0679-20160504', article: '120' }, () => ({ body: articleDoc(ARTICLES, { celex: '02016R0679-20160504' }) }));
-    expect(cons.data.article.note).toBe('Article 120 is not among the 3 article units of 02016R0679-20160504; only this consolidated version was compared.');
+    expect(cons.data.article.note).toBe('Article 120 is not among the 3 article units of 02016R0679-20160504 (written like "Article 6"); only this consolidated version was compared.');
   });
 
   it('a text without article units (a judgment): the article is unknown, not "not found"', async () => {
@@ -485,7 +487,7 @@ describe('lex_check_citation', () => {
     }));
     expect(data).toMatchObject({ exists: true, inForce: false, validTo: '2024-12-31' });
     expect(data.article).toMatchObject({ requested: '99', found: false, checkedIn: 'AT-NOR-10001597' });
-    expect(data.article.note).toMatch(/among the 2 units.*written like "§ 1"/);
+    expect(data.article.note).toMatch(/among the 2 numbered units.*written like "§ 1"/);
     expect(data.onDate).toEqual({ date: '2025-06-01', status: 'after_end_of_validity', endOfValidity: '2024-12-31' });
     const a = await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article: '§17a' }, () => ({ body: nationalDoc() }));
     expect(a.data.article).toMatchObject({ found: true, number: '§ 17a' });
@@ -500,6 +502,56 @@ describe('lex_check_citation', () => {
     }));
     expect(decision.data.article).toMatchObject({ requested: '1', found: 'unknown' });
     expect(decision.data.article.note).toMatch(/held without numbered units/);
+  });
+
+  const units = (...numbers: string[]) => nationalDoc({ content: { fullText: '…', articles: numbers.map((number) => ({ number, title: null, section: null, text: 't', inForceFrom: null, inForceTo: null, details: {} })) } });
+  const unit = async (article: string, ...numbers: string[]) => (await call('lex_check_citation', { identifier: 'AT-NOR-10001597', article }, () => ({ body: units(...numbers) }))).data.article;
+
+  it('a national unit with a paragraph, point or sentence part is found; the part is not checked', async () => {
+    for (const [form, rest] of [
+      ['§ 5 Abs. 2', 'abs. 2'], ['§ 5 Z 3', 'z 3'], ['§ 5 Absatz 1 Satz 2', 'absatz 1 satz 2'], ['§ 5 (2)', '(2)'], ['§ 5, Abs. 2', ', abs. 2'], ['§5 lit. a', 'lit. a'],
+    ]) {
+      const a = await unit(form, '§ 4', '§ 5', '§ 6', '§ 56', '§ 52');
+      expect(a, form).toMatchObject({ requested: form, found: true, number: '§ 5' });
+      expect(a.notChecked, form).toBe(`"${rest}": only the unit was looked up, not a paragraph or point of it.`);
+    }
+    expect(await unit('Artikel 2 Abs. 1', 'Artikel 1', 'Artikel 2')).toMatchObject({ found: true, number: 'Artikel 2' });
+    expect(await unit('Art. 5 odst. 2', '§ 5')).toMatchObject({ found: true, number: '§ 5' });
+    expect(await unit('5. člen', '4. člen', '5. člen')).toMatchObject({ found: true, number: '5. člen' });
+    expect(await unit('§ 017', '§ 17')).toMatchObject({ found: true, number: '§ 17' });
+  });
+
+  it('a list, a range or an unreadable remainder is unknown, never a match or a miss', async () => {
+    for (const form of ['§§ 5-6', '§ 5-6', 'Art. 5 und 17', '§ 5, 6', '§ 5 und 6', '§ 5 ff', '§ 5 bis 7', '§ 5 something', 'Anl. 1', '§ 5 a']) {
+      const a = await unit(form, '§ 5', '§ 6', '§ 17', '§ 56', 'Anl. 1');
+      expect(a, form).toMatchObject({ requested: form, found: 'unknown' });
+      expect(a.note, form).toMatch(/could not be read as one unit/);
+    }
+  });
+
+  it('two units with one number: the label decides, and a bare number is unknown', async () => {
+    const doc = ['Artikel 1', 'Artikel 2', '§ 1', '§ 2'];
+    expect(await unit('§ 2', ...doc)).toMatchObject({ found: true, number: '§ 2' });
+    expect(await unit('Artikel 2', ...doc)).toMatchObject({ found: true, number: 'Artikel 2' });
+    expect(await unit('Art. 2 Abs. 1', ...doc)).toMatchObject({ found: true, number: 'Artikel 2' });
+    const bare = await unit('2', ...doc);
+    expect(bare).toMatchObject({ found: 'unknown' });
+    expect(bare.note).toBe('Number 2 is carried by units with different labels ("Artikel 2", "§ 2"), so the one meant could not be told.');
+    // One unit of that number under another label: matched by number, and said.
+    const other = await unit('§ 2', 'Artikel 1', 'Artikel 2');
+    expect(other).toMatchObject({ found: true, number: 'Artikel 2' });
+    expect(other.note).toBe('Matched by number: the document has one unit numbered 2 and writes it "Artikel 2".');
+  });
+
+  it('a unit that is not there is a miss only against units that could be compared', async () => {
+    const miss = await unit('§ 99', '§ 1', '§ 2', 'Anl. 1');
+    expect(miss).toEqual({
+      requested: '§ 99', found: false, checkedIn: 'AT-NOR-10001597',
+      note: 'No unit numbered 99 among the 2 numbered units of the text LexAPI holds (compared by number; they are written like "§ 1").',
+    });
+    const odd = await unit('§ 1', 'Erster Abschnitt', 'Anl. 1');
+    expect(odd).toMatchObject({ found: 'unknown' });
+    expect(odd.note).toMatch(/not in a form that could be compared/);
   });
 
   it('a national id LexAPI does not hold, and a country that is not live, are told apart', async () => {
