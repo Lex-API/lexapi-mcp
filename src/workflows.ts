@@ -560,16 +560,24 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
 
   const consolidated = consolidatedBaseOf(celex) !== null;
   if (ref && a.article) {
-    const matchesRef = (u: Obj) => {
-      const id = String(u.id ?? '').toLowerCase();
-      const number = String(u.number ?? '').toLowerCase();
-      return id === `art_${ref.number}` || id === ref.number || number === `article ${ref.number}` || number === ref.number;
+    // A unit's own number decides; its id is used when it has no number.
+    const byNumber = (u: Obj) => {
+      const m = typeof u.number === 'string' ? /^(?:article\s+)?0*(\d+[a-z]{0,2})$/.exec(u.number.trim().toLowerCase()) : null;
+      return m ? m[1] === ref.number : undefined;
     };
+    const byId = (u: Obj) => {
+      const m = typeof u.id === 'string' ? /^(?:art_)?0*(\d+[a-z]{0,2})$/.exec(u.id.trim().toLowerCase()) : null;
+      return m ? m[1] === ref.number : undefined; // an id in another form says nothing
+    };
+    const matchesRef = (u: Obj) => byNumber(u) ?? byId(u) ?? false;
+    const disagrees = (u: Obj) => byNumber(u) !== undefined && byId(u) !== undefined && byNumber(u) !== byId(u);
     const unitsOf = (doc: Obj) => (isObj(doc.content) && Array.isArray(doc.content.articles) ? doc.content.articles.filter(isObj) : []);
     let units = unitsOf(d);
     let hit = units.find(matchesRef);
+    let odd = units.find(disagrees);
     let listFailure: Obj | undefined;
-    if (!hit && isObj(d.content)) {
+    // The API leaves the articles key out for a text without article units: no second read then.
+    if (!hit && !odd && isObj(d.content) && 'articles' in d.content) {
       const list = await calls.run((c) => c.getDocument({ celexNumber: celex, include: ['articles'] }));
       const got = list.failure ? undefined : carriedDocument(list.res.body, 'document', celex, CELEX_KEYS);
       if (list.failure) listFailure = shown(list.failure);
@@ -577,11 +585,14 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
       else {
         units = unitsOf(got.doc);
         hit = units.find(matchesRef);
+        odd = units.find(disagrees);
       }
     }
     if (!isObj(d.content)) {
       const ta = isObj(d.textAvailability) ? d.textAvailability : {};
       out.article = { requested: a.article, found: 'unknown', note: `No text was served for ${celex}${ta.reason ? ` (${String(ta.reason)})` : ''}, so the article could not be looked up.` };
+    } else if (odd) {
+      out.article = { requested: a.article, found: 'unknown', note: `A unit of ${celex} carries the id "${String(odd.id)}" and the number "${String(odd.number)}", which disagree, so it is not reported as Article ${ref.number}.` };
     } else if (hit) {
       const text = typeof hit.content === 'string' ? hit.content : typeof hit.text === 'string' ? hit.text : undefined;
       out.article = compact({
@@ -633,9 +644,14 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
   // a country that is not served costs nothing and is named as such.
   const cov = await calls.runList('jurisdictions', (c) => c.nationalCoverage());
   if (calls.stopped) throw asThrown(calls.stopped);
-  if (!cov.failure) {
+  // A country listed as not live is still asked for the document: the API
+  // serves it to an account with access, and refuses it otherwise.
+  let notLive = false;
+  if (cov.failure) {
+    out.coverage = { call: 'lex_national_coverage', ...shown(cov.failure), note: 'Whether the country is listed and live was not checked; the document read gives its own answer.' };
+  } else {
     const listed = (cov.res.body.jurisdictions as unknown[]).filter(isObj).find((j) => String(j.code ?? '').toUpperCase() === code);
-    if (!listed || listed.live !== true) {
+    if (!listed) {
       return {
         ...out,
         exists: 'unknown',
@@ -643,13 +659,12 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         notChecked: [{
           what: 'everything',
           call: 'lex_national_coverage',
-          reason: listed ? 'not_live' : 'not_listed',
-          note: listed
-            ? `${code} is listed by LexAPI but not live, so its documents cannot be looked up.`
-            : `LexAPI lists no country ${code}, so this is not a national document id it can look up.`,
+          reason: 'not_listed',
+          note: `LexAPI lists no country ${code}, so this is not a national document id it can look up; no document read was made.`,
         }],
       };
     }
+    notLive = listed.live !== true;
   }
   const read = await calls.run((c) => c.getNationalDocument(code, id, {}));
   if (read.failure) {
@@ -658,7 +673,7 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
     const details = isObj(err.details) ? err.details : {};
     // A document id LexAPI does not hold: the API's NOT_FOUND, naming the
     // country. A country that is not live answers as a path that does not exist.
-    if (read.failure.reason === 'not_found' && typeof details.jurisdiction === 'string') {
+    if (read.failure.reason === 'not_found' && typeof details.jurisdiction === 'string' && !notLive) {
       return { ...out, exists: false, inForce: 'unknown', basis: { exists: `${call}: ${read.failure.error}` } };
     }
     return {
@@ -669,7 +684,8 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         what: 'everything',
         call,
         ...shown(read.failure),
-        note: /Unknown API endpoint/i.test(err.message)
+        note: notLive ? `lex_national_coverage lists ${code} as not live, and the document read was answered 404, so the document could not be looked up.`
+          : /Unknown API endpoint/i.test(err.message)
           ? `LexAPI has no route for ${code}: the country is not live (lex_national_coverage lists the live ones), or the prefix is not a country code.`
           : 'The 404 was not the API\'s own answer about this document id, so it does not show that the document does not exist.',
       }],
@@ -878,7 +894,10 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
     // The date is taken only from an answer about this act.
     const got = carriedDocument(r.res.body, 'metadata', c.celex.toUpperCase(), CELEX_KEYS);
     if (got.problem) {
-      c.dateNotRead = { reason: got.problem.reason, error: got.problem.note };
+      c.dateNotRead = {
+        reason: got.problem.reason,
+        error: got.problem.reason === 'different_document' ? `${got.problem.note.replace(/; nothing from it is reported\.$/, '')}, so its date was not used.` : 'The answer carried no document, so the date was not read.',
+      };
       continue;
     }
     const m = got.doc;

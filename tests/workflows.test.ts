@@ -309,13 +309,28 @@ describe('lex_check_citation', () => {
 
   it('a text without article units (a judgment): the article is unknown, not "not found"', async () => {
     for (const content of [{ articles: [] }, {}, { paragraphs: [{ number: 1, text: 'x' }] }]) {
-      const { data } = await call('lex_check_citation', { identifier: '62018CJ0311', article: '17' }, () => ({
+      const { data, calls } = await call('lex_check_citation', { identifier: '62018CJ0311', article: '17' }, () => ({
         body: articleDoc([], { celex: '62018CJ0311', content }),
       }));
       expect(data.exists).toBe(true);
       expect(data.article).toMatchObject({ requested: '17', found: 'unknown' });
       expect(data.article.note).toMatch(/has no article units as LexAPI holds it/);
+      // No articles key at all: the text has no article units, and no second read is spent.
+      expect(calls).toHaveLength('articles' in content ? 2 : 1);
     }
+  });
+
+  it('a unit whose id and number disagree is not reported as the article', async () => {
+    const { data, calls } = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({
+      body: articleDoc([{ id: 'art_17', number: 'Article 18', title: 'Another article', content: 'x' }]),
+    }));
+    expect(calls).toHaveLength(1);
+    expect(data.article).toEqual({ requested: '17', found: 'unknown', note: 'A unit of 32016R0679 carries the id "art_17" and the number "Article 18", which disagree, so it is not reported as Article 17.' });
+    // The number decides when the id is in another form or absent.
+    const numbered = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({ body: articleDoc([{ number: 'Article 17', content: 'x' }]) }));
+    expect(numbered.data.article).toMatchObject({ found: true, number: 'Article 17' });
+    const otherId = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => ({ body: articleDoc([{ id: 'd1e1888-1-1', number: 'Article 17', content: 'x' }]) }));
+    expect(otherId.data.article).toMatchObject({ found: true, number: 'Article 17' });
   });
 
   it('the article list could not be read after a miss: the article is unknown, and the failed read is named', async () => {
@@ -533,14 +548,24 @@ describe('lex_check_citation', () => {
     expect(data.allowance).toEqual({ limit: 30, remaining: 12, resetsAt: '2026-12-01T00:00:00.000Z' });
   });
 
-  it('an id of a country LexAPI does not list, or that is not live, costs no document read', async () => {
-    const notLive = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, () => ({ body: AT_LIVE }));
-    expect(notLive.paths).toEqual(['/national/coverage']);
+  it('a country that is not live is still asked; a country LexAPI does not list costs no document read', async () => {
+    // Listed as not live: the API is still asked, and its refusal is reported as such.
+    const notLive = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'Unknown API endpoint' } } }));
+    expect(notLive.paths).toEqual(['/national/coverage', '/fr/documents/FR-LEGI-1']);
     expect(notLive.data).toMatchObject({ id: 'FR-LEGI-1', exists: 'unknown', inForce: 'unknown' });
-    expect(notLive.data.notChecked[0]).toMatchObject({ call: 'lex_national_coverage', reason: 'not_live' });
+    expect(notLive.data.notChecked[0]).toMatchObject({ call: 'lex_get_national_document', reason: 'not_found' });
+    expect(notLive.data.notChecked[0].note).toBe('lex_national_coverage lists FR as not live, and the document read was answered 404, so the document could not be looked up.');
+    // An account that may read a country before it is live gets the document.
+    const preview = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id: 'FR-LEGI-1', jurisdiction: 'FR' }) }));
+    expect(preview.data).toMatchObject({ id: 'FR-LEGI-1', exists: true });
+    // A failed coverage call is named, and the read gives its own answer.
+    const noCoverage = await call('lex_check_citation', { identifier: 'AT-NOR-10001597' }, (c) => (isCoverage(c) ? { status: 500, body: { success: false, error: { code: 'INTERNAL', message: 'coverage failed' } } } : { body: nationalDoc() }));
+    expect(noCoverage.data).toMatchObject({ exists: true });
+    expect(noCoverage.data.coverage).toMatchObject({ call: 'lex_national_coverage', reason: 'upstream_error' });
+    expect(noCoverage.data.coverage.note).toMatch(/was not checked/);
     const unlisted = await call('lex_check_citation', { identifier: 'XX-2016-679' }, () => ({ body: AT_LIVE }));
     expect(unlisted.paths).toEqual(['/national/coverage']);
-    expect(unlisted.data.notChecked[0]).toMatchObject({ reason: 'not_listed', note: 'LexAPI lists no country XX, so this is not a national document id it can look up.' });
+    expect(unlisted.data.notChecked[0]).toMatchObject({ reason: 'not_listed', note: 'LexAPI lists no country XX, so this is not a national document id it can look up; no document read was made.' });
     // The coverage call is rate limited: the error, and no document read.
     const limited = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => rateLimited());
     expect(limited.result.isError).toBe(true);
@@ -997,7 +1022,8 @@ describe('lex_act_history', () => {
     }));
     expect(data.changes.repeals[0].date).toBeUndefined();
     expect(data.changes.repeals[0]).toMatchObject({ celex: '32025R0100', celexYear: 2025, dateNotRead: { reason: 'different_document' } });
-    expect(data.changes.repeals[0].dateNotRead.error).toMatch(/32025R0100 was asked for and the answer is about 32016R0679/);
+    expect(data.changes.repeals[0].dateNotRead.error).toBe('32025R0100 was asked for and the answer is about 32016R0679, so its date was not used.');
+    expect(data.changes.amendments[0].dateNotRead.error).toBe('The answer carried no document, so the date was not read.');
     expect(data.changes.amendments[0].dateNotRead.reason).toBe('unreadable_response');
     expect(data.counts.datesRead).toBeUndefined();
   });

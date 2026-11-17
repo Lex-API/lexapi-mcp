@@ -72,7 +72,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 1–6 (+ 1–5 when an article is not matched) |
+| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 1–6 (+ 0–5 when an article is not matched) |
 | `lex_act_history` | The acts that amend, correct or repeal an EU act, with its in-force status today. | 2–6 (+ 1–5 per date read) |
 | `lex_research` | One query over EU legislation, EU case law and the national law of chosen live countries. | 5 per search |
 | `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date. For the text in force today, pass today's date (UTC) as `asOf` and use only hits with `asOfResolved: true`. Without `asOf`, acts no longer in force are marked `inForce: false` where their status is known; since-amended or repealed provisions are not marked. | 5 (+ up to 5 per version fetch with `asOf`) |

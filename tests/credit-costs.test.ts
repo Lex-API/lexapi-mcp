@@ -36,7 +36,7 @@ const EXPECTED: Record<string, Expected> = {
   lex_check_citation: {
     ops: ['resolve', 'document_fetch', 'document_metadata'],
     settles: true,
-    says: [`Cost: ${credits(w.resolve)} to resolve a URL, ELI or ECLI`, `one read: ${credits(fx.corpusHit)} from the corpus, ${fx.cellarHit} via the Publications Office, ${w.document_fetch} live; an article that is not matched costs a second read`, `A national id: ${credits(fx.corpusHit)}.`],
+    says: [`Cost: ${credits(w.resolve)} to resolve a URL, ELI or ECLI`, `one read: ${credits(fx.corpusHit)} from the corpus, ${fx.cellarHit} via the Publications Office, ${w.document_fetch} live; an article that is not matched can cost a second read`, `A national id: ${credits(fx.corpusHit)}.`],
   },
   lex_act_history: {
     ops: ['citation_cited_by', 'document_metadata'],
@@ -183,7 +183,7 @@ describe('credit costs outside the descriptions match the weights too', () => {
     }
     const doc = `${fx.corpusHit} · ${fx.cellarHit} · ${w.document_fetch}`;
     expect(column).toEqual({
-      '`lex_check_citation`': `${fx.corpusHit}–${w.resolve + w.document_fetch} (+ ${fx.corpusHit}–${w.document_fetch} when an article is not matched)`,
+      '`lex_check_citation`': `${fx.corpusHit}–${w.resolve + w.document_fetch} (+ 0–${w.document_fetch} when an article is not matched)`,
       '`lex_act_history`': `${w.citation_cited_by + fx.corpusHit}–${w.citation_cited_by + w.document_metadata} (+ ${fx.corpusHit}–${w.document_metadata} per date read)`,
       '`lex_research`': `${w.semantic_legis} per search`,
       '`lex_semantic_legislation`': `${w.semantic_legis} (+ up to ${w.document_fetch} per version fetch with \`asOf\`)`,
