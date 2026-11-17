@@ -710,7 +710,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
@@ -746,7 +746,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_legislation',
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. No asOf — current text only. A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
+      'Find one country\'s legislation articles by meaning. No asOf — current text only. A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
