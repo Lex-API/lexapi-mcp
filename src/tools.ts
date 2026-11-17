@@ -349,7 +349,7 @@ export const tools: ToolDef[] = [
     name: 'lex_resolve',
     title: 'Resolve a legal identifier to CELEX',
     description:
-      'Turn a pasted EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. Cost: 1 credit. ECLIs resolve only for case law already in the LexAPI corpus (404 otherwise). resolvedVia says how: celex / url (read off the identifier), ecli-corpus / eli-corpus (corpus lookup), eli-cellar (Publications Office register), eli (derived from the ELI pattern only). verified: false is normal for CELEX and URL inputs (they are not looked up, so a mistyped CELEX also comes back); with resolvedVia "eli" the mapping is derived from the ELI pattern and unverified (lex_get_document confirms it).',
+      'Turn a EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. ECLIs resolve only for case law in the LexAPI corpus (404 otherwise). resolvedVia: celex, url, ecli-corpus, eli-corpus, eli-cellar (Publications Office register) or eli (derived from the ELI pattern, unverified). verified: false is normal for CELEX and URL inputs, which are not looked up. Cost: 1 credit.',
     inputSchema: {
       identifier: z.string().trim().min(3).max(2000).describe('CELEX, EUR-Lex URL, ELI URI or ECLI.'),
     },
@@ -560,10 +560,10 @@ export const tools: ToolDef[] = [
     name: 'lex_semantic_legislation',
     title: 'Semantic search over EU legislation',
     description:
-      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref (the articleId for lex_get_document), law_title, score, snippet. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a past date. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
+      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref (the articleId for lex_get_document), law_title, score, snippet. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a date. For current law pass today\'s date: without asOf, repealed and since-amended provisions are returned unmarked. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
     inputSchema: {
       query: z.string().trim().min(1).max(1000).describe('Natural-language description of the provision you are looking for.'),
-      asOf: isoDate('The law as in force on this date (YYYY-MM-DD, 1952-01-01 to today). Hits then carry the version in force (asOfResolved: true, asOfVersion). Unresolved hits keep the CURRENT text with an asOfReason, explained in asOfCaveat. Omitted: current law.').optional(),
+      asOf: isoDate('The law as in force on this date (YYYY-MM-DD, 1952-01-01 to today (UTC)). Hits then carry the version in force (asOfResolved: true, asOfVersion). Unresolved hits keep the indexed text with an asOfReason, explained in asOfCaveat. Omitted: the indexed texts as they are (the act as published, or its latest consolidated version where indexed); repealed or amended provisions are not marked.').optional(),
       limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap: FREE 10, STARTER 20, higher 50). Merged consolidated/base duplicates can make a page shorter.'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor. Default ≈0.7 server-side; a lower value (e.g. 0.5) returns more hits, 0 disables it.'),
       language: z.enum(SEMANTIC_LANGUAGES).optional().describe('Preferred language of the text (default en); acts without it come back in another language, labelled.'),
@@ -710,7 +710,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. hyde is a no-op here (no rewrite, no extra cost). A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Cost: flat 5 credits, never 15; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
@@ -746,7 +746,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_legislation',
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. No asOf — current text only. A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means the index could not complete the search: results may be incomplete, and hint gives the next step. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
+      'Find one country\'s legislation articles by meaning. No asOf — current text only. A country not yet live returns an error (live countries: lex_national_coverage). partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Cost: flat 5 credits; counts against the national-law allowance on lower plans (see allowance). Each hit\'s attribution names the source/licence; LexAPI\'s Terms require this attribution to be kept with republished content.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
@@ -780,7 +780,7 @@ export const tools: ToolDef[] = [
     name: 'lex_cited_by',
     title: 'Documents citing a CELEX',
     description:
-      'Inbound citations: documents that cite, amend, correct, repeal, implement, transpose or are based on this act, with the edge type and its provenance. For legislation, amendment / corrigendum / repeal edges are read from the Publications Office (Cellar) and refreshed on read when older than 7 days; if that refresh does not finish in ~2.5 s, relationSync.status is "pending" (or "skipped") and the stored edges are served, so relationSync tells whether the list is complete. Other edge types cover only documents LexAPI has extracted. totalEdges is the full count for paging with offset. includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
+      'Inbound citations: documents that cite, amend, correct, repeal, implement, transpose or are based on this act, with the edge type and its provenance. For legislation, amendment / corrigendum / repeal edges are refreshed on read from the Publications Office when stale; relationSync.status "pending" or "skipped" means the stored edges were served and may be incomplete. Other edge types cover only documents LexAPI has extracted. totalEdges is the full count for paging with offset. includeNational adds national neighbours of live countries (BUSINESS+ only; also accepts a national id, e.g. "AT-NOR-12345"). Cost: 1 credit.',
     inputSchema: {
       celexNumber: celexOrNationalId(),
       ...graphFilters,
@@ -927,7 +927,7 @@ export const tools: ToolDef[] = [
     name: 'lex_transposition',
     title: 'Notified national measures for an EU act',
     description:
-      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+ it also says, for live countries only, which measures LexAPI holds (id, resolved) and adds documents whose national source records the relation (provenance "source"); below that those fields are absent. termsRequired: true = the account has not yet accepted the national-source terms in the dashboard. source.cellar.attribution is the attribution for the Cellar data; LexAPI\'s Terms require this attribution to be kept with republished content. Output is bounded (limit, ~40,000 characters); more gives the offset of the next page. Cost: 5 credits per call (each offset page too); not an EU act = 404, settles at 1.',
+      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+, for live countries only, it also shows which measures LexAPI holds (id, resolved) and adds relations recorded by the national source (provenance "source"). termsRequired: true = the national-source terms are not yet accepted in the dashboard. source.cellar.attribution is the attribution for the Cellar data; LexAPI\'s Terms require this attribution to be kept with republished content. Output is bounded (limit, ~40,000 characters); more gives the next offset. Cost: 5 credits per call or page; not an EU act = 404, settles at 1.',
     inputSchema: {
       celexNumber: celex('CELEX number of the EU act'),
       jurisdictions: codeList('Only these countries, e.g. ["es","cz"] (EL = Greece, UK = United Kingdom); default all 28.').optional(),
@@ -951,7 +951,7 @@ export const tools: ToolDef[] = [
     name: 'lex_counterparts',
     title: 'Counterparts of a national act in other countries',
     description:
-      'A national document\'s counterparts in the other live countries, through the EU acts it is linked to (via), either by a link the national source records or by its notification to the Commission as a measure. Ranked: 1 = the national source records the relation; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned (see lex_national_coverage); a national id of a country not live returns 404 (nothing charged); any other 404 settles at 1 credit. A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts and ~40,000 characters); more gives the offset of the next page. Cost: 20 credits (each offset page too); a server timeout is refunded, and jurisdictions narrows the lookup.',
+      'A national document\'s counterparts in the other live countries, through the EU acts it is linked to (via): by a link the national source records or by its notification to the Commission as a measure. Ranked: 1 = recorded by the national source; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned (see lex_national_coverage). A notification is not a finding that the measure transposes the act. BUSINESS, SCALE and ENTERPRISE only (403 below, refunded); the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts, ~40,000 characters); more gives the next offset. Cost: 20 credits per call or page; a 404 for a country not live is not charged, other 404s settle at 1, a server timeout is refunded; jurisdictions narrows the lookup.',
     inputSchema: {
       id: celexOrNationalId('National document id or EU act CELEX'),
       jurisdictions: codeList('Only these live countries, e.g. ["si","es"]; default every live one.').optional(),
@@ -992,7 +992,7 @@ export const tools: ToolDef[] = [
     name: 'lex_export',
     title: 'Export corpus rows',
     description:
-      'Rows from the LexAPI corpus matching filters — e.g. regulations dated 2024 or documents whose text changed since a date. BUSINESS plans and above (403 otherwise). Cost: 1 credit per row returned, at least 1 per call. The call is admitted for 1 credit, the matching rows are counted, and the rest of 1 credit per row it can return (up to limit) is reserved; if the pool cannot cover that, LexAPI answers 402 before returning anything (a smaller limit needs fewer credits). Reserved credits for rows not returned are refunded. An export that fails part-way is reported as incomplete, never as a result. Bulk export for ML training needs a separate licence (Terms §6).',
+      'Rows from the LexAPI corpus matching filters — e.g. regulations dated 2024 or documents whose text changed since a date. BUSINESS plans and above (403 otherwise). Cost: 1 credit per row returned, at least 1 per call: the call is admitted for 1 credit and up to limit rows are reserved; if the pool cannot cover that, 402 before returning anything (a smaller limit needs fewer credits). Credits reserved for rows not returned are refunded. An export that fails part-way is reported as incomplete. Bulk export for ML training needs a separate licence (Terms §6).',
     inputSchema: {
       documentType: z.array(z.string().min(1)).min(1).optional().describe('Stored document-type labels, matched exactly but ignoring case, e.g. ["Regulation","Directive"]: "regulation" matches Regulation, not Implementing regulation (use documentTypeCode for the family).'),
       documentTypeCode: z.array(z.string().min(1)).min(1).optional().describe('Type families by documentTypeCode, e.g. ["regulation"] — includes implementing and delegated regulations. Combined with documentType, both must match.'),

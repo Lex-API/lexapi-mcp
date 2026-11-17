@@ -1,14 +1,14 @@
 # LexAPI MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — EU law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, the typed citation graph, and semantic search (including **the law as in force on a past date**). Works with Claude, Cursor, VS Code and any other MCP client.
+[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — EU law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, the typed citation graph, and semantic search (including **the law as in force on a date**). Works with Claude, Cursor, VS Code and any other MCP client.
 
 Ask your assistant *"what does Article 17 GDPR require?"*, *"which acts amended REACH?"* or *"what were the own-funds requirements for banks in June 2019?"* — the model calls LexAPI and answers from the source text, with CELEX citations.
 
-You need a LexAPI account. With the hosted server you just **sign in with LexAPI** from your MCP client; with the npm package (or if you prefer), use an API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). There is a FREE plan, no card required, with enough credits to try the read tools; current allowances are on [lex-api.com/pricing](https://lex-api.com/pricing?ref=npm-mcp).
+You need a LexAPI account. With the hosted server you **sign in with LexAPI** from your MCP client; with the npm package, use an API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). There is a FREE plan, no card required; see [lex-api.com/pricing](https://lex-api.com/pricing?ref=npm-mcp).
 
 ## Connect to the hosted server (sign in with LexAPI)
 
-The server is hosted at **`https://mcp.lex-api.com/v1`** (Streamable HTTP). Add that URL to your client and sign in with your LexAPI account when it asks — no key to copy. You see a LexAPI consent page listing what the connection can do; calls are billed to your plan exactly like your own API key, and you can disconnect the app at any time under *Dashboard → Connected apps* (that revokes it immediately).
+The server is hosted at **`https://mcp.lex-api.com/v1`** (Streamable HTTP). Add that URL to your client and sign in with your LexAPI account when it asks. Calls are billed to your plan like your own API key; you can disconnect at any time under *Dashboard → Connected apps*.
 
 ### claude.ai and Claude Desktop
 
@@ -24,11 +24,11 @@ Then run `/mcp` in Claude Code and choose *Authenticate* for `lexapi`; your brow
 
 ### Other MCP clients
 
-Any client that implements MCP authorization (OAuth 2.1 with protected-resource discovery) connects the same way: point it at `https://mcp.lex-api.com/v1`. The server answers an unauthenticated request with `401` and `WWW-Authenticate: Bearer … resource_metadata="https://mcp.lex-api.com/.well-known/oauth-protected-resource/v1"`; the client discovers LexAPI (`https://lex-api.com`) as the authorization server from there.
+Any client that supports MCP authorization (OAuth 2.1) connects the same way: point it at `https://mcp.lex-api.com/v1`.
 
 ### With an API key instead
 
-Clients without OAuth support — or scripts — send a key from the dashboard as `Authorization: Bearer lex_...` (or `x-api-key: lex_...`):
+Clients without OAuth support send a key from the dashboard as `Authorization: Bearer lex_...`:
 
 ```bash
 claude mcp add --transport http lexapi https://mcp.lex-api.com/v1 --header "Authorization: Bearer lex_..."
@@ -64,97 +64,56 @@ claude mcp add lexapi --env LEXAPI_API_KEY=lex_... -- npx -y @lexapi/mcp
 
 Run `npx -y @lexapi/mcp` with `LEXAPI_API_KEY` in the environment (Cursor: `~/.cursor/mcp.json`; VS Code: `.vscode/mcp.json`; same `command` / `args` / `env` shape as above).
 
-The npm package needs Node.js 20 or newer. It uses an API key; signing in with LexAPI is a feature of the hosted server.
+The npm package needs Node.js 20 or newer.
 
 ## Tools
 
-Every call is billed from your LexAPI credit pool exactly like the REST endpoint it wraps; each tool's description states its cost so the model can see it.
+Every call is billed from your LexAPI credit pool like the REST endpoint it wraps; each tool's description states its cost.
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_semantic_legislation` | Find legislation articles by meaning. `asOf` returns the text in force on a date. Consolidated hits are labelled, with the authentic act to cite. | 5 (+ up to 5 per live version fetch with `asOf`) |
-| `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning; `hyde` for terse queries; court / date / case-number filters. | 5 (15 with `hyde`) |
+| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` returns the text in force on a date (today's date for current law); without `asOf`, hits are the indexed texts and repealed or amended provisions are not marked. | 5 (+ up to 5 per version fetch with `asOf`) |
+| `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
 | `lex_recent_documents` | What was published in the last N days. | 3 per 10 results |
 | `lex_resolve` | URL / ELI / ECLI → CELEX. | 1 |
-| `lex_get_document` | A document by CELEX — an outline first for large acts, then `articleId` or `include` parts; language and fallback languages. | 1 corpus · 4 Cellar · 5 live |
+| `lex_get_document` | A document by CELEX: an outline for large acts, then an article or selected parts. | 1 corpus · 4 Cellar · 5 live |
 | `lex_get_documents_batch` | Up to 50 documents at once (plan-capped). | per document, as above |
 | `lex_get_metadata` | Metadata only. | 1 · 4 · 5 |
 | `lex_get_document_by_url` | A document from a pasted EUR-Lex URL. | 1 · 4 · 5 |
 | `lex_document_versions` | LexAPI's observed version history of a document. | 1 |
 | `lex_get_document_version` | One observed snapshot, by version number or date. | 1 |
-| `lex_cited_by` | Documents citing / amending / correcting / repealing / transposing an act, with each edge's provenance. `includeNational` adds national neighbours (BUSINESS+). | 1 |
-| `lex_cites` | What a document cites. `includeNational` adds national neighbours (BUSINESS+). | 1 |
-| `lex_citation_network` | Both directions in one call. `includeNational` adds national neighbours (BUSINESS+). | 20 |
-| `lex_citation_path` | Shortest citation chain between two documents. `includeNational` follows national documents (BUSINESS+). | 20 |
-| `lex_related` | Documents citing the same acts (bibliographic coupling). `includeNational` considers national documents (BUSINESS+). | 20 |
-| `lex_citation_stats` | Citation graph totals and most-cited documents. `includeNational` counts national documents (BUSINESS+). | 20 |
+| `lex_cited_by` · `lex_cites` | Inbound / outbound citations, with each edge's type and provenance. | 1 |
+| `lex_citation_network` | Both directions in one call. | 20 |
+| `lex_citation_path` | Shortest citation chain between two documents. | 20 |
+| `lex_related` | Documents citing the same acts. | 20 |
+| `lex_citation_stats` | Citation graph totals and most-cited documents. | 20 |
 | `lex_extract_citations` | Add a document's outbound citations to the graph. | 5 (1 if already done) |
-| `lex_transposition` | The measures member states notified to the Commission for an EU act, by country (Cellar records; every plan). A notification is not a finding that the measure transposes the act. On BUSINESS+ it also says which measures LexAPI holds in live countries. | 5 |
-| `lex_counterparts` | A national act's counterparts in the other live countries, through the EU acts it is linked to, either by a link the national source records or by its notification to the Commission as a measure (BUSINESS+). | 20 |
-| `lex_export` | Corpus rows by type (exact label, any case) or type family (`documentTypeCode`), author, collection, language, document date (`dateFrom`/`dateTo`), `changedSince` or `fetchedSince` (BUSINESS plans and above). | 1 per row returned, at least 1 per call (1-credit admission, rows reserved up to `limit`, unreturned rows refunded; 402 if the pool cannot cover the reservation) |
-| `lex_national_coverage` | Which countries' national law LexAPI covers and what's live in each (sources, licences, attribution). Call first. | free |
-| `lex_list_national_documents` | Browse a country's national legislation/case law by title or type; cursor paging past the first 1,000 rows. | 3 per call |
-| `lex_get_national_document` | A national document by id. Always served from the corpus. | 5 → 1 |
-| `lex_national_semantic_case_law` | Semantic search over one country's case law. | 5 |
-| `lex_national_semantic_legislation` | Semantic search over one country's legislation. | 5 |
+| `lex_transposition` | Measures member states notified to the Commission for an EU act, by country. | 5 |
+| `lex_counterparts` | A national act's counterparts in other live countries (BUSINESS+). | 20 |
+| `lex_export` | Corpus rows by type, author, collection, language or date (BUSINESS+). | 1 per row, at least 1 per call |
+| `lex_national_coverage` | Which countries' national law is live, with sources and licences. | free |
+| `lex_list_national_documents` | Browse a country's national legislation and case law. | 3 |
+| `lex_get_national_document` | A national document by id. | 5 → 1 |
+| `lex_national_semantic_case_law` · `lex_national_semantic_legislation` | Semantic search over one country's case law / legislation. | 5 |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
-| `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and for changes to watched acts (paid plans). The URL must be a public https URL (port 443/8443, no internal hosts or private addresses) — checked here as well as by the API. | free |
+| `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and changes to watched acts (paid plans). | free |
 
-### National law
-
-`lex_national_coverage`, `lex_list_national_documents`, `lex_get_national_document`, `lex_national_semantic_case_law` and `lex_national_semantic_legislation` cover member-state legislation and case law alongside the EU_LAW tools above. A country can be registered on LexAPI before it is made available to customers — always call `lex_national_coverage` first; the other tools answer an error for a country that isn't live yet. The citation-graph tools (`lex_cited_by`, `lex_cites`, `lex_citation_network`, `lex_citation_path`, `lex_related`, `lex_citation_stats`) accept national document ids directly (e.g. `"AT-NOR-12345"`) and an `includeNational` option to pull in national neighbours — BUSINESS, SCALE and ENTERPRISE only, 403 below that. National results have the same fields in every country (LexAPI API 2.8.0): `documentKind` (`act` | `decision`) everywhere, and on a decision `court`, `chamber`, `caseNumbers` and `citedNorms` — whatever the source calls them. Every national result carries `attribution` (the official source and its licence, e.g. RIS, gesetze-im-internet.de, Normattiva, Légifrance/Judilibre, the Rechtspraak open data) — show it to the user alongside anything quoted. On FREE/STARTER/PROFESSIONAL plans, national-law calls also draw from a separate monthly allowance (reported as `allowance` on each response); BUSINESS and higher have no separate limit. A document its source withdrew (a takedown, a pseudonymisation fix) answers a distinct error — nothing of it is served, not even the title; the error says it is not retryable and that cached copies should not be kept. When the national index could not complete a semantic search, the result carries `partial: true` (`partialReason: "SEARCH_INCOMPLETE"`) and a `hint` — results may be incomplete; with nothing left to return the tool answers an error instead (a `503` retried after its `Retry-After`, or a `422 NATIONAL_SEMANTIC_FILTER_UNREACHABLE`: rephrase or change the filters), never an empty "no matches".
-
-### Citation-graph filters and provenance
-
-`lex_cited_by`, `lex_cites`, `lex_citation_network`, `lex_citation_path` and `lex_related` take `citationType` (one type or a list, including `transposition`), `provenance` (`notice`, `cellar`, `notice+cellar`, `cellar-nim`, `source`, `resolver`), `resolution` (`id`, `key`, `abbreviation`, `text-pattern` — national edges only) and `jurisdictions` (`eu` and the codes of live countries; a national code needs BUSINESS+ like `includeNational`). Results show each edge's `provenance` and `resolution`, and a node's `jurisdiction` (national documents only) and `documentKind`. `cellar-nim` edges are measures a member state notified to the Commission — a notification, not a finding that the measure transposes the act, or transposes it completely. With a national document id, `unresolved: true` on `lex_cites` / `lex_citation_network` adds the references that could not be turned into an edge (the first 100 are shown). `lex_national_coverage` reports each country's citation-graph measurements (`citationGraph`). `lex_transposition` and `lex_counterparts` bound their output with `limit` / `offset`, applied by this MCP server to the API's answer; each further page is a new call at the tool's cost.
-
-### How results are shaped for models
-
-- **Compact output.** Responses drop envelopes and duplicate legacy fields. Documents keep their metadata, `textAvailability` (why text is missing, which languages exist, a pointer to the latest consolidated version) and language-fallback labels.
-- **Large documents.** `lex_get_document` returns the whole body when it fits `maxChars` (default 40,000 characters), otherwise an outline (article ids, section tree, counts). Fetch an article with `articleId` or parts with `include`; long parts continue with `offset`.
-- **Consolidated texts are not authentic.** Consolidated versions carry `consolidated: true`, `consolidatedAsOf`, `baseCelex` and a note: quote them, cite the act as published in the Official Journal.
-- **`asOf`.** Each legislation hit says whether it carries the version in force on that date (`asOfResolved`, `asOfVersion`); unresolved hits keep the current text with an `asOfReason`, and the response warns about them.
-- **Errors say what to do.** A 402 states the credits needed, the credits left and the reset date; a 429 says how long to wait.
+The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `LEXAPI_API_KEY` | *(required)* | Your API key from [lex-api.com/dashboard](https://lex-api.com/dashboard?ref=npm-mcp). |
-| `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | Override for staging or self-hosting. |
-| `LEXAPI_MCP_READ_ONLY` | off | `true` hides (and refuses) every tool that is not read-only: webhook create / update / delete / test, and `lex_extract_citations` (it writes to the shared citation graph and costs credits). |
-| `LEXAPI_TIMEOUT_MS` | `55000` | Deadline for one tool call towards LexAPI, retries included. Raise it only together with your MCP client's own tool timeout. |
-| `LEXAPI_MCP_ALLOWED_ORIGINS` | *(none)* | Hosted HTTP server only: browser `Origin`s allowed to call it (comma-separated, `*` for any). Requests without an `Origin` header (all non-browser clients) are always allowed. |
+| `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | API base URL. |
+| `LEXAPI_MCP_READ_ONLY` | off | `true` hides every tool that is not read-only (webhook writes, `lex_extract_citations`). |
+| `LEXAPI_TIMEOUT_MS` | `55000` | Deadline per tool call, retries included. Raise it only together with your MCP client's tool timeout. |
 
-The key is sent only as the `x-api-key` header to LexAPI; it is never logged or included in tool output. A `LEXAPI_API_KEY` containing whitespace or control characters (e.g. a multi-line paste) is rejected at startup.
+`npm run start:http` (or the `Dockerfile`) runs the Streamable HTTP transport (`POST /v1`, `GET /health`, `PORT` default 3000). A self-hosted copy accepts API keys only; sign in with LexAPI is a feature of the hosted server.
 
-### Hosting the HTTP server
-
-`npm run start:http` (or the `Dockerfile`) runs the Streamable HTTP transport (`POST /v1`, `GET /health`). Self-hosted, it accepts LexAPI API keys (`Authorization: Bearer lex_…` or `x-api-key: lex_…`); a request without one gets `401`. A value that cannot be an API key (it contains a `.` or is longer than 8192 characters) is answered `401` and never forwarded.
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `PORT` | `3000` | Listen port. |
-| `LEXAPI_BASE_URL` | `https://lex-api.com/api/v1` | LexAPI REST base. |
-
-Sign in with LexAPI is a feature of the hosted server at `https://mcp.lex-api.com/v1`: it needs an OAuth client registered with LexAPI, so a self-hosted copy runs with API keys only. The OAuth-related settings in `src/oauth/config.ts` (`LEXAPI_OAUTH_*`, `LEXAPI_MCP_*`) are for that deployment; the server refuses to start if they are set incompletely.
-
-**`/health`** returns `status`, `name`, `version`, `tools` and `oauth` (whether sign-in is enabled). It never contains addresses, tokens or configuration values.
-
-**Timeouts.** MCP clients give up on a tool call after their own timeout (60 s by default in the official SDK; Claude Code: `MCP_TOOL_TIMEOUT`). A first, live EUR-Lex fetch can take longer. The server gives each tool call one 55 s deadline — retries and rate-limit waits included — and then returns a message the model can act on, instead of the client's generic timeout error. When the client sends a progress token, the server also sends a progress notification every 10 s; whether that keeps the call alive is up to the client (the official SDK only extends its timeout on progress when the caller opts into `resetTimeoutOnProgress`, and a server cannot detect that), so the deadline stays 55 s. If you raise your client's timeout, raise `LEXAPI_TIMEOUT_MS` to match. Cancelling a call aborts the request to LexAPI.
-
-## Troubleshooting
-
-- **`LEXAPI_API_KEY is not set`** — the variable isn't reaching the spawned process; check the `env` block of your MCP client config.
-- **`LexAPI error 401`** — the key is wrong or revoked; create a new one at the dashboard.
-- **Hosted server: "LexAPI sign-in expired or was revoked"** — the connection was disconnected (for example from the dashboard); reconnect LexAPI in your client to sign in again.
-- **Hosted server: `403 Subscription inactive`** — the signed-in account's paid plan is not active; the same as with an API key.
-- **`LexAPI error 402 (CREDITS_EXHAUSTED)`** — the monthly credit pool is used up. The message gives the reset date; top-ups and upgrades are on the dashboard.
-- **`LexAPI error 429`** — the per-minute rate limit of your key (FREE: 15 per minute). Short waits are retried once automatically; otherwise the message says how long to wait.
-- **`LexAPI error 403`** — the plan doesn't include the feature (e.g. export below BUSINESS, or semantic search on a legacy pre-credits FREE plan).
-- **`LexAPI error 400` creating a webhook** — the details name the problem (unsupported criteria, a watch list over the plan limit, or the plan's webhook limit; FREE has none).
+Error messages state what to do (a 402 gives the credits needed and the reset date, a 429 how long to wait). Full API reference: [lex-api.com/docs](https://lex-api.com/docs?ref=npm-mcp).
 
 ## Privacy and support
 
@@ -168,16 +127,10 @@ Using LexAPI content to train, fine-tune or evaluate models needs a separate lic
 ## Development
 
 ```bash
-git clone https://github.com/Lex-API/lexapi-mcp.git
-cd lexapi-mcp
 npm install
-npm test                       # build + unit and transport tests (mocked API, no network)
+npm test            # build + tests (mocked API, no network)
 npm run typecheck && npm run lint
-node scripts/smoke-stdio.mjs   # stdio smoke test against a local mock API
-LEXAPI_API_KEY=lex_... node scripts/smoke-stdio.mjs --live   # against the real API (spends roughly 6–25 credits)
 ```
-
-`npm run start:http` runs the hosted Streamable HTTP transport (`POST /v1`, `GET /health`, port from `PORT`, default 3000; see *Hosting the HTTP server* above); the `Dockerfile` builds it. The OAuth tests run against a local mock authorization server (`tests/oauth-mock.ts`), no network.
 
 ## License
 

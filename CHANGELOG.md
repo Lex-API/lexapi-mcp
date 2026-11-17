@@ -2,7 +2,15 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
-## 0.5.1 — unreleased
+## 0.5.2 — unreleased
+
+### Changed
+- Shorter README; several tool descriptions trimmed. No change to tool names, input schemas or annotations; the only output text that changes is `asOfCaveat.note` (below).
+- `lex_national_semantic_case_law` / `lex_national_semantic_legislation`: `partial: true` is described as a search that did not finish, not as a coverage gap.
+- `lex_semantic_legislation`: the description, the `asOf` parameter and the server instructions say that a search without `asOf` returns the indexed texts as they are, with repealed or amended provisions unmarked, and that today's date as `asOf` gives current law. The `asOf` range reads "to today (UTC)".
+- `asOfCaveat.note` calls the text of unresolved hits the indexed text (was "the LATEST text").
+
+## 0.5.1 — 2026-11-16
 
 ### Changed
 - Every tool carries `annotations.title`. `lex_update_webhook` is annotated `destructiveHint: true` (it replaces the watch list and can remove search criteria).

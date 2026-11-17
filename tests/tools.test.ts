@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { runTool } from '../src/server.js';
+import { runTool, SERVER_INSTRUCTIONS } from '../src/server.js';
 import { selectTools, tools, type ToolDef } from '../src/tools.js';
 import { clientWith, fakeDocument, parseText } from './helpers.js';
 
@@ -78,6 +78,16 @@ describe('input validation', () => {
     expect(ok('lex_get_document', { celexNumber: '32016r0679' })).toBe(true);
     expect(ok('lex_get_document', { celexNumber: 'CELEX:32016R0679' })).toBe(true);
     expect(ok('lex_get_document', { celexNumber: 'GDPR!' })).toBe(false);
+  });
+
+  it('says what a search without asOf returns', () => {
+    const tool = byName.lex_semantic_legislation;
+    const schema = z.toJSONSchema(z.object(tool.inputSchema)) as { properties: Record<string, { description?: string }> };
+    const asOf = schema.properties.asOf.description ?? '';
+    expect(tool.description).toMatch(/pass today's date/);
+    expect(asOf).toMatch(/Omitted: the indexed texts/);
+    expect(asOf).not.toMatch(/current law/i);
+    expect(SERVER_INSTRUCTIONS).toMatch(/today's date for current law/);
   });
 
   it('validates asOf as a date', () => {
@@ -367,6 +377,7 @@ describe('lex_semantic_legislation', () => {
     expect(c.retryable).toEqual(['32013R0575 art_1 (fetch_pending)']);
     expect(c.needsCredits).toEqual(['32016R0679 art_1 (insufficient_credits)']);
     expect(c.unavailable).toEqual(['32006R1907 art_1 (article_not_in_version)']);
+    expect(c.note).toBe('Unresolved hits carry the indexed text, not the text in force on 2019-06-01.');
     expect(c.guidance.join(' ')).toMatch(/not in force on 2019-06-01.*that is the answer/);
     expect(c.guidance.join(' ')).toMatch(/call again shortly/);
     expect(c.guidance.join(' ')).toMatch(/credit pool could not cover/);
