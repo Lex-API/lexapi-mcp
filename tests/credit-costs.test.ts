@@ -1,14 +1,18 @@
 // The credit costs written in tool descriptions, compared with the API's
 // operation weights. The weights are a checked-in copy
 // (tests/fixtures/operation-weights.json: operation names and numbers);
-// scripts/refresh-operation-weights.mjs rewrites it from the API source.
+// scripts/refresh-operation-weights.mjs rewrites it from the API's
+// operation-weight module.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { describeError, LexAPIError } from '../src/errors.js';
+import { runTool } from '../src/server.js';
 import { tools } from '../src/tools.js';
+import { clientWith, parseText } from './helpers.js';
 
 interface Fixture { weights: Record<string, number>; corpusHit: number; cellarHit: number }
 const fx = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/operation-weights.json', import.meta.url)), 'utf8')) as Fixture;
@@ -114,4 +118,79 @@ describe('credit costs in descriptions match the API operation weights', () => {
       }
     });
   }
+});
+
+describe('credit costs outside the descriptions match the weights too', () => {
+  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  const run = async (name: string, args: Record<string, unknown>, reply: Parameters<typeof clientWith>[0]) => {
+    const { client } = clientWith(reply);
+    return runTool(byName[name], z.object(byName[name].inputSchema).parse(args), client);
+  };
+  const exhausted = (weight: number) => ({
+    status: 402,
+    body: { success: false, error: { code: 'CREDITS_EXHAUSTED', message: 'Credit pool exhausted', details: { weight, available: 0 } } },
+  });
+
+  it('402 text: the cheap calls it names', () => {
+    expect(w.resolve).toBe(w.citation_cites);
+    expect(describeError(new LexAPIError(402, 'CREDITS_EXHAUSTED', 'x'))).toContain(`lex_resolve or lex_cites cost ${credits(w.resolve)}`);
+  });
+
+  it('402 on a national document read: what is reserved and what it settles at', async () => {
+    const r = await run('lex_get_national_document', { jurisdiction: 'at', id: 'AT-NOR-1' }, () => exhausted(w.document_fetch));
+    expect(r.content[0].text).toContain(`reserves ${credits(w.document_fetch)} and settles at ${fx.corpusHit}, so the pool must hold ${w.document_fetch}`);
+  });
+
+  it('lex_export: the 402 text and the billing line of a credit-plan result', async () => {
+    const r = await run('lex_export', {}, () => exhausted(20));
+    expect(r.content[0].text).toContain(`admitted for ${credits(w.export_per_row)} and then reserves ${credits(w.export_per_row)} per matching row`);
+    const ok = await run('lex_export', {}, () => ({
+      raw: [
+        JSON.stringify({ _meta: { totalMatching: 1 } }),
+        JSON.stringify({ celex: '32016R0679', title: 'GDPR' }),
+        JSON.stringify({ _done: { written: 1, truncated: false, credits: { operation_weight: 1 } } }),
+      ].join('\n'),
+      headers: { 'content-type': 'application/x-ndjson' },
+    }));
+    expect(parseText(ok).billing).toContain(`${credits(w.export_per_row)} per row returned, at least ${w.export_per_row}`);
+  });
+
+  it('README credits column', () => {
+    const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8');
+    const column: Record<string, string> = {};
+    for (const line of readme.split('\n')) {
+      const cells = line.split('|').map((c) => c.trim());
+      if (cells.length >= 5 && cells[1].startsWith('`lex_')) column[cells[1]] = cells[3];
+    }
+    const doc = `${fx.corpusHit} · ${fx.cellarHit} · ${w.document_fetch}`;
+    expect(column).toEqual({
+      '`lex_semantic_legislation`': `${w.semantic_legis} (+ up to ${w.document_fetch} per version fetch with \`asOf\`)`,
+      '`lex_semantic_case_law`': `${w.semantic_case_law} (${w.semantic_case_law_hyde} with \`hyde\`)`,
+      '`lex_search`': `${w.search_keyword} per page`,
+      '`lex_recent_documents`': `${w.recent_documents} per 10 results`,
+      '`lex_resolve`': `${w.resolve}`,
+      '`lex_get_document`': `${fx.corpusHit} corpus · ${fx.cellarHit} Cellar · ${w.document_fetch} live`,
+      '`lex_get_documents_batch`': 'per document, as above',
+      '`lex_get_metadata`': doc,
+      '`lex_get_document_by_url`': doc,
+      '`lex_document_versions`': `${w.document_versions}`,
+      '`lex_get_document_version`': `${w.document_version_fetch}`,
+      '`lex_cited_by` · `lex_cites`': `${w.citation_cites}`,
+      '`lex_citation_network`': `${w.citation_network}`,
+      '`lex_citation_path`': `${w.citation_path}`,
+      '`lex_related`': `${w.citation_related}`,
+      '`lex_citation_stats`': `${w.citation_stats}`,
+      '`lex_extract_citations`': `${w.citation_extract} (${fx.corpusHit} if already done)`,
+      '`lex_transposition`': `${w.citation_transposition}`,
+      '`lex_counterparts`': `${w.citation_counterparts}`,
+      '`lex_export`': `${w.export_per_row} per row, at least ${w.export_per_row} per call`,
+      '`lex_national_coverage`': 'free',
+      '`lex_list_national_documents`': `${w.national_documents_list}`,
+      '`lex_get_national_document`': `${fx.corpusHit}`,
+      '`lex_national_semantic_case_law` · `lex_national_semantic_legislation`': `${w.semantic_case_law}`,
+      '`lex_info`': 'free',
+      '`lex_list_webhooks` · `lex_get_webhook`': 'free',
+      '`lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook`': 'free',
+    });
+  });
 });

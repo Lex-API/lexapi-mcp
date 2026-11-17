@@ -189,24 +189,23 @@ const webhookId = z.string().trim().min(1).max(64).describe('Webhook id (from le
 const NATIONAL_DOMAIN_NOTE = 'NATIONAL_LAW is EUR-Lex\'s own collection; member-state law is in the lex_national_* tools.';
 // One language per national index: the API answers any other value with a 400.
 const nationalLanguage = lang('Not needed. Only the country\'s own language is accepted (e.g. "de" for AT); any other value is a 400 that names it.').optional();
-// Webhook matching rules (the API's validateCriteria): the same keys on create and update.
-const webhookCriteria = (describe: boolean) => {
-  const d = <T extends z.ZodType>(schema: T, text: string): T => (describe ? schema.describe(text) : schema);
-  const oneOrList = () => z.union([z.string(), z.array(z.string())]).optional();
-  const years = z.number().int().min(1950).max(2100);
-  return z.object({
-    query: d(z.string().optional(), 'Words that must all appear in the title (whole words; 4+ characters match word starts; trailing * for prefixes).'),
-    documentType: d(oneOrList(), 'Document type(s), lex_search values.'),
-    author: d(oneOrList(), 'Issuing institution(s), lex_search values.'),
-    subdomain: d(oneOrList(), 'Replaces the default (EU law, no consolidated texts); "consolidated" = consolidated texts only.'),
-    dateFrom: d(isoDate().optional(), 'Lower bound on the document date (YYYY-MM-DD).'),
-    dateTo: d(isoDate().optional(), 'Upper bound on the document date (YYYY-MM-DD).'),
-    year: d(z.union([years, z.array(years)]).optional(), 'Document year(s).'),
-    textScope: d(z.enum(['title', 'title-text', 'any']).optional(), 'Accepted for compatibility; every value matches titles.'),
-    domain: d(z.enum(['EU_LAW', 'ALL']).optional(), 'Accepted for compatibility; only EU law is matched.'),
-    language: d(z.string().optional(), 'Accepted for compatibility; no effect.'),
-  }).strict();
-};
+// Webhook matching rules, as the API validates them: the same keys and value
+// forms on create and update.
+const criteriaYear = z.union([z.number().int().min(1950).max(2100), z.string().regex(/^\d{4}$/, 'a 4-digit year')]);
+const oneOrList = () => z.union([z.string(), z.array(z.string())]).optional();
+const webhookCriteria = z.object({
+  query: z.string().nullable().optional().describe('Words that must all appear in the title (whole words; 4+ characters match word starts; trailing * for prefixes).'),
+  documentType: oneOrList().describe('Document type(s), lex_search values.'),
+  author: oneOrList().describe('Issuing institution(s), lex_search values.'),
+  subdomain: oneOrList().describe('Replaces the default (EU law, no consolidated texts); "consolidated" = consolidated texts only.'),
+  dateFrom: isoDate('Lower bound on the document date (YYYY-MM-DD).').optional(),
+  dateTo: isoDate('Upper bound on the document date (YYYY-MM-DD).').optional(),
+  year: z.union([criteriaYear, z.array(criteriaYear)]).optional().describe('Document year(s).'),
+  textScope: z.enum(['title', 'title-text', 'any']).optional().describe('Accepted for compatibility; every value matches titles.'),
+  domain: z.string().refine((v) => ['EU_LAW', 'ALL'].includes(v.toUpperCase()), 'EU_LAW or ALL').optional()
+    .describe('EU_LAW or ALL. Accepted for compatibility; only EU law is matched.'),
+  language: z.string().optional().describe('Accepted for compatibility; no effect.'),
+}).strict();
 
 const view = z.enum(['auto', 'outline', 'full']).default('auto').describe(
   'auto: the body if it fits maxChars, else an outline. full: body up to maxChars, then offset to continue.',
@@ -255,7 +254,7 @@ const READ: ToolAnnotations = { readOnlyHint: true, idempotentHint: true, openWo
  */
 function explain402(why: string) {
   return (err: unknown): never => {
-    if (err instanceof LexAPIError && err.status === 402 && err.code !== 'NATIONAL_ALLOWANCE_EXHAUSTED') {
+    if (err instanceof LexAPIError && err.status === 402 && err.code === 'CREDITS_EXHAUSTED') {
       throw new LexAPIError(err.status, err.code, `${err.message.trim().replace(/[.\s]+$/, '')}. ${why}`, err.details, err.retryAfterSeconds, err.resetsAt);
     }
     throw err;
@@ -358,7 +357,7 @@ export const tools: ToolDef[] = [
       author: oneOrMany(AUTHORS, 'Issuing institution(s).').optional(),
       procedure: oneOrMany(PROCEDURES, 'Legislative procedure(s).').optional(),
       domain: z.enum(['EU_LAW', 'NATIONAL_LAW', 'ALL']).optional().describe(`EUR-Lex collection. ${NATIONAL_DOMAIN_NOTE}`),
-      subdomain: oneOrMany(SUBDOMAINS, 'EUR-Lex sub-collection(s), e.g. "case-law", "legislation", "consolidated".').optional(),
+      subdomain: oneOrMany(SUBDOMAINS, 'EUR-Lex sub-collection(s), e.g. "case-law", "legislation", "consolidated"; the national case-law value is EUR-Lex\'s own collection, not the lex_national_* tools.').optional(),
       language: lang('Result language (default en).').optional(),
       maxPages: z.number().int().min(1).max(100).default(1).describe('Result pages to fetch (3 credits each; clamped to the plan\'s maxPages, see lex_info). More pages help when a tight date filter reports postFilteredBy "date".'),
       fresh: z.boolean().optional().describe('Bypass the 60-minute result cache.'),
@@ -380,7 +379,7 @@ export const tools: ToolDef[] = [
       documentType: z.enum(DOCUMENT_TYPES).optional().describe('Only this document type.'),
       author: z.enum(AUTHORS).optional().describe('Only this issuing institution.'),
       domain: z.enum(['EU_LAW', 'NATIONAL_LAW', 'ALL']).optional().describe(`EUR-Lex collection. ${NATIONAL_DOMAIN_NOTE}`),
-      subdomain: z.enum(SUBDOMAINS).optional().describe('EUR-Lex sub-collection.'),
+      subdomain: z.enum(SUBDOMAINS).optional().describe('EUR-Lex sub-collection; the national case-law value is EUR-Lex\'s own collection, not the lex_national_* tools.'),
       language: lang('Keep documents available in this language (default en).').optional(),
       limit: z.number().int().min(1).max(500).default(20).describe('Max results (each 10 cost 3 credits when filtered).'),
     },
@@ -608,11 +607,11 @@ export const tools: ToolDef[] = [
     name: 'lex_semantic_legislation',
     title: 'Semantic search over EU legislation',
     description:
-      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref, law_title, score, snippet. An article_ref art_N is the articleId for lex_get_document; anx_N (annex), rct_a-b (recitals) and j_N (a text window) are not article ids, and lex_get_document include reads those parts. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a date. For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, repealed and since-amended provisions are returned unmarked. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
+      'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref, law_title, score, snippet. An article_ref art_N is the articleId for lex_get_document; any other form (anx_N annex, rct_a-b recitals, par_N / j_N text windows) is not an article id, and lex_get_document include reads those parts. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a date. For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, repealed and since-amended provisions are returned unmarked. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
     inputSchema: {
       query: z.string().trim().min(1).max(1000).describe('Natural-language description of the provision you are looking for.'),
       asOf: isoDate('The law as in force on this date (YYYY-MM-DD, 1952-01-01 to today (UTC)). Hits then carry the version in force (asOfResolved: true, asOfVersion). Unresolved hits keep the indexed text with an asOfReason, explained in asOfCaveat. Omitted: the indexed texts as they are (the act as published, or its latest consolidated version where indexed).').optional(),
-      limit: z.number().int().min(1).max(50).default(10).describe('Max hits (clamped to the plan). Merged consolidated/base duplicates can make a page shorter.'),
+      limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap: FREE 10, STARTER 20, higher 50). Merged consolidated/base duplicates can make a page shorter.'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor. Default ≈0.7 server-side; a lower value (e.g. 0.5) returns more hits, 0 disables it.'),
       language: z.enum(SEMANTIC_LANGUAGES).optional().describe('Preferred language of the text (default en); acts without it come back in another language, labelled.'),
       include: z.array(z.literal('text')).optional().describe('["text"] returns the full matched article text instead of a ~600-character snippet.'),
@@ -643,7 +642,7 @@ export const tools: ToolDef[] = [
       'Find CJEU / General Court judgments, orders and AG opinions by meaning. Returns cases with celex (the id works with lex_get_document), case number, ECLI, court, date, score and a summary. hyde: true rewrites short keyword-style queries for better recall (15 credits instead of 5, +1–3 s; refunded to 5 if it falls back). Cost: 5 credits.',
     inputSchema: {
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
-      limit: z.number().int().min(1).max(100).default(10).describe('Max cases (clamped to the plan). One result per case.'),
+      limit: z.number().int().min(1).max(100).default(10).describe('Max cases (plan cap: FREE 10, STARTER 20, PROFESSIONAL 50, higher 100). One result per case.'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor. Default ≈0.7 server-side; a lower value (e.g. 0.5) returns more hits, 0 disables it.'),
       language: z.enum(SEMANTIC_LANGUAGES).optional().describe('Preferred language (default en).'),
       hyde: z.boolean().optional().describe('LLM query rewriting for terse queries (15 credits).'),
@@ -740,7 +739,7 @@ export const tools: ToolDef[] = [
     name: 'lex_get_national_document',
     title: 'Fetch a national document',
     description:
-      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; view "full" with offset returns the text. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew returns a distinct error (410) and nothing of it is served. Cost: 1 credit.',
+      'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; view "full" with offset returns the text. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew returns a distinct error (410) and nothing of it is served. attribution must be kept with republished content (Terms). Cost: 1 credit.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
@@ -762,7 +761,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_case_law',
     title: 'Semantic search over national case law',
     description:
-      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Cost: 5 credits.',
+      'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). Cost: 5 credits.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
@@ -796,7 +795,7 @@ export const tools: ToolDef[] = [
     name: 'lex_national_semantic_legislation',
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. There is no asOf: hits are the indexed text, and in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where the index has them. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Cost: 5 credits.',
+      'Find one country\'s legislation articles by meaning. There is no asOf: hits are the indexed text, and in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where the index has them. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). Cost: 5 credits.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
@@ -981,7 +980,7 @@ export const tools: ToolDef[] = [
     name: 'lex_transposition',
     title: 'Notified national measures for an EU act',
     description:
-      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+, for live countries only, it also shows which measures LexAPI holds (id, resolved) and adds relations recorded by the national source (provenance "source"). termsRequired: true = the national-source terms are not yet accepted in the dashboard. source.cellar.attribution is the attribution for the Cellar data. Output is bounded (limit, ~40,000 characters); more gives the next offset. Cost: 5 credits per call or page.',
+      'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+, for live countries only, it also shows which measures LexAPI holds (id, resolved) and adds relations recorded by the national source (provenance "source"). termsRequired: true = the national-source terms are not yet accepted in the dashboard. source.cellar.attribution is the attribution for the Cellar data and must be kept with republished content (Terms). Output is bounded (limit, ~40,000 characters); more gives the next offset. Cost: 5 credits per call or page.',
     inputSchema: {
       celexNumber: celex('CELEX number of the EU act'),
       jurisdictions: codeList('Only these countries, e.g. ["es","cz"] (EL = Greece, UK = United Kingdom); default all 28.').optional(),
@@ -1078,7 +1077,7 @@ export const tools: ToolDef[] = [
         includeContent: a.includeContent ? 'true' : 'false',
         includeStubs: a.includeStubs ? 'true' : undefined,
         limit: a.limit,
-      }).catch(explain402('lex_export is admitted for 1 credit and then reserves 1 credit per matching row, up to limit, before any row is returned; a smaller limit needs fewer credits.'));
+      }).catch(explain402('lex_export is admitted for 1 credit and then reserves 1 credit per matching row, up to limit, before any row is returned; once the rows have been counted the 1-credit admission is kept. A smaller limit needs fewer credits.'));
       const lines = Array.isArray(res.body.lines) ? res.body.lines : [];
       let meta: unknown;
       let done: unknown;
@@ -1111,7 +1110,10 @@ export const tools: ToolDef[] = [
         // count) | recovered (the server's recovery sweep took the export's billing record mid-stream)
         truncatedBy: isObj(done) ? done.truncatedBy : undefined,
         skippedStubs: isObj(done) ? done.skippedStubs : undefined,
-        billing: '1 credit per row returned, at least 1; credits reserved for rows not returned are refunded.',
+        // Only credit plans get a settled charge on the trailer.
+        billing: isObj(done) && isObj(done.credits)
+          ? '1 credit per row returned, at least 1; credits reserved for rows not returned are refunded.'
+          : undefined,
         rows: rows.map((r) => {
           if (!isObj(r)) return r;
           const shaped = shapeMetadata(r);
@@ -1176,7 +1178,7 @@ export const tools: ToolDef[] = [
     inputSchema: {
       name: z.string().trim().min(1).max(200).describe('Label.'),
       url: webhookUrl('Must be a public https URL (port 443 or 8443, a public domain name or address); it receives the POSTs.'),
-      searchCriteria: webhookCriteria(true).optional().describe('Filters for documents.new, in the lex_search vocabulary.'),
+      searchCriteria: webhookCriteria.optional().describe('Filters for documents.new, in the lex_search vocabulary.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional().describe('Base acts to watch (not consolidated versions or corrigenda).'),
       secret: z.string().min(16).max(256).optional().describe('Own signing secret; generated when omitted.'),
     },
@@ -1207,7 +1209,7 @@ export const tools: ToolDef[] = [
       id: webhookId,
       name: z.string().trim().min(1).max(200).optional().describe('New label.'),
       url: webhookUrl('Must be a public https URL.').optional().describe('Must be a public https URL.'),
-      searchCriteria: z.union([webhookCriteria(false), z.null()]).optional().describe('Replaces the stored criteria as a whole; null removes them. The fields are those of lex_create_webhook, described there.'),
+      searchCriteria: webhookCriteria.nullable().optional().describe('Replaces the stored criteria as a whole; null removes them.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional().describe('Replaces the whole watch list; [] empties it.'),
       status: z.enum(['ACTIVE', 'PAUSED']).optional().describe('ACTIVE re-enables, PAUSED stops deliveries.'),
     },

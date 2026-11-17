@@ -3,7 +3,7 @@
 // operation-weight module, so tests/credit-costs.test.ts compares the costs
 // written in the tool descriptions with what the API charges.
 //
-//   node scripts/refresh-operation-weights.mjs <path to the API's server/utils/operationWeights.js>
+//   node scripts/refresh-operation-weights.mjs <path to the API's operation-weight module>
 //
 // Only operation names and numbers are copied. Run it when the API changes a
 // weight, then fix whatever description the test names.
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const source = process.argv[2];
 if (!source) {
-  console.error('usage: node scripts/refresh-operation-weights.mjs <path to operationWeights.js>');
+  console.error('usage: node scripts/refresh-operation-weights.mjs <path to the API\'s operation-weight module>');
   process.exit(2);
 }
 
@@ -28,7 +28,7 @@ const fixture = {
   cellarHit: mod.CELLAR_HIT_WEIGHT,
 };
 if (!Object.keys(fixture.weights).length || typeof fixture.corpusHit !== 'number' || typeof fixture.cellarHit !== 'number') {
-  console.error(`${source} does not export WEIGHTS, CORPUS_HIT_WEIGHT and CELLAR_HIT_WEIGHT`);
+  console.error(`${source} is not the operation-weight module (no weights table, or no corpus / Publications Office settle weights)`);
   process.exit(1);
 }
 

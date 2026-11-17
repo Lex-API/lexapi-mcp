@@ -79,8 +79,13 @@ describe('national-law tools', () => {
     for (const name of NATIONAL_TOOLS.filter((n) => n !== 'lex_national_coverage')) {
       const d = byName[name].description;
       expect(d, name).toMatch(/[Cc]ost/);
-      expect(d, name).not.toMatch(/not yet live|attribution to be kept|national-law allowance/i);
+      expect(d, name).not.toMatch(/not yet live|national-law allowance/i);
     }
+    // Attribution stays on the tools that return it: not every client shows the instructions.
+    for (const name of ['lex_get_national_document', 'lex_national_semantic_case_law', 'lex_national_semantic_legislation']) {
+      expect(byName[name].description, name).toMatch(/attribution must be kept with republished content \(Terms\)/);
+    }
+    expect(SERVER_INSTRUCTIONS).toMatch(/National results, and the Cellar-derived data of lex_transposition, carry attribution/);
     expect(SERVER_INSTRUCTIONS).toMatch(/serve only the countries lex_national_coverage lists as live/);
     expect(SERVER_INSTRUCTIONS).toMatch(/a call for a country not yet live returns an error/);
     expect(SERVER_INSTRUCTIONS).toMatch(/Terms require this attribution to be kept with republished content/);
@@ -94,7 +99,7 @@ describe('national-law tools', () => {
       body: { success: false, error: { code: 'CREDITS_EXHAUSTED', message: 'Credit pool exhausted', details: { weight: 5, available: 3 } } },
     }));
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/reserves 5 credits and settles at 1/);
+    expect(result.content[0].text).toMatch(/reserves 5 credits and settles at 1/); // numbers checked against the weights in credit-costs.test.ts
   });
 
   it('language is described per country, not as "default en"', () => {

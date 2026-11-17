@@ -132,7 +132,7 @@ npm test            # build + tests (mocked API, no network)
 npm run typecheck && npm run lint
 ```
 
-`tests/fixtures/operation-weights.json` holds the API's credit weights, which a test compares with the costs in the tool descriptions. After a weight changes in the API: `node scripts/refresh-operation-weights.mjs <path to the API's operationWeights.js>`.
+`tests/fixtures/operation-weights.json` holds the API's credit weights, which a test compares with the costs in the tool descriptions. After a weight changes in the API: `node scripts/refresh-operation-weights.mjs <path to the API's operation-weight module>`.
 
 ## License
 

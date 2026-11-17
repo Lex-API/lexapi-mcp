@@ -130,6 +130,8 @@ describe('input validation', () => {
         if (!v.description) missing.push(`${name}.${[...path, k].join('.')}`);
         walk(name, [...path, k], v);
       }
+      // Nested objects behind a union (e.g. criteria | null) count too.
+      for (const alt of s?.anyOf ?? []) walk(name, path, alt);
     };
     for (const t of tools) walk(t.name, [], z.toJSONSchema(z.object(t.inputSchema), { io: 'input' }));
     expect(missing).toEqual([]);
@@ -656,8 +658,8 @@ describe('identity, versions, info, export', () => {
       headers: { 'content-type': 'application/x-ndjson' },
     }));
     expect(Object.fromEntries(calls[0].url.searchParams)).toEqual({ documentType: 'Regulation', includeContent: 'false', limit: '20' });
-    expect(data.billing).toMatch(/1 credit per row returned.*refunded/);
-    delete data.billing;
+    // No settled charge on the trailer (a plan without credits): no billing line.
+    expect(data).not.toHaveProperty('billing');
     expect(data).toEqual({ totalMatching: 120, returned: 1, truncated: true, skippedStubs: 0, rows: [{ celex: '32016R0679', title: 'GDPR', documentType: 'Regulation', lastSeenAt: '2026-10-01' }] });
   });
 });
@@ -685,8 +687,24 @@ describe('webhook tools', () => {
   it('update takes the same typed criteria as create, and says what it replaces', () => {
     const s = z.object(byName.lex_update_webhook.inputSchema);
     expect(s.safeParse({ id: 'w1', searchCriteria: { query: 'AI', documentType: ['regulation'], year: 2026 } }).success).toBe(true);
-    expect(s.safeParse({ id: 'w1', searchCriteria: { query: 'AI', bogus: 1 } }).success).toBe(false);
+    const bad = s.safeParse({ id: 'w1', searchCriteria: { query: 'AI', bogus: 1 } });
+    expect(bad.success).toBe(false);
+    // The message names the failing key, not just "Invalid input".
+    expect(JSON.stringify(bad.error?.issues)).toMatch(/bogus/);
+    const badDate = s.safeParse({ id: 'w1', searchCriteria: { dateFrom: '1 June' } });
+    expect(badDate.error?.issues[0].path).toEqual(['searchCriteria', 'dateFrom']);
+    expect(badDate.error?.issues[0].message).toMatch(/YYYY-MM-DD/);
     expect(s.safeParse({ id: 'w1', searchCriteria: null }).success).toBe(true);
+    // Value forms the API accepts are accepted on create and update alike.
+    const create = z.object(byName.lex_create_webhook.inputSchema);
+    for (const criteria of [{ year: '2026' }, { year: ['2025', 2026] }, { domain: 'eu_law' }, { query: null, documentType: 'regulation' }]) {
+      expect(s.safeParse({ id: 'w1', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(true);
+      expect(create.safeParse({ name: 'n', url: 'https://e.com', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(true);
+    }
+    for (const criteria of [{ year: '26' }, { domain: 'NATIONAL_LAW' }, { textScope: 'text' }]) {
+      expect(s.safeParse({ id: 'w1', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(false);
+      expect(create.safeParse({ name: 'n', url: 'https://e.com', searchCriteria: criteria }).success, JSON.stringify(criteria)).toBe(false);
+    }
     expect((byName.lex_update_webhook.inputSchema.watchCelex as any).description).toMatch(/Replaces the whole watch list/);
     expect((byName.lex_update_webhook.inputSchema.searchCriteria as any).description).toMatch(/Replaces the stored criteria as a whole/);
   });
@@ -795,7 +813,12 @@ describe('descriptions (review N3, N9, webhook URLs, N10)', () => {
     }));
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/admitted for 1 credit/);
-    expect(result.content[0].text).toMatch(/before any row is returned; a smaller limit needs fewer credits/);
+    expect(result.content[0].text).toMatch(/before any row is returned; once the rows have been counted the 1-credit admission is kept/);
+    // Only the credit-pool 402 gets the sentence.
+    const other = await call('lex_export', { limit: 200 }, () => ({
+      status: 402, body: { success: false, error: { code: 'PAYMENT_REQUIRED', message: 'x' } },
+    }));
+    expect(other.result.content[0].text).not.toMatch(/admitted for 1 credit/);
     expect(result.content[0].text).toMatch(/needs 200 credits.*40 are available/);
     expect((t.inputSchema.documentType as any).description).toMatch(/matched exactly but ignoring case/);
     expect(t.description).not.toMatch(/No document-date filter/);
