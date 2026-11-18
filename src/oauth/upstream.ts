@@ -4,7 +4,7 @@
 import type { UpstreamAuth } from '../client.js';
 import { UpstreamAuthError } from '../errors.js';
 import { ExchangeError, type ExchangeCaller, type TokenExchanger } from './exchange.js';
-import { expandScopeSet, SCOPE_READ, SCOPE_WEBHOOKS, type ToolScope } from './scope.js';
+import { SCOPE_READ, SCOPE_WEBHOOKS, type ToolScope } from './scope.js';
 
 /**
  * One per HTTP request. A tool call that hits an auth failure records it
@@ -48,15 +48,27 @@ function isInvalidTokenChallenge(www: string | null): boolean {
   return !!www && /\berror\s*=\s*"?invalid_token"?/i.test(www);
 }
 
+const AUTH_PARAM = /\s*([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,"]*))\s*(?:,|$)/y;
+
 /**
- * The scope an `insufficient_scope` challenge of the API asks for, or
- * undefined when the header is not one. Only names this server knows are
- * read from the header.
+ * True for a Bearer challenge whose `error` parameter is exactly
+ * `insufficient_scope`. The parameters are read in order, so the word
+ * inside another parameter's value (an error_description) does not count.
  */
-export function insufficientScopeOf(www: string | null): ToolScope | undefined {
-  if (!www || !/\berror\s*=\s*"?insufficient_scope"?/i.test(www)) return undefined;
-  const m = /\bscope\s*=\s*"([^"]{0,200})"/i.exec(www);
-  return expandScopeSet(m ? m[1] : '').has(SCOPE_WEBHOOKS) ? SCOPE_WEBHOOKS : SCOPE_READ;
+export function isInsufficientScopeChallenge(www: string | null): boolean {
+  const m = www ? /^\s*Bearer\s+/i.exec(www) : null;
+  if (!www || !m) return false;
+  AUTH_PARAM.lastIndex = m[0].length;
+  for (let p = AUTH_PARAM.exec(www); p; p = AUTH_PARAM.exec(www)) {
+    if (p[1].toLowerCase() === 'error') return (p[2] ?? p[3]) === 'insufficient_scope';
+    if (AUTH_PARAM.lastIndex >= www.length) break;
+  }
+  return false;
+}
+
+/** The scope the API requires for a path: its webhook routes need lex:webhooks, every other route lex:read. */
+export function routeScope(path: string): ToolScope {
+  return path === '/webhooks' || path.startsWith('/webhooks/') ? SCOPE_WEBHOOKS : SCOPE_READ;
 }
 
 /**
@@ -91,12 +103,13 @@ export class OAuthUpstreamAuth implements UpstreamAuth {
     return { authorization: `Bearer ${this.current}` };
   }
 
-  onForbidden(info: { wwwAuthenticate: string | null }): Error | undefined {
-    const required = insufficientScopeOf(info.wwwAuthenticate);
-    if (!required) return undefined;
+  onForbidden(info: { wwwAuthenticate: string | null; path: string }): Error | undefined {
+    if (!isInsufficientScopeChallenge(info.wwwAuthenticate)) return undefined;
     // The connection does not include this scope (it can be narrower than
     // the token says): answered as 403 insufficient_scope while the response
-    // is not committed, so the client can ask the user for it.
+    // is not committed, so the client can ask the user for it. The scope is
+    // the one the called route requires, not a value read from the header.
+    const required = routeScope(info.path);
     const e = new UpstreamAuthError('insufficient_scope', 403, `required scope: ${required}`, undefined, required);
     this.gate?.fail(e);
     return e;

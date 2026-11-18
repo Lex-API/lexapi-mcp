@@ -272,9 +272,9 @@ function invalidTokenChallenge(res: ServerResponse, cfg: OAuthConfig, reason: st
 }
 
 /** A valid token that does not permit the request: `403 insufficient_scope`, naming the scope to ask for. */
-function insufficientScope(res: ServerResponse, cfg: OAuthConfig, description: string, required?: ToolScope): void {
-  writeJson(res, 403, { error: 'insufficient_scope', error_description: description, scope: stepUpScope(cfg, required) }, {
-    'WWW-Authenticate': insufficientScopeChallenge(cfg, description, required),
+function insufficientScope(res: ServerResponse, cfg: OAuthConfig, description: string, required: ToolScope, granted: ReadonlySet<ToolScope>): void {
+  writeJson(res, 403, { error: 'insufficient_scope', error_description: description, scope: stepUpScope(cfg, required, granted) }, {
+    'WWW-Authenticate': insufficientScopeChallenge(cfg, description, required, granted),
   });
 }
 
@@ -405,7 +405,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse, ctx: Ctx): P
   const granted = expandScopeSet(claims.scope);
   const refused = refusedToolCall(parsed.body, selectTools({ readOnly: readOnlyFromEnv(ctx.env) }), granted);
   if (refused) {
-    insufficientScope(res, oauth.cfg, `${refused.name} needs the ${refused.scope} scope`, refused.scope);
+    insufficientScope(res, oauth.cfg, `${refused.name} needs the ${refused.scope} scope`, refused.scope, granted);
     return;
   }
   await serveWithOAuth(req, res, parsed.body, cred.token, claims, granted, oauth, ctx);
@@ -463,7 +463,7 @@ async function serveWithOAuth(
   const failure = gate.failure;
   if (failure) {
     reader?.cancel().catch(() => {});
-    writeUpstreamAuthFailure(res, failure, oauth.cfg);
+    writeUpstreamAuthFailure(res, failure, oauth.cfg, granted);
     return;
   }
 
@@ -517,13 +517,13 @@ export function toWebRequest(req: IncomingMessage): Request {
   return new Request(new URL(req.url ?? '/', 'http://localhost'), { method: req.method ?? 'POST', headers });
 }
 
-function writeUpstreamAuthFailure(res: ServerResponse, err: UpstreamAuthError, cfg: OAuthConfig): void {
+function writeUpstreamAuthFailure(res: ServerResponse, err: UpstreamAuthError, cfg: OAuthConfig, granted: ReadonlySet<ToolScope>): void {
   if (err.httpStatus === 401) {
     invalidTokenChallenge(res, cfg, err.description);
     return;
   }
-  if (err.kind === 'insufficient_scope') {
-    insufficientScope(res, cfg, err.description, err.requiredScope);
+  if (err.kind === 'insufficient_scope' && err.requiredScope) {
+    insufficientScope(res, cfg, err.description, err.requiredScope, granted);
     return;
   }
   const message = err.httpStatus === 500

@@ -7,7 +7,7 @@
 // OAuth on but lost the secret must fail loudly, not run with sign-in off).
 
 import { DEFAULT_BASE_URL } from '../client.js';
-import { KNOWN_SCOPES, SCOPE_ALL, stepUpScopes, type ToolScope } from './scope.js';
+import { expandScopeSet, KNOWN_SCOPES, SCOPE_ALL, stepUpScopes, TOOL_SCOPES, type ToolScope } from './scope.js';
 
 export const OAUTH_SCOPE = SCOPE_ALL;
 export const DEFAULT_ISSUER = 'https://lex-api.com';
@@ -170,6 +170,12 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OAuthC
 
   const scopesRaw = (env.LEXAPI_OAUTH_SCOPES ?? '').trim();
   const scopesSupported = scopesRaw ? parseScopeList('LEXAPI_OAUTH_SCOPES', scopesRaw) : [OAUTH_SCOPE];
+  // Every tool must be reachable with the scopes a client can be asked for:
+  // otherwise a challenge could name nothing that permits the call.
+  const covered = expandScopeSet(scopesSupported);
+  if (!TOOL_SCOPES.every((n) => covered.has(n))) {
+    throw new OAuthConfigError(`LEXAPI_OAUTH_SCOPES must cover every tool: list ${OAUTH_SCOPE}, or both ${TOOL_SCOPES.join(' and ')}`);
+  }
   const defaultRaw = (env.LEXAPI_OAUTH_DEFAULT_SCOPE ?? '').trim();
   const defaultScopes = defaultRaw
     ? parseScopeList('LEXAPI_OAUTH_DEFAULT_SCOPE', defaultRaw)
@@ -221,17 +227,17 @@ export function bearerChallenge(cfg: OAuthConfig, error?: { code: 'invalid_token
 
 /**
  * The scope a client is asked for when its token lacks `required`: the
- * narrow names when the authorization server accepts them
- * (LEXAPI_OAUTH_SCOPES), else the default scope. Always a non-empty string
- * of names the authorization server accepts.
+ * scopes the connection already has plus the ones the call needs, so a new
+ * token loses nothing. When the authorization server does not accept all of
+ * those names (LEXAPI_OAUTH_SCOPES), `lex`, which covers them. Always a
+ * non-empty string of accepted names that permits the call.
  */
-export function stepUpScope(cfg: OAuthConfig, required?: ToolScope): string {
-  if (!required) return cfg.defaultScope;
-  const wanted = stepUpScopes(required);
-  return wanted.every((n) => cfg.scopesSupported.includes(n)) ? wanted.join(' ') : cfg.defaultScope;
+export function stepUpScope(cfg: OAuthConfig, required: ToolScope, granted: Iterable<ToolScope> = []): string {
+  const wanted = stepUpScopes(required, granted);
+  return wanted.every((n) => cfg.scopesSupported.includes(n)) ? wanted.join(' ') : OAUTH_SCOPE;
 }
 
 /** The `403 insufficient_scope` challenge (RFC 6750 §3.1): a valid token that does not permit the request. */
-export function insufficientScopeChallenge(cfg: OAuthConfig, description: string, required?: ToolScope): string {
-  return `Bearer realm="lexapi", resource_metadata="${cfg.resourceMetadataUrl}", scope="${stepUpScope(cfg, required)}", error="insufficient_scope", error_description="${authParam(description)}"`;
+export function insufficientScopeChallenge(cfg: OAuthConfig, description: string, required: ToolScope, granted: Iterable<ToolScope> = []): string {
+  return `Bearer realm="lexapi", resource_metadata="${cfg.resourceMetadataUrl}", scope="${stepUpScope(cfg, required, granted)}", error="insufficient_scope", error_description="${authParam(description)}"`;
 }

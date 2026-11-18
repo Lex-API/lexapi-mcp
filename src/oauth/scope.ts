@@ -60,10 +60,14 @@ export function expandScopeSet(scope: unknown): Set<ToolScope> {
 }
 
 /**
- * The scopes a client is asked for when a call needs `required`: a webhook
- * tool names lex:read as well, since a connection that manages webhooks
- * holds both.
+ * The scopes a client is asked for when a call needs `required` and the
+ * connection holds `granted`: what it holds plus what the call needs, in a
+ * fixed order. A webhook tool names lex:read as well, since a connection
+ * that manages webhooks holds both.
  */
-export function stepUpScopes(required: ToolScope): ToolScope[] {
-  return required === SCOPE_WEBHOOKS ? [SCOPE_READ, SCOPE_WEBHOOKS] : [SCOPE_READ];
+export function stepUpScopes(required: ToolScope, granted: Iterable<ToolScope> = []): ToolScope[] {
+  const wanted = new Set<ToolScope>(granted);
+  wanted.add(required);
+  if (required === SCOPE_WEBHOOKS) wanted.add(SCOPE_READ);
+  return TOOL_SCOPES.filter((n) => wanted.has(n));
 }

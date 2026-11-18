@@ -271,6 +271,8 @@ export interface ToolDef {
   description: string;
   /** The description shown in read-only mode, when `description` names a tool that mode hides. */
   readOnlyDescription?: string;
+  /** The description shown to an OAuth connection without lex:read, when `description` names a read tool. */
+  withoutReadDescription?: string;
   inputSchema: z.ZodRawShape;
   annotations: ToolAnnotations;
   /** Not read-only (webhooks, citation extraction). Hidden when LEXAPI_MCP_READ_ONLY is set. */
@@ -1295,6 +1297,8 @@ export const tools: ToolDef[] = [
     title: 'Create a webhook',
     description:
       'Subscribe a URL (must be a public https URL) to (a) new EUR-Lex documents matching searchCriteria and/or (b) changes to watched acts (watchCelex: amendments, corrigenda, repeals, new consolidated versions). Checked hourly; deliveries are free and HMAC-signed. The signing secret is returned only in this response. The number of webhooks is limited by the plan (maxWebhooks in lex_info). Free.',
+    withoutReadDescription:
+      'Subscribe a URL (must be a public https URL) to (a) new EUR-Lex documents matching searchCriteria and/or (b) changes to watched acts (watchCelex: amendments, corrigenda, repeals, new consolidated versions). Checked hourly; deliveries are free and HMAC-signed. The signing secret is returned only in this response. The number of webhooks is limited by the plan. Free.',
     inputSchema: {
       name: z.string().trim().min(1).max(200).describe('Label.'),
       url: webhookUrl('Must be a public https URL (port 443 or 8443, a public domain name or address); it receives the POSTs.'),
@@ -1424,7 +1428,10 @@ export interface SelectToolsOptions {
 
 export function selectTools(opts: SelectToolsOptions = {}): ToolDef[] {
   const { scopes } = opts;
-  const permitted = scopes ? tools.filter((t) => scopes.has(t.scope)) : tools;
+  const permitted = scopes
+    ? tools.filter((t) => scopes.has(t.scope))
+      .map((t) => (t.withoutReadDescription && !scopes.has(SCOPE_READ) ? { ...t, description: t.withoutReadDescription } : t))
+    : tools;
   if (!opts.readOnly) return permitted;
   return permitted.filter((t) => !t.write)
     .map((t) => (t.readOnlyDescription ? { ...t, description: t.readOnlyDescription } : t));

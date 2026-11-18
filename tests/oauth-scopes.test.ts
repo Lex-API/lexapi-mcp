@@ -17,8 +17,8 @@ import { describeError, UpstreamAuthError } from '../src/errors.js';
 import { createHttpServer, refusedToolCall } from '../src/http-server.js';
 import { bearerChallenge, insufficientScopeChallenge, OAuthConfigError, oauthConfigFromEnv, protectedResourceMetadata, stepUpScope } from '../src/oauth/config.js';
 import { expandScopeSet, KNOWN_SCOPES, parseScopeSet, stepUpScopes, TOOL_SCOPES, type ToolScope } from '../src/oauth/scope.js';
-import { insufficientScopeOf, OAuthUpstreamAuth, ResponseGate } from '../src/oauth/upstream.js';
-import { createLexServer } from '../src/server.js';
+import { isInsufficientScopeChallenge, OAuthUpstreamAuth, ResponseGate, routeScope } from '../src/oauth/upstream.js';
+import { createLexServer, NARROWED_INSTRUCTIONS, SERVER_INSTRUCTIONS } from '../src/server.js';
 import { selectTools, tools } from '../src/tools.js';
 import { clientWith } from './helpers.js';
 import { CLIENT_SECRET, RESOURCE, startMockAs, type MockAs } from './oauth-mock.js';
@@ -65,9 +65,16 @@ describe('scope sets (the same vectors as the API)', () => {
     expect(sorted(expandScopeSet('lex:read lex:future offline_access'))).toEqual(['lex:read']);
   });
 
-  it('a webhook tool asks for lex:read as well', () => {
+  it('a step-up asks for what the connection holds plus what the call needs; a webhook tool asks for lex:read as well', () => {
+    const both = ['lex:read', 'lex:webhooks'];
     expect(stepUpScopes('lex:read')).toEqual(['lex:read']);
-    expect(stepUpScopes('lex:webhooks')).toEqual(['lex:read', 'lex:webhooks']);
+    expect(stepUpScopes('lex:webhooks')).toEqual(both);
+    expect(stepUpScopes('lex:read', [])).toEqual(['lex:read']);
+    expect(stepUpScopes('lex:read', expandScopeSet('lex:read'))).toEqual(['lex:read']);
+    expect(stepUpScopes('lex:read', expandScopeSet('lex:webhooks'))).toEqual(both);
+    expect(stepUpScopes('lex:webhooks', expandScopeSet('lex:read'))).toEqual(both);
+    expect(stepUpScopes('lex:webhooks', expandScopeSet('lex:webhooks'))).toEqual(both);
+    for (const required of TOOL_SCOPES) expect(stepUpScopes(required, expandScopeSet('lex'))).toEqual(both);
   });
 });
 
@@ -214,6 +221,16 @@ describe('tool selection', () => {
     expect(names('lex:webhooks', true)).toEqual(['lex_list_webhooks', 'lex_get_webhook']);
   });
 
+  it('without lex:read, lex_create_webhook does not point at lex_info; with it, and for an API key, the description is unchanged', () => {
+    const create = (opts: Parameters<typeof selectTools>[0]) => selectTools(opts).find((t) => t.name === 'lex_create_webhook')!.description;
+    const full = tools.find((t) => t.name === 'lex_create_webhook')!.description;
+    expect(full).toContain('(maxWebhooks in lex_info)');
+    expect(create({})).toBe(full);
+    expect(create({ scopes: expandScopeSet('lex') })).toBe(full);
+    expect(create({ scopes: expandScopeSet('lex:webhooks') })).toBe(full.replace(' (maxWebhooks in lex_info)', ''));
+    for (const t of selectTools({ scopes: expandScopeSet('lex:webhooks') })) for (const r of READ_TOOLS) expect(t.description, t.name).not.toContain(r);
+  });
+
   it('what a lex:read connection is shown never names a webhook tool', () => {
     for (const t of selectTools({ scopes: new Set<ToolScope>(['lex:read']) })) {
       const shown = JSON.stringify([t.description, z.toJSONSchema(z.object(t.inputSchema), { io: 'input' })]);
@@ -276,6 +293,10 @@ describe('configuration: LEXAPI_OAUTH_SCOPES and LEXAPI_OAUTH_DEFAULT_SCOPE', ()
       { LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' },
       { LEXAPI_OAUTH_DEFAULT_SCOPE: 'offline_access' },
       { LEXAPI_OAUTH_SCOPES: 'lex:read', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex' },
+      // Scopes that do not cover every tool: a challenge could not name what a call needs.
+      { LEXAPI_OAUTH_SCOPES: 'lex:read' },
+      { LEXAPI_OAUTH_SCOPES: 'lex:webhooks' },
+      { LEXAPI_OAUTH_SCOPES: 'lex:read', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' },
     ] as Array<Record<string, string>>) {
       expect(() => cfg(env), JSON.stringify(env)).toThrow(OAuthConfigError);
     }
@@ -286,13 +307,35 @@ describe('configuration: LEXAPI_OAUTH_SCOPES and LEXAPI_OAUTH_DEFAULT_SCOPE', ()
   it('the insufficient_scope challenge names scopes the authorization server accepts', () => {
     const old = cfg();
     const narrow = cfg({ LEXAPI_OAUTH_SCOPES: NARROW });
-    expect(stepUpScope(old, 'lex:webhooks')).toBe('lex');
-    expect(stepUpScope(old, 'lex:read')).toBe('lex');
-    expect(stepUpScope(old)).toBe('lex');
-    expect(stepUpScope(narrow, 'lex:webhooks')).toBe('lex:read lex:webhooks');
+    expect(() => cfg({ LEXAPI_OAUTH_SCOPES: 'lex:read' })).toThrow('LEXAPI_OAUTH_SCOPES must cover every tool: list lex, or both lex:read and lex:webhooks');
+    const read = expandScopeSet('lex:read');
+    const hooks = expandScopeSet('lex:webhooks');
+    const all = expandScopeSet('lex');
+    // Every supported configuration, every held set, every required scope:
+    // the challenge names accepted scopes that permit the call and keep what is held.
+    const configs = [old, narrow, cfg({ LEXAPI_OAUTH_SCOPES: 'lex lex:read' }), cfg({ LEXAPI_OAUTH_SCOPES: 'lex lex:read', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' }),
+      cfg({ LEXAPI_OAUTH_SCOPES: 'lex lex:webhooks' }), cfg({ LEXAPI_OAUTH_SCOPES: 'lex:read lex:webhooks' }), cfg({ LEXAPI_OAUTH_SCOPES: NARROW, LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' })];
+    for (const c of configs) {
+      for (const held of [new Set<ToolScope>(), read, hooks, all]) {
+        for (const required of TOOL_SCOPES) {
+          const asked = stepUpScope(c, required, held);
+          const label = `${c.scopesSupported.join(' ')} / ${[...held].join(' ')} / ${required}`;
+          for (const n of asked.split(' ')) expect(c.scopesSupported, label).toContain(n);
+          const permits = expandScopeSet(asked);
+          expect(permits.has(required), label).toBe(true);
+          for (const h of held) expect(permits.has(h), label).toBe(true);
+        }
+      }
+    }
+    expect(stepUpScope(old, 'lex:webhooks', read)).toBe('lex');
+    expect(stepUpScope(old, 'lex:read', hooks)).toBe('lex');
+    expect(stepUpScope(narrow, 'lex:webhooks', read)).toBe('lex:read lex:webhooks');
+    expect(stepUpScope(narrow, 'lex:read', hooks)).toBe('lex:read lex:webhooks');
     expect(stepUpScope(narrow, 'lex:read')).toBe('lex:read');
-    expect(stepUpScope(cfg({ LEXAPI_OAUTH_SCOPES: 'lex lex:read' }), 'lex:webhooks')).toBe('lex');
-    expect(insufficientScopeChallenge(narrow, 'lex_delete_webhook needs the lex:webhooks scope', 'lex:webhooks')).toBe(
+    // The narrow names are not all accepted: `lex`, never the default scope.
+    expect(stepUpScope(cfg({ LEXAPI_OAUTH_SCOPES: 'lex lex:read', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' }), 'lex:webhooks', read)).toBe('lex');
+    expect(stepUpScope(cfg({ LEXAPI_OAUTH_SCOPES: 'lex:read lex:webhooks' }), 'lex:read', hooks)).toBe('lex:read lex:webhooks');
+    expect(insufficientScopeChallenge(narrow, 'lex_delete_webhook needs the lex:webhooks scope', 'lex:webhooks', read)).toBe(
       `Bearer realm="lexapi", resource_metadata="${PRM_URL}", scope="lex:read lex:webhooks", error="insufficient_scope", error_description="lex_delete_webhook needs the lex:webhooks scope"`,
     );
     expect(insufficientScopeChallenge(old, 'a "quoted"\r\nreason', 'lex:read')).toBe(
@@ -305,23 +348,39 @@ describe('a 403 insufficient_scope from the API', () => {
   const API_READ = 'Bearer realm="lexapi", error="insufficient_scope", scope="lex:read", error_description="The access token does not permit this request"';
   const API_HOOKS = 'Bearer realm="lexapi", error="insufficient_scope", scope="lex:read lex:webhooks", error_description="The access token does not permit this request"';
 
-  it('is recognised by its challenge only; the scope is one this server knows', () => {
-    expect(insufficientScopeOf(API_READ)).toBe('lex:read');
-    expect(insufficientScopeOf(API_HOOKS)).toBe('lex:webhooks');
-    expect(insufficientScopeOf('Bearer error=insufficient_scope')).toBe('lex:read');
-    expect(insufficientScopeOf('Bearer error="insufficient_scope", scope="admin\r\nX: 1"')).toBe('lex:read');
-    for (const other of [null, '', 'Bearer realm="lexapi"', 'Bearer realm="lexapi", error="invalid_token"', 'Basic realm="x"']) {
-      expect(insufficientScopeOf(other)).toBeUndefined();
+  it('is recognised by the error parameter of a Bearer challenge, and by nothing else', () => {
+    for (const yes of [API_READ, API_HOOKS, 'Bearer error=insufficient_scope', 'bearer  ERROR = "insufficient_scope"', 'Bearer error="insufficient_scope", scope="admin"',
+      'Bearer realm="a, b", error_description="say \\"hi\\", ok", error="insufficient_scope"', 'Bearer realm=lexapi,error=insufficient_scope,scope="lex"']) {
+      expect(isInsufficientScopeChallenge(yes), yes).toBe(true);
+    }
+    for (const no of [null, '', 'Bearer', 'Bearer realm="lexapi"', 'Bearer realm="lexapi", error="invalid_token"', 'Basic realm="x", error="insufficient_scope"',
+      'Bearer error="insufficient_scopes"', 'Bearer error=insufficient_scopes', 'Bearer error="not_insufficient_scope"', 'Bearer xerror="insufficient_scope"',
+      'Bearer error_description="error=insufficient_scope"', 'Bearer realm="lexapi", error_description="x, error=\\"insufficient_scope\\""',
+      'Bearer error="invalid_token", error_description="was error=insufficient_scope"', 'Bearer error="invalid_token", error="insufficient_scope"',
+      'Bearer error="Insufficient_Scope"', 'error="insufficient_scope"', 'Bearer realm="unterminated, error="insufficient_scope']) {
+      expect(isInsufficientScopeChallenge(no), String(no)).toBe(false);
+    }
+  });
+
+  it('the scope reported is the one the called route requires, whatever the header names', () => {
+    expect(routeScope('/webhooks')).toBe('lex:webhooks');
+    expect(routeScope('/webhooks/wh_1/deliveries')).toBe('lex:webhooks');
+    for (const path of ['/info', '/search', '/webhooksx', '/at/documents/webhooks', '/citations/extract']) expect(routeScope(path)).toBe('lex:read');
+    const required = (www: string, path: string) => (new OAuthUpstreamAuth('t', 0, {} as never).onForbidden({ wwwAuthenticate: www, path }) as UpstreamAuthError).requiredScope;
+    for (const scope of ['lex', 'lex:read', 'lex:read lex:webhooks', 'admin', '']) {
+      const www = `Bearer realm="lexapi", error="insufficient_scope", scope="${scope}"`;
+      expect(required(www, '/info'), scope).toBe('lex:read');
+      expect(required(www, '/webhooks/wh_1'), scope).toBe('lex:webhooks');
     }
   });
 
   it('fails the call with the scope, and reaches the response gate', () => {
     const gate = new ResponseGate();
     const auth = new OAuthUpstreamAuth('t', 0, {} as never, gate);
-    expect(auth.onForbidden({ wwwAuthenticate: null })).toBeUndefined();
-    expect(auth.onForbidden({ wwwAuthenticate: 'Bearer realm="lexapi"' })).toBeUndefined();
+    expect(auth.onForbidden({ wwwAuthenticate: null, path: '/webhooks' })).toBeUndefined();
+    expect(auth.onForbidden({ wwwAuthenticate: 'Bearer realm="lexapi"', path: '/webhooks' })).toBeUndefined();
     expect(gate.failure).toBeUndefined();
-    const e = auth.onForbidden({ wwwAuthenticate: API_HOOKS }) as UpstreamAuthError;
+    const e = auth.onForbidden({ wwwAuthenticate: API_HOOKS, path: '/webhooks' }) as UpstreamAuthError;
     expect(e).toBeInstanceOf(UpstreamAuthError);
     expect(e).toMatchObject({ kind: 'insufficient_scope', httpStatus: 403, requiredScope: 'lex:webhooks', description: 'required scope: lex:webhooks' });
     expect(gate.failure).toBe(e);
@@ -451,7 +510,27 @@ describe('OAuth connections over HTTP', () => {
     expect(hook.headers.get('www-authenticate')).toBe(challenge('lex:read lex:webhooks', 'lex_delete_webhook needs the lex:webhooks scope'));
     expect(hook.json.scope).toBe('lex:read lex:webhooks');
     const read = await call(base, bearer('lex:webhooks'), 'lex_search', { query: 'x' });
-    expect(read.headers.get('www-authenticate')).toBe(challenge('lex:read', 'lex_search needs the lex:read scope'));
+    // A step-up keeps what the connection holds.
+    expect(read.headers.get('www-authenticate')).toBe(challenge('lex:read lex:webhooks', 'lex_search needs the lex:read scope'));
+  });
+
+  it('scopes that are not all accepted: the challenge asks for lex, not for the default scope', async () => {
+    const base = await start({ LEXAPI_OAUTH_SCOPES: 'lex lex:read', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' });
+    const keyless = await rpc(base, {}, 'tools/list');
+    expect(keyless.headers.get('www-authenticate')).toBe(`Bearer realm="lexapi", resource_metadata="${PRM_URL}", scope="lex:read"`);
+    const hook = await call(base, bearer('lex:read'), 'lex_delete_webhook', { id: 'wh_1' });
+    expect(hook.status).toBe(403);
+    expect(hook.headers.get('www-authenticate')).toBe(challenge('lex', 'lex_delete_webhook needs the lex:webhooks scope'));
+  });
+
+  it('a narrowed connection is told so in the instructions, without tool names; a full one and an API key are not', async () => {
+    const base = await start();
+    const instructions = async (headers: Record<string, string>) => (await rpc(base, headers, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } })).json.result.instructions;
+    expect(NARROWED_INSTRUCTIONS).toBe('Some LexAPI features are not enabled on this connection; reconnect to grant them.');
+    expect(await instructions(bearer('lex'))).toBe(SERVER_INSTRUCTIONS);
+    expect(await instructions(bearer('lex:read lex:webhooks'))).toBe(SERVER_INSTRUCTIONS);
+    expect(await instructions({ 'x-api-key': KEY })).toBe(SERVER_INSTRUCTIONS);
+    for (const scope of ['lex:read', 'lex:webhooks']) expect(await instructions(bearer(scope))).toBe(`${SERVER_INSTRUCTIONS}\n\n${NARROWED_INSTRUCTIONS}`);
   });
 
   it('a batch with one refused call is refused as a whole', async () => {

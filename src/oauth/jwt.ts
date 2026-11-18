@@ -367,6 +367,8 @@ export async function verifyAccessToken(token: string, opts: VerifyOptions): Pro
   }
 
   // At least one scope this server knows (`lex`, `lex:read`, `lex:webhooks`); other names are ignored.
+  // A token without one is answered 401 invalid_token, not 403 insufficient_scope: that is what
+  // such a token was answered before the narrower scopes existed, kept for compatibility.
   if (typeof c.scope !== 'string' || expandScopeSet(c.scope).size === 0) throw new InvalidTokenError('insufficient scope');
   for (const name of ['sub', 'client_id', 'gid', 'sid', 'jti'] as const) {
     if (!nonEmptyString(c[name])) throw new InvalidTokenError(`missing ${name} claim`);
