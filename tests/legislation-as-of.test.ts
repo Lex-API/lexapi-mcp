@@ -498,7 +498,7 @@ describe('lex_legislation_as_of: scope, read-only mode and texts', () => {
   it('the server instructions point at it for a known act', () => {
     expect(SERVER_INSTRUCTIONS).toContain('otherwise lex_legislation_as_of gives the version of a known act for a date, and asOf does so for search hits.');
     expect(SERVER_INSTRUCTIONS).toContain('lex_semantic_legislation with asOf returns the law in force on a date');
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_800);
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(4_000);
   });
 });
 

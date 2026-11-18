@@ -319,6 +319,8 @@ function endpointSince(apiVersion: string, route: string, meanwhile: string) {
   };
 }
 
+const SNAPSHOT_SEMANTICS = 'Observation snapshots (as fetched by LexAPI), not the law in force on a date.';
+
 const NATIONAL_READ_402 = 'A national document read reserves 5 credits and settles at 1, so the pool must hold 5.';
 
 /** Attach the low-credit notice (if any) to a shaped result. */
@@ -679,7 +681,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Version history of a document',
     description:
-      "Every text change LexAPI observed on a document, newest first. These are snapshots of the document as LexAPI fetched it — NOT the law in force on a date (lex_semantic_legislation with asOf, or a consolidated CELEX, returns that). History starts when the document entered the corpus. Cost: 1 credit.",
+      "Every text change LexAPI observed on a document, newest first, with observedFrom (when the version began; absent if not recorded). These are LexAPI's fetch snapshots, NOT the law in force on a date (lex_legislation_as_of gives the version of an EU act for a date). History starts when the document entered the corpus. Cost: 1 credit.",
     inputSchema: {
       celexNumber: celex(),
       language: lang().optional(),
@@ -697,12 +699,13 @@ export const tools: ToolDef[] = [
           ? b.versions.map((v) => (isObj(v) ? compact({
             version: v.version,
             isCurrent: v.isCurrent || undefined,
+            observedFrom: v.observedFrom,
             fetchedAt: v.fetchedAt,
             contentHash: typeof v.contentHash === 'string' ? v.contentHash.slice(0, 12) : undefined,
             title: v.title,
           }) : v))
           : [],
-        semantics: 'Observation snapshots (as fetched by LexAPI), not legal in-force reconstructions.',
+        semantics: SNAPSHOT_SEMANTICS,
       }));
     },
   },
@@ -712,7 +715,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'A document snapshot by version or date',
     description:
-      'The text of one observed snapshot — by version number, or the snapshot LexAPI held on a date (YYYY-MM-DD). This is what LexAPI had fetched then, NOT the law in force on that date; dates before the document entered the corpus return 404. Cost: 1 credit.',
+      'One observed snapshot: by version number, or the one LexAPI held at the end of a date (YYYY-MM-DD), with observedFrom / observedUntil. LexAPI\'s fetch history, NOT the law in force on that date (lex_legislation_as_of gives the version of an EU act for a date). A date before the document entered the corpus is a 404 (before_tracking); one LexAPI cannot place is a 404 (boundary_unknown) listing the candidate versions, refunded. Cost: 1 credit.',
     inputSchema: {
       celexNumber: celex(),
       version: wholeNumber(1).optional().describe('Snapshot number (from lex_document_versions).'),
@@ -741,14 +744,20 @@ export const tools: ToolDef[] = [
         // The API calls this `asOf`; it is the date the snapshot was looked up
         // for, not an in-force date, so it gets its own name here.
         snapshotDate: b.asOf,
+        kind: b.kind,
+        dateInFuture: b.dateInFuture === true ? true : undefined,
+        warning: res.headers['x-warning'],
         version: d.version,
         isCurrent: d.isCurrent,
+        observedFrom: d.observedFrom,
+        observedUntil: d.observedUntil,
         fetchedAt: d.fetchedAt,
         title: d.title,
         documentType: d.documentType,
         content,
         note,
-        semantics: 'Observation snapshot (as fetched by LexAPI), not a legal in-force reconstruction.',
+        semantics: SNAPSHOT_SEMANTICS,
+        inForceLookup: isObj(b.inForceLookup) ? 'lex_legislation_as_of gives the version of this EU act for a date.' : undefined,
       }));
     },
   },
@@ -944,7 +953,7 @@ export const tools: ToolDef[] = [
         include: a.include,
         filters: a.filters,
       }));
-      return withAllowance(res, withNotice(res, budgetHitTexts(shapeNationalCaseLaw(res), a.maxChars ?? 40_000)));
+      return withAllowance(res, withNotice(res, budgetHitTexts(shapeNationalCaseLaw(res), a.maxChars ?? 40_000, 'lex_get_national_document')));
     },
   },
 
@@ -953,10 +962,11 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. There is no asOf: hits are the indexed text, and in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where the index has them. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). Cost: 5 credits.',
+      'Find one country\'s legislation articles by meaning. Hits are today\'s indexed wording; in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where indexed. asOf labels each hit for a date and never returns earlier wording: asOfResolved: true (asOfVersion) only when the publisher\'s dates, as of LexAPI\'s last recorded read of the act (asOfVersion.checkedAt), show that today\'s wording already applied then; otherwise asOfReason, and the hit keeps today\'s text under asOfLabel, not established as the text for the date. asOfVersion.validFrom / validTo are the publisher\'s dates for today\'s wording (validTo absent or null: no end recorded). Hits resolve only in countries where LexAPI holds per-provision dates (Austria and Spain at present); others answer asof_not_available. partial: true (SEARCH_INCOMPLETE): this one search did not finish, better matches may exist (see hint); it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). asOf adds no cost. Cost: 5 credits.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
+      asOf: isoDate('Label each hit for this date (YYYY-MM-DD, 1800-01-01 to today (UTC)). The text stays today\'s: a wording replaced since that date, or a provision LexAPI no longer holds, cannot be found.').optional(),
       limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap, same as lex_semantic_legislation).'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor (default ≈0.7).'),
       language: nationalLanguage,
@@ -972,13 +982,14 @@ export const tools: ToolDef[] = [
     handler: async (a, client) => {
       const res = await client.nationalSemanticLegislation(a.jurisdiction, compact({
         query: a.query,
+        asOf: a.asOf,
         limit: a.limit,
         min_score: a.min_score,
         language: a.language,
         include: a.include,
         filters: a.filters,
       }));
-      return withAllowance(res, withNotice(res, budgetHitTexts(shapeNationalLegislation(res), a.maxChars ?? 40_000)));
+      return withAllowance(res, withNotice(res, budgetHitTexts(shapeNationalLegislation(res, a.asOf), a.maxChars ?? 40_000, 'lex_get_national_document')));
     },
   },
 
@@ -1448,7 +1459,8 @@ function shapeDelivery(d: unknown) {
 }
 
 /** Bound `text` across semantic hits to a total budget (only present with include: ['text']). */
-function budgetHitTexts<T extends Record<string, unknown>>(shaped: T, budget: number): T {
+/** `reader`: the tool that reads a hit's whole document. */
+function budgetHitTexts<T extends Record<string, unknown>>(shaped: T, budget: number, reader = 'lex_get_document'): T {
   const results = Array.isArray(shaped.results) ? shaped.results as Record<string, unknown>[] : [];
   const withText = results.filter((r) => typeof r.text === 'string');
   if (!withText.length) return shaped;
@@ -1462,7 +1474,7 @@ function budgetHitTexts<T extends Record<string, unknown>>(shaped: T, budget: nu
     }
   }
   return cut
-    ? { ...shaped, note: `${cut} hit text(s) truncated to ${per} characters (maxChars=${budget}). Read a full document with lex_get_document.` }
+    ? { ...shaped, note: `${cut} hit text(s) truncated to ${per} characters (maxChars=${budget}). Read a full document with ${reader}.` }
     : shaped;
 }
 

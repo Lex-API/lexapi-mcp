@@ -131,6 +131,9 @@ export function shapeMetadata(doc: Obj, headers: LexResponse['headers'] = {}): O
   if (Array.isArray(doc.keywords)) out.keywords = (doc.keywords as unknown[]).slice(0, 20);
   const urls = isObj(doc.urls) ? doc.urls : undefined;
   if (urls) out.url = urls.html ?? urls.metadata;
+  // The publisher's URL of the text (provenance), when it is not that link.
+  const sourceUrl = sourceUrlOf(doc.provenance);
+  if (sourceUrl && sourceUrl !== out.url) out.sourceUrl = sourceUrl;
   if (headers['x-source']) out.source = headers['x-source'];
   // A text-availability block that just says "available" is noise; any
   // other state (no text, why, which languages, consolidated pointers) is
@@ -479,6 +482,7 @@ export function shapeCaseLawHit(r: unknown): Obj {
     summary: r.summary,
     snippet: r.summary ? undefined : r.snippet,
     text: r.text,
+    sourceUrl: sourceUrlOf(r.provenance),
   };
   for (const k of CASE_ANALYTICS) out[k] = r[k];
   return compact(out);
@@ -521,6 +525,7 @@ export function shapeLegislationHit(r: unknown): Obj {
     matchedVersion: r.matchedVersion,
     // The act's in-force status today; absent when unknown.
     ...inForceFields(r),
+    sourceUrl: sourceUrlOf(r.provenance),
   });
 }
 
@@ -1064,6 +1069,7 @@ export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
     ...nationalDecisionFields(doc.decision),
     ...compact({
       textBasis: doc.textBasis,
+      sourceUrl: sourceUrlOf(doc.provenance),
       // Required legal attribution for the source (RIS, gesetze-im-internet.de,
       // Normattiva, Légifrance/Judilibre, the Rechtspraak open data, …): always
       // kept, never dropped by compacting elsewhere.
@@ -1128,6 +1134,7 @@ export function shapeNationalCaseLawHit(r: unknown): Obj {
     text: r.text,
     validTo: r.validTo ?? d.validTo,
     inForce: r.inForce ?? d.inForce,
+    sourceUrl: sourceUrlOf(d.provenance),
     // Required legal attribution for the source — always kept.
     attribution: r.attribution,
   };
@@ -1157,7 +1164,7 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
  * the index has nothing (compacted away here); `documentKind`, `title` and
  * the act's validity come from the hit's `document` summary.
  */
-export function shapeNationalLegislationHit(r: unknown): Obj {
+export function shapeNationalLegislationHit(r: unknown, asOf?: string, labelled = true): Obj {
   if (!isObj(r)) return {};
   const d = isObj(r.document) ? r.document : {};
   return compact({
@@ -1172,6 +1179,8 @@ export function shapeNationalLegislationHit(r: unknown): Obj {
     chapter: r.chapter,
     score: round3(r.score),
     language: r.language,
+    // With asOf, the label comes before the text it qualifies.
+    ...(asOf ? nationalAsOfFields(r, asOf, labelled) : {}),
     snippet: r.snippet,
     text: r.text,
     // From the index (as of today), or our row's confirmed-repeal override
@@ -1180,23 +1189,138 @@ export function shapeNationalLegislationHit(r: unknown): Obj {
     valid_from: r.valid_from,
     valid_to: r.valid_to,
     law_type: r.law_type,
+    sourceUrl: sourceUrlOf(d.provenance),
     // Required legal attribution for the source — always kept.
     attribution: r.attribution,
   });
 }
 
-export function shapeNationalLegislation(res: LexResponse<Json>): Obj {
+// ── National asOf labels (API 2.29.0) ──────────────────────────────
+// A national hit is always today's wording; asOf says only whether that
+// wording already applied on the date. Unlike the EU reasons, none of
+// these means that an earlier version could not be read: LexAPI holds no
+// earlier wording at all.
+const NATIONAL_AS_OF_MEANING: Record<string, string> = {
+  provision_amended_since: 'the publisher dates today\'s wording from after that date (amended or added since, or the publisher\'s record of it starts later); LexAPI holds no earlier wording',
+  no_longer_in_force: 'per the publisher\'s dates, the provision or its act was no longer in force on that date',
+  provision_dates_unknown: 'whether today\'s wording applied on that date could not be established from the publisher\'s dates; the hit\'s valid_from alone does not establish it',
+  asof_not_available: 'LexAPI holds no per-provision dates for this country',
+};
+const NATIONAL_AS_OF_GROUP: Record<string, string> = {
+  provision_amended_since: 'amendedSince',
+  no_longer_in_force: 'notInForce',
+  provision_dates_unknown: 'datesUnknown',
+  asof_not_available: 'notAvailable',
+};
+const NATIONAL_AS_OF_VERSION_KEYS = ['kind', 'validFrom', 'validTo', 'sourceId', 'checkedAt'] as const;
+
+function nationalAsOfMeaning(reason: string | undefined): string {
+  return reason && Object.hasOwn(NATIONAL_AS_OF_MEANING, reason)
+    ? NATIONAL_AS_OF_MEANING[reason]
+    : 'whether it applied on that date was not established';
+}
+
+/**
+ * The asOf fields of a national hit. Only `asOfResolved: true` counts as
+ * resolved; every other hit is labelled unresolved, and its `asOfLabel`
+ * says that the text shown is today's wording, not established as the text
+ * for the date. `asOfVersion.validTo: null` (an open end) is kept.
+ */
+function nationalAsOfFields(r: Obj, asOf: string, labelled: boolean): Obj {
+  if (!labelled) {
+    // The API did not label this answer: nothing it carries counts.
+    return { asOf, asOfResolved: false, asOfLabel: `Today's wording, not established as the text on ${asOf}: ${nationalAsOfMeaning(undefined)}.` };
+  }
+  if (r.asOfResolved === true) {
+    const v = isObj(r.asOfVersion) ? r.asOfVersion : {};
+    const version: Obj = {};
+    for (const k of NATIONAL_AS_OF_VERSION_KEYS) {
+      if (typeof v[k] === 'string' && (v[k] as string).length <= 200) version[k] = v[k];
+      else if (k === 'validTo' && v[k] === null) version[k] = null;
+    }
+    return { asOf, asOfResolved: true, asOfVersion: Object.keys(version).length ? version : undefined };
+  }
+  const reason = typeof r.asOfReason === 'string' && r.asOfReason.length <= 100 ? r.asOfReason : undefined;
+  return {
+    asOf,
+    asOfResolved: false,
+    asOfReason: reason,
+    asOfLabel: `Today's wording, not established as the text on ${asOf}: ${nationalAsOfMeaning(reason)}.`,
+  };
+}
+
+/** One line per class of unresolved national hit present, as asOfCaveat does for EU hits. */
+export function nationalAsOfCaveat(results: Obj[], asOf: string, labelled = true): Obj | undefined {
+  const groups: Record<string, string[]> = { amendedSince: [], notInForce: [], datesUnknown: [], notAvailable: [], other: [] };
+  for (const r of results) {
+    if (r.asOfResolved === true) continue;
+    const reason = typeof r.asOfReason === 'string' ? r.asOfReason : 'unknown';
+    const id = `${String(r.law_id ?? r.documentId ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''}${labelled ? ` (${reason})` : ''}`;
+    groups[Object.hasOwn(NATIONAL_AS_OF_GROUP, reason) ? NATIONAL_AS_OF_GROUP[reason] : 'other'].push(id);
+  }
+  const guidance: string[] = [];
+  if (groups.amendedSince.length) guidance.push(`amendedSince: the publisher dates today's wording from after ${asOf} (amended or added since, or its record starts later); LexAPI holds no earlier wording.`);
+  if (groups.notInForce.length) guidance.push(`notInForce: per the publisher's dates, no longer in force on ${asOf}.`);
+  if (groups.datesUnknown.length) guidance.push(`datesUnknown: whether today's wording applied on ${asOf} could not be established (for instance: no usable date, the provision could not be matched, LexAPI's copy of the act may be out of date on that date, or the dates could not be read); valid_from alone does not establish it.`);
+  if (groups.notAvailable.length) guidance.push('notAvailable: LexAPI holds no per-provision dates for this country.');
+  if (groups.other.length) guidance.push(labelled
+    ? `other: whether today's wording applied on ${asOf} was not established (see asOfReason).`
+    : `other: whether today's wording applied on ${asOf} was not established.`);
+  if (!guidance.length) return undefined;
+  return compact({
+    note: `Unresolved hits carry today's wording, which is not established as the text on ${asOf}. asOf never returns earlier wording.`,
+    ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
+    guidance,
+  });
+}
+
+/** A calendar date written YYYY-MM-DD. */
+function isCalendarDate(v: unknown): v is string {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
+/**
+ * `requestedAsOf`: the asOf the tool sent. The API's per-hit labels are
+ * used only when it echoes exactly that date. A missing, invalid or
+ * different echo (an API before LexAPI API 2.29.0 echoes none) puts every
+ * hit under the requested date as unresolved, whatever it carries, so no
+ * text reads as established for a date. Without a requested asOf, any echo
+ * and any per-hit as-of field are ignored.
+ */
+export function shapeNationalLegislation(res: LexResponse<Json>, requestedAsOf?: string): Obj {
   const b = res.body;
-  const results = Array.isArray(b.results) ? b.results.map(shapeNationalLegislationHit) : [];
+  const asOf = requestedAsOf;
+  const echo = isCalendarDate(b.asOf) ? b.asOf : undefined;
+  const labelled = asOf !== undefined && echo === asOf;
+  const results = Array.isArray(b.results) ? b.results.map((r) => shapeNationalLegislationHit(r, asOf, labelled)) : [];
+  let asOfNote: string | undefined;
+  if (asOf && !labelled) {
+    asOfNote = echo
+      ? `The API answered for ${echo}, not the requested ${asOf}; its per-hit labels are not used and no hit counts as resolved.`
+      : 'The API\'s answer did not echo the requested asOf as a date; its per-hit labels are not used.';
+  }
   return compact({
     jurisdiction: b.jurisdiction,
+    asOf,
+    asOfSummary: labelled && isObj(b.asOfSummary) ? compact({ unresolved: num(b.asOfSummary.unresolved) }) : undefined,
     resultCount: results.length,
     results,
     hint: b.hint,
     partial: b.partial,
     partialReason: b.partialReason,
     attribution: b.attribution,
+    asOfCaveat: asOf ? nationalAsOfCaveat(results, asOf, labelled) : undefined,
+    asOfNote,
   });
+}
+
+/** `provenance.sourceUrl` when it is an http(s) link; undefined otherwise. */
+export function sourceUrlOf(provenance: unknown): string | undefined {
+  if (!isObj(provenance)) return undefined;
+  const u = provenance.sourceUrl;
+  return typeof u === 'string' && u.length <= 2000 && /^https?:\/\/\S+$/.test(u) ? u : undefined;
 }
 
 export function stripEnvelope(body: unknown, drop: string[] = []): Obj {
