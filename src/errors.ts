@@ -31,7 +31,13 @@ export class LexAPIError extends Error {
 
 /** Raised for network failures / timeouts before any HTTP status arrived. */
 export class LexAPITransportError extends Error {
-  constructor(message: string, public readonly timedOut: boolean, public readonly cancelled = false) {
+  constructor(
+    message: string,
+    public readonly timedOut: boolean,
+    public readonly cancelled = false,
+    /** The API answered with a redirect that is not followed: the same call is answered the same way. */
+    public readonly redirectRefused = false,
+  ) {
     super(message);
     this.name = 'LexAPITransportError';
   }
@@ -137,6 +143,9 @@ function detailsLine(details: unknown): string {
 export function describeError(err: unknown): string {
   if (err instanceof LexAPITransportError) {
     if (err.cancelled) return 'Cancelled: the client cancelled this request before LexAPI answered.';
+    if (err.redirectRefused) {
+      return `Redirect not followed: ${err.message}. The same call is answered the same way, so it is not retryable. Where this server is run with LEXAPI_BASE_URL set, that value must be the API's own address (default https://lex-api.com/api/v1).`;
+    }
     return err.timedOut
       ? `LexAPI did not answer in time (${err.message}). Live EUR-Lex fetches can take longer than an MCP client waits; the call is safe to retry once, and a repeat may be served from the LexAPI corpus. If it keeps timing out, narrow the request (fewer pages, a smaller limit) or raise the client's tool timeout (Claude Code: MCP_TOOL_TIMEOUT) and LEXAPI_TIMEOUT_MS.`
       : `Could not reach LexAPI (${err.message}). Check network access to lex-api.com (or LEXAPI_BASE_URL) and retry.`;
@@ -218,8 +227,7 @@ export function describeError(err: unknown): string {
       return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title). A not-found answer costs at most 1 credit.`;
     }
     case 409:
-      // National semantic search not yet enabled for a live country
-      // (nationalSemanticController.js unavailableError): a different
+      // National semantic search not yet enabled for a live country: a different
       // country, not account state — do not say "tell the user to retry
       // their account", point at the right tools instead.
       if (err.code === 'NATIONAL_SEMANTIC_NOT_ENABLED') {

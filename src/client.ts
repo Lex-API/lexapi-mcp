@@ -203,8 +203,9 @@ export class LexAPIClient {
   /**
    * One attempt: the request and the redirects it is answered with. Redirects
    * are handled here, not by fetch, which would send the API key to whatever
-   * host a redirect names. One to another host is not followed: no request
-   * is made to it, and the error names its origin only.
+   * host a redirect names. One to another host, to a target that is not http
+   * or https, or to one that carries a user name or password is not followed:
+   * no request is made to it, and the error names its origin or scheme only.
    */
   private async send(
     url: URL,
@@ -228,17 +229,26 @@ export class LexAPIClient {
       const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
       if (!location) return res;
       await discard(res);
+      const refused = (what: string) => new LexAPITransportError(`the API answered with ${what}`, false, false, true);
       let next: URL;
       try {
         next = new URL(location, target);
       } catch {
-        throw new LexAPITransportError('the API answered with a redirect that has no usable target', false);
+        throw refused('a redirect that has no usable target');
+      }
+      // Only the scheme is named: the rest of such a target is not an address.
+      if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+        throw refused(`a redirect to a target that is not http or https (${next.protocol.replace(/[^a-z0-9+.:-]/gi, '').slice(0, 32)}), which is not followed`);
       }
       if (!this.sameApi(next)) {
-        throw new LexAPITransportError(`the API answered with a redirect to another host (${next.origin}), which is not followed`, false);
+        throw refused(`a redirect to another host (${next.origin}), which is not followed`);
+      }
+      // fetch refuses a URL with a user name or password, on every attempt.
+      if (next.username || next.password) {
+        throw refused(`a redirect whose target carries a user name or password (${next.origin}), which is not followed`);
       }
       if (followed >= MAX_REDIRECTS) {
-        throw new LexAPITransportError(`the API answered with more than ${MAX_REDIRECTS} redirects in a row`, false);
+        throw refused(`more than ${MAX_REDIRECTS} redirects in a row`);
       }
       // 303 turns anything but GET into a GET; 301 and 302 do so for POST
       // (as fetch does); 307 and 308 repeat the request as it was.

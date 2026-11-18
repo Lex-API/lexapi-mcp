@@ -37,7 +37,7 @@ export const LANGUAGES = [
   'el', 'et', 'fi', 'ga', 'hr', 'hu', 'lt', 'lv', 'mt', 'sk', 'sl', 'sv',
 ] as const;
 
-/** Languages the semantic index holds (server/controllers/semanticController.js). */
+/** Languages the semantic index holds. */
 export const SEMANTIC_LANGUAGES = ['en', 'fr', 'de', 'es', 'it', 'sl', 'el', 'nl', 'pt', 'pl'] as const;
 
 export const DOCUMENT_TYPES = [
@@ -93,14 +93,14 @@ const celex = (what = 'CELEX number') =>
 // the citation graph, then the source's own identifier, letters of any
 // alphabet included (NATIONAL_ID_RE, shared with the workflow tools). The
 // pattern is checked on the composed form (NFC) in a refinement, so it is
-// not published in the JSON schema. `includeNational`-aware citation tools accept either
+// not published in the JSON schema. The citation tools accept either
 // shape; document reads stay celex()-only (lex_get_national_document /
 // lex_list_national_documents cover national documents directly).
 const celexOrNationalId = (what = 'identifier') =>
   z.string().trim()
     .refine((v) => CELEX_RE.test(v) || NATIONAL_ID_RE.test(v.normalize('NFC')),
       `${what} must be a CELEX number (e.g. 32016R0679) or a national document id (e.g. AT-NOR-12345)`)
-    .describe(`${what}: a CELEX number, or (with includeNational) a national document id, e.g. "AT-NOR-12345".`);
+    .describe(`${what}: a CELEX number, or a national document id, e.g. "AT-NOR-12345".`);
 // National law: jurisdiction codes
 // are not enumerated here — the server is the single source of truth for
 // which are registered and which are LIVE (lex_national_coverage), and the
@@ -108,7 +108,7 @@ const celexOrNationalId = (what = 'identifier') =>
 // unmatched path, same as EU_LAW.
 const jurisdiction = () => z.string().trim().regex(/^[A-Za-z]{2}$/, 'a two-letter country code, e.g. "at"')
   .transform((v) => v.toLowerCase())
-  .describe('Two-letter country code, e.g. "at".');
+  .describe('Two-letter code of a live country, e.g. "at" (lex_national_coverage lists them).');
 
 // The 24-code enum used to be repeated in ~10 tools (~3k tokens of tools/list).
 // A pattern + refine keeps the validation and lists the codes nowhere.
@@ -185,7 +185,14 @@ const titleLanguage = lang('Title language (default en).').optional();
 const unresolved = z.boolean().optional()
   .describe('National id: add references that got no edge (100 shown).');
 const includeNational = z.boolean().optional().describe('Add national documents of live countries (BUSINESS+).');
-const edgeOffset = z.number().int().min(0).default(0).describe('Paging offset, in edges.');
+// A whole number with a lower bound only. z.number().int() also publishes the
+// largest safe integer as "maximum" in the JSON schema, on every such
+// parameter of tools/list; this checks the same range and publishes
+// { type: "integer", minimum }.
+const wholeNumber = (min: number) => z.number().min(min)
+  .refine((v) => Number.isSafeInteger(v), 'must be a whole number within the safe integer range')
+  .meta({ type: 'integer' });
+const edgeOffset = wholeNumber(0).default(0).describe('Paging offset, in edges.');
 const webhookId = z.string().trim().min(1).max(64).describe('Webhook id (from lex_list_webhooks).');
 const NATIONAL_DOMAIN_NOTE = 'NATIONAL_LAW is EUR-Lex\'s own collection; member-state law is in the lex_national_* tools.';
 // One language per national index: the API answers any other value with a 400.
@@ -219,7 +226,7 @@ const view = z.enum(['auto', 'outline', 'full']).default('auto').describe(
 );
 const maxChars = (def: number) => z.number().int().min(2000).max(200_000).default(def)
   .describe(`Text budget in characters (default ${def}).`);
-const offset = z.number().int().min(0).optional()
+const offset = wholeNumber(0).optional()
   .describe('Continue after a truncated response (value given in its note).');
 const include = z.array(z.enum(CONTENT_PARTS)).min(1).optional().describe(
   'Only these parts. "paragraphs" = judgment grounds / text of documents without articles.',
@@ -227,6 +234,16 @@ const include = z.array(z.enum(CONTENT_PARTS)).min(1).optional().describe(
 const oneArticle = (d = 'Return only this article: "17", "art_17", "Article 17", "6a".') =>
   z.string().trim().min(1).max(40).optional().describe(d);
 const acceptLanguages = (d: string) => z.union([z.array(lang()).min(1), z.literal('any')]).optional().describe(d);
+
+/**
+ * Text sent composed (NFC). Its length is checked on the composed form, the
+ * one the API counts; the limits are published as minLength / maxLength.
+ */
+const composed = (min: number, max: number) => z.string().trim().transform((v) => v.normalize('NFC'))
+  .pipe(z.string().min(min).max(max))
+  .meta({ minLength: min, maxLength: max });
+/** A national document id as it is sent: composed (NFC), as the API stores ids; its case is kept. */
+const nationalId = () => composed(1, 200);
 
 /** The id as it is sent: upper case and, for a national id with accented letters, composed (NFC). */
 export function normCelex(v: string): string {
@@ -627,7 +644,7 @@ export const tools: ToolDef[] = [
       'The text of one observed snapshot — by version number, or the snapshot LexAPI held on a date (YYYY-MM-DD). This is what LexAPI had fetched then, NOT the law in force on that date; dates before the document entered the corpus return 404. Cost: 1 credit.',
     inputSchema: {
       celexNumber: celex(),
-      version: z.number().int().min(1).optional().describe('Snapshot number (from lex_document_versions).'),
+      version: wholeNumber(1).optional().describe('Snapshot number (from lex_document_versions).'),
       date: isoDate('Return the snapshot current on this date (YYYY-MM-DD, end of day UTC).').optional(),
       language: lang().optional(),
       include,
@@ -761,9 +778,9 @@ export const tools: ToolDef[] = [
       'Browse a country\'s national documents by title/type, newest-first by document date. documentKind ("act" | "decision") tells legislation from case law. Cost: 3 credits per call. Paging: page reaches only the first 1,000 rows; cursor (the previous nextCursor, without page) reaches any depth.',
     inputSchema: {
       jurisdiction: jurisdiction(),
-      q: z.string().trim().min(3).max(200).optional().describe('Title search, 3–200 characters.'),
+      q: composed(3, 200).optional().describe('Title search, 3–200 characters.'),
       documentType: z.string().trim().min(1).max(200).optional().describe('Document type as stored for this country.'),
-      page: z.number().int().min(1).optional().describe('1-based page, first 1,000 rows only. Omit when paging with cursor.'),
+      page: wholeNumber(1).optional().describe('1-based page, first 1,000 rows only. Omit when paging with cursor.'),
       cursor: z.string().trim().min(1).optional().describe('Opaque cursor from a previous call\'s nextCursor — pages past the first 1,000 rows. Not combined with page.'),
       limit: z.number().int().min(1).max(100).default(20).describe('Rows per page.'),
       includeRepealed: z.boolean().optional().describe('Also list repealed/superseded acts.'),
@@ -805,7 +822,7 @@ export const tools: ToolDef[] = [
       'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; view "full" with offset returns the text. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew returns a distinct error (410) and nothing of it is served. attribution must be kept with republished content (Terms). Cost: 1 credit.',
     inputSchema: {
       jurisdiction: jurisdiction(),
-      id: z.string().trim().min(1).max(200).describe('National document id, e.g. "AT-NOR-12345".'),
+      id: nationalId().describe('National document id, e.g. "AT-NOR-12345".'),
       language: lang('Not needed: documents are held in the country\'s own language, and any other value is a 404.').optional(),
       view,
       maxChars: maxChars(40_000),
@@ -1049,7 +1066,7 @@ export const tools: ToolDef[] = [
       jurisdictions: codeList('Only these countries, e.g. ["es","cz"] (EL = Greece, UK = United Kingdom); default all 28.').optional(),
       resolvedOnly: z.boolean().optional().describe('Only measures resolved to a document LexAPI holds (BUSINESS+, live countries).'),
       limit: z.number().int().min(1).max(200).default(50).describe('Measures shown, across countries.'),
-      offset: z.number().int().min(0).default(0).describe('Skip this many measures (value given in the previous result\'s more).'),
+      offset: wholeNumber(0).default(0).describe('Skip this many measures (value given in the previous result\'s more).'),
       language: titleLanguage,
     },
     annotations: READ,
@@ -1072,7 +1089,7 @@ export const tools: ToolDef[] = [
       id: celexOrNationalId('National document id or EU act CELEX'),
       jurisdictions: codeList('Only these live countries, e.g. ["si","es"]; default every live one.').optional(),
       limit: z.number().int().min(1).max(50).default(10).describe('Counterparts shown per EU act.'),
-      offset: z.number().int().min(0).default(0).describe('Skip this many EU acts (value given in more).'),
+      offset: wholeNumber(0).default(0).describe('Skip this many EU acts (value given in more).'),
       language: titleLanguage,
     },
     annotations: READ,
@@ -1153,7 +1170,7 @@ export const tools: ToolDef[] = [
         else if (isObj(l) && Object.keys(l).length === 1 && '_error' in l) serverError = l._error;
         else rows.push(l);
       }
-      // SDK contract §1.8: complete only with a `_done` trailer that does not
+      // An export is complete only with a `_done` trailer that does not
       // say `complete: false`, and no `_error` line. Anything else is a
       // partial export that must not be presented as the result.
       if (done === undefined || (isObj(done) && done.complete === false) || serverError !== undefined) {
@@ -1211,7 +1228,7 @@ export const tools: ToolDef[] = [
     inputSchema: {
       id: webhookId,
       deliveriesLimit: z.number().int().min(1).max(100).optional().describe('Deliveries per page.'),
-      deliveriesOffset: z.number().int().min(0).optional().describe('Skip this many deliveries (newest first).'),
+      deliveriesOffset: wholeNumber(0).optional().describe('Skip this many deliveries (newest first).'),
     },
     annotations: READ,
     handler: async (a, client) => {

@@ -507,13 +507,13 @@ export function shapeLegislationHit(r: unknown): Obj {
     language: r.language,
     snippet: r.snippet,
     text: r.text,
-    // Consolidated-text labelling (#284 §6) — kept verbatim.
+    // Consolidated-text labelling — kept verbatim.
     consolidated: r.consolidated,
     consolidatedAsOf: r.consolidatedAsOf,
     baseCelex: r.baseCelex,
     consolidatedNote: r.consolidatedNote,
     baseAct: isObj(r.baseAct) ? compact({ ...r.baseAct, score: round3(r.baseAct.score) }) : undefined,
-    // asOf resolution (#284 §7).
+    // asOf resolution.
     asOf: r.asOf,
     asOfResolved: r.asOfResolved,
     asOfReason: r.asOfReason,
@@ -1000,10 +1000,6 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
     // results may be missing better matches (the hint says what may help).
     partial: b.partial,
     partialReason: b.partialReason,
-    // The national index never rewrites (the response always answers
-    // hyde: false) — the request's hyde was accepted but did not cost the
-    // HyDE premium.
-    hyde: b.hyde,
     attribution: b.attribution,
   });
 }

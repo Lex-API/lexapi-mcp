@@ -41,6 +41,8 @@ interface Failure {
   retryAfterSeconds?: number;
   /** The error as thrown, for the full text when it ends the tool call. */
   cause?: unknown;
+  /** Every later call of the same tool call would end the same way, whatever its reason. */
+  stopsAll?: boolean;
 }
 
 /** After one of these, a later call of the same tool call cannot succeed either. */
@@ -53,6 +55,8 @@ const STOPS_ALL = new Set<FailureReason>(['credits_exhausted', 'rate_limited', '
  */
 function failureOf(err: unknown): Failure {
   if (err instanceof LexAPITransportError && !err.cancelled) {
+    // LexAPI was reached and answered, with something that cannot be used; the next call is answered the same way.
+    if (err.redirectRefused) return { reason: 'upstream_error', error: `Redirect not followed: ${err.message}`, cause: err, stopsAll: true };
     return err.timedOut
       ? { reason: 'timeout', error: `LexAPI did not answer in time (${err.message})`, cause: err }
       : { reason: 'network', error: `LexAPI could not be reached (${err.message})`, cause: err };
@@ -92,7 +96,7 @@ type Outcome = { res: LexResponse<Json>; failure?: undefined } | { res?: undefin
 
 class Calls {
   private readonly end: number;
-  /** Set once the credit pool or the rate limit is exhausted. */
+  /** Set once the credit pool or the rate limit is exhausted, or a redirect was not followed. */
   stopped?: Failure;
   succeeded = 0;
   private lowest: { remaining: number; body: unknown } | undefined;
@@ -104,7 +108,8 @@ class Calls {
 
   async run(fn: (c: LexAPIClient) => Promise<LexResponse<Json>>): Promise<Outcome> {
     if (this.stopped) {
-      return { notRun: true, failure: { reason: this.stopped.reason, error: `not run: an earlier call of this tool call ended with ${this.stopped.reason}` } };
+      const how = this.stopped.stopsAll ? 'was answered with a redirect that is not followed' : `ended with ${this.stopped.reason}`;
+      return { notRun: true, failure: { reason: this.stopped.reason, error: `not run: an earlier call of this tool call ${how}` } };
     }
     const left = this.end - Date.now();
     if (left < MIN_CALL_MS) {
@@ -117,7 +122,7 @@ class Calls {
       return { res };
     } catch (err) {
       const failure = failureOf(err);
-      if (STOPS_ALL.has(failure.reason)) this.stopped ??= failure;
+      if (STOPS_ALL.has(failure.reason) || failure.stopsAll) this.stopped ??= failure;
       return { failure };
     }
   }
@@ -181,6 +186,16 @@ const LOOSE_CELEX_RE = /^\d[0-9A-Z()._-]{4,}$/;
  * without it.
  */
 const VARIANT_TAG_RE = /_[A-Z]{2,4}$/;
+
+/** The CELEX without such a tag, when what remains is still a CELEX; otherwise as given. */
+function withoutVariantTag(celex: string): string {
+  const untagged = celex.replace(VARIANT_TAG_RE, '');
+  return untagged !== celex && (CELEX_SHAPE_RE.test(untagged) || LOOSE_CELEX_RE.test(untagged)) ? untagged : celex;
+}
+
+function withoutTagNote(celex: string, untagged: string): string {
+  return `the CELEX as given, without its ${celex.slice(untagged.length)} tag (a summary or rendition of the same document)`;
+}
 
 function upperCelex(v: string): string {
   return v.trim().replace(/^(?:uri=)?CELEX[:/]\s*/i, '').toUpperCase();
@@ -467,9 +482,9 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
   if (CELEX_SHAPE_RE.test(celex) || LOOSE_CELEX_RE.test(celex)) {
     out.identifierType = 'celex';
     basis.celex = 'the CELEX as given';
-    const untagged = celex.replace(VARIANT_TAG_RE, '');
-    if (untagged !== celex && (CELEX_SHAPE_RE.test(untagged) || LOOSE_CELEX_RE.test(untagged))) {
-      basis.celex = `the CELEX as given, without its ${celex.slice(untagged.length)} tag (a summary or rendition of the same document)`;
+    const untagged = withoutVariantTag(celex);
+    if (untagged !== celex) {
+      basis.celex = withoutTagNote(celex, untagged);
       celex = untagged;
     }
   } else {
@@ -813,7 +828,9 @@ interface Change { type: ChangeType; celex: string; title?: string; celexYear?: 
 
 export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<Obj> {
   const requested = upperCelex(a.celexNumber);
-  const celex = consolidatedBaseOf(requested)?.base ?? requested;
+  // A summary or rendition tag (_SUM, _RES) names the same act; a consolidated CELEX is read as its base act.
+  const untagged = withoutVariantTag(requested);
+  const celex = consolidatedBaseOf(untagged)?.base ?? untagged;
   const limit = a.limit ?? 100;
   const offset = a.offset ?? 0;
   const calls = new Calls(client);
@@ -821,6 +838,7 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
   const basis: Obj = {};
   const out: Obj = { celex };
   if (celex !== requested) out.requested = requested;
+  if (untagged !== requested) basis.celex = withoutTagNote(requested, untagged);
 
   // 1. The relations: one page of amendment / corrigendum / repeal edges.
   const edges = await calls.runList('citedBy', (c) => c.citedBy(celex, compact({
@@ -834,7 +852,7 @@ export async function actHistory(a: HistoryArgs, client: LexAPIClient): Promise<
   // An act the API says does not exist has no history: its relations, if the
   // graph holds any for this id, are not shown as the changes of an act.
   if (meta.failure?.reason === 'not_found') {
-    return { ...out, exists: false, inForce: 'unknown', basis: { exists: `lex_get_metadata: ${meta.failure.error}` }, ...calls.footer() };
+    return { ...out, exists: false, inForce: 'unknown', basis: { ...basis, exists: `lex_get_metadata: ${meta.failure.error}` }, ...calls.footer() };
   }
   // Nothing was obtained and the API said why: its error is the answer.
   if (edges.failure?.cause && meta.failure && meta.failure.reason !== 'unconfirmed_not_found') throw asThrown(edges.failure);

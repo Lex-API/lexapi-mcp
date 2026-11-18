@@ -941,6 +941,30 @@ describe('lex_act_history', () => {
     expect(data).toMatchObject({ celex: '32006R1907', requested: '02006R1907-20260622' });
   });
 
+  it('a CELEX with a variant tag (_SUM, _RES) is read as the act without it, as lex_check_citation reads it', async () => {
+    for (const [given, requested] of [['32006R1907_SUM', '32006R1907_SUM'], ['celex:32006r1907_sum', '32006R1907_SUM'], ['32006R1907_RES', '32006R1907_RES']]) {
+      const { data, paths } = await call('lex_act_history', { celexNumber: given }, route({}));
+      expect(paths[0], given).toBe('/citations/cited-by/32006R1907');
+      expect(data, given).toMatchObject({ celex: '32006R1907', requested });
+      expect(data.basis.celex, given).toBe(`the CELEX as given, without its ${requested.slice(-4)} tag (a summary or rendition of the same document)`);
+    }
+    const gone = await call('lex_act_history', { celexNumber: '32006R1907_SUM' }, route({ act: notFound('Document 32006R1907 does not exist on EUR-Lex') }));
+    expect(gone.data).toMatchObject({ celex: '32006R1907', requested: '32006R1907_SUM', exists: false });
+    expect(gone.data.basis.celex).toMatch(/without its _SUM tag/);
+    const plain = await call('lex_act_history', { celexNumber: '32006R1907' }, route({}));
+    expect(plain.data.basis).not.toHaveProperty('celex');
+    const both = await call('lex_act_history', { celexNumber: '02006R1907-20260622_SUM' }, route({}));
+    expect(both.paths[0]).toBe('/citations/cited-by/32006R1907');
+    expect(both.data).toMatchObject({ celex: '32006R1907', requested: '02006R1907-20260622_SUM' });
+    // A corrigendum or a suffix that is not such a tag is another document: read as given.
+    for (const given of ['32013R0952R(04)', '32006R1907_1', '32006R1907_ABCDE']) {
+      const { data, paths } = await call('lex_act_history', { celexNumber: given }, route({}));
+      expect(decodeURIComponent(paths[0]), given).toBe(`/citations/cited-by/${given}`);
+      expect(data.celex, given).toBe(given);
+      expect(data, given).not.toHaveProperty('requested');
+    }
+  });
+
   it('consolidated pointers are shown when the metadata carries them', async () => {
     const latest = { celex: '02006R1907-20260622', date: '2026-06-22', source: 'cellar' };
     const upcoming = { celex: '02006R1907-20270101', date: '2027-01-01', source: 'cellar' };
@@ -1391,5 +1415,38 @@ describe('lex_research', () => {
     const { result, text } = await call('lex_research', { query: 'right to erasure' }, () => ({ status: 401, body: { error: 'Invalid API key' } }));
     expect(result.isError).toBe(true);
     expect(text).toMatch(/LexAPI error 401/);
+  });
+});
+
+describe('a redirect that is not followed', () => {
+  const elsewhere = (): Reply => ({ status: 302, headers: { location: 'https://other.example.test/api/v1/x' } });
+  const TEXT = 'Redirect not followed: the API answered with a redirect to another host (https://other.example.test), which is not followed';
+
+  it('lex_research: reported as upstream_error with the redirect text, and the remaining searches are not started', async () => {
+    // The two EU searches start together; each is answered with the redirect.
+    const eu = await call('lex_research', { query: 'data protection', jurisdictions: ['eu'] }, elsewhere);
+    expect(eu.data.sources.map((s: any) => [s.status, s.reason, s.error])).toEqual([['failed', 'upstream_error', TEXT], ['failed', 'upstream_error', TEXT]]);
+    expect(JSON.stringify(eu.data)).not.toMatch(/could not be reached/);
+
+    // With countries, the coverage call comes first: after it nothing else is sent.
+    const { data, calls } = await call('lex_research', { query: 'data protection', jurisdictions: ['eu', 'at', 'de', 'nl'] }, elsewhere);
+    expect(calls).toHaveLength(1);
+    expect(data.coverage).toMatchObject({ call: 'lex_national_coverage', reason: 'upstream_error', error: TEXT });
+    expect(data.sources).toHaveLength(8);
+    for (const s of data.sources) {
+      expect(s).toMatchObject({ status: 'not_run', reason: 'upstream_error', error: 'not run: an earlier call of this tool call was answered with a redirect that is not followed' });
+    }
+    expect(data.incomplete).toBe(true);
+  });
+
+  it('lex_check_citation and lex_act_history make one call and no more', async () => {
+    const check = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, elsewhere);
+    expect(check.calls).toHaveLength(1);
+    expect(check.text).toContain('redirect to another host (https://other.example.test)');
+    expect(check.text).not.toMatch(/could not be reached|Could not reach|and retry/);
+    const history = await call('lex_act_history', { celexNumber: '32006R1907', dates: 3 }, elsewhere);
+    expect(history.calls).toHaveLength(1);
+    expect(history.result.isError).toBe(true);
+    expect(history.text).toMatch(/^Redirect not followed: /);
   });
 });
