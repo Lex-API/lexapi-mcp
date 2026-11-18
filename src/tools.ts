@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { LexAPIError } from './errors.js';
+import { SCOPE_READ, SCOPE_WEBHOOKS, type ToolScope } from './oauth/scope.js';
 import { webhookUrlProblem } from './webhookUrl.js';
 import { actHistory, checkCitation, isNationalId, NATIONAL_ID_RE, research } from './workflows.js';
 
@@ -260,6 +261,12 @@ export interface ToolAnnotations {
 
 export interface ToolDef {
   name: string;
+  /**
+   * The OAuth scope a connection needs to see and call the tool. It is the
+   * scope the LexAPI API requires for the routes the tool calls. API keys
+   * are not subject to scopes.
+   */
+  scope: ToolScope;
   title: string;
   description: string;
   /** The description shown in read-only mode, when `description` names a tool that mode hides. */
@@ -347,6 +354,7 @@ export const tools: ToolDef[] = [
   // ── Account ─────────────────────────────────────────────────────────
   {
     name: 'lex_info',
+    scope: SCOPE_READ,
     title: 'LexAPI account & capabilities',
     description:
       "The caller's LexAPI plan, its limits (subscription: maxPages, maxBatchSize, maxWebhooks, rate limit), the credit balance (remaining, reset date), plus the accepted values for search filters. Free (0 credits). Also confirms the connection works.",
@@ -372,6 +380,7 @@ export const tools: ToolDef[] = [
   // time (src/workflows.ts). They add no data of their own.
   {
     name: 'lex_check_citation',
+    scope: SCOPE_READ,
     title: 'Check a citation against the source',
     description:
       'Look a citation up: whether the document exists, its canonical id, title and link, whether a given article is in its text, and whether the act is in force today. Takes a CELEX, EUR-Lex URL, ELI or ECLI, or a national document id. exists, inForce and article.found are "unknown" when the check could not be made, which does not mean that the document or article does not exist; notChecked lists what could not be checked and why. article.found: true shows that the article unit is in the text compared, not that the citation supports a claim. inForce does not cover amendments and is not recorded for many acts. The article is looked up in the identified text (the act as published, unless a consolidated CELEX is given). For an EU act (CELEX sector 3), latestConsolidated is "not_reported" unless the API has it, which does not mean none exists. A national result carries attribution, which must be kept with republished content (Terms). Cost: 1 credit to resolve a URL, ELI or ECLI (a CELEX is not resolved), plus one read: 1 credit from the corpus, 4 via the Publications Office, 5 live; an article that is not matched can cost a second read. A national id: 1 credit.',
@@ -388,6 +397,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_act_history',
+    scope: SCOPE_READ,
     title: 'Changes to an EU act',
     description:
       'The acts that amend, correct (corrigenda) or repeal an EU act, from LexAPI\'s citation graph, with the act\'s title, dates, in-force status today and end of validity. Limits of the data: a relation carries no date, so each entry has the year of its CELEX number (corrigenda have none) and a document date only where dates read it, and since filters on those; a partial repeal is recorded as an amendment; relations are as current as their last refresh (completeness); consolidated versions are shown only when the API reports them ("not_reported" otherwise), never as a full list. An empty list is not proof that nothing changed. Cost: 1 credit per page of relations, plus the act\'s metadata (1 credit from the corpus, 4 via the Publications Office, 5 live), plus the same for each date read.',
@@ -405,6 +415,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_research',
+    scope: SCOPE_READ,
     title: 'Search EU and national law in one call',
     description:
       'One query run as semantic searches over EU legislation, EU case law and the legislation and case law of chosen live countries, returned as one list. Each hit names its jurisdiction and kind and keeps its identifiers; a national hit keeps its attribution, which must be kept with republished content (Terms). Legislation hits carry inForce ("unknown" when no status is reported); an EU case-law hit has none, and a national decision carries inForce: false once its recorded end of validity has passed. sources lists every search as ok, failed or not_run with the reason (country not live, plan, national allowance, rate limit, credits): a search that did not run is not shown as empty, and none starts once credits or the rate limit run out. Scores come from separate indexes, so the order across sources is approximate. Cost: 5 credits per search run; searches = jurisdictions × kinds (default 2).',
@@ -423,6 +434,7 @@ export const tools: ToolDef[] = [
   // ── Search ──────────────────────────────────────────────────────────
   {
     name: 'lex_search',
+    scope: SCOPE_READ,
     title: 'Search EUR-Lex',
     description:
       'Structured EUR-Lex search: keywords plus filters (dates, type, author, procedure, collection) → CELEX numbers, titles, dates (the full text is read with lex_get_document). Matching is literal and works best with 1–3 distinctive terms; lex_semantic_legislation / lex_semantic_case_law search by meaning. Cost: 3 credits per result page (~10 results; unfetched pages refunded).',
@@ -451,6 +463,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_recent_documents',
+    scope: SCOPE_READ,
     title: 'Recently published EU documents',
     description:
       'Documents published on EUR-Lex in the last N days (default 7), newest first, optionally filtered (e.g. what was published this week). Cost: 3 credits per 10 results of limit (clamped to the plan); an unfiltered request is answered from the Publications Office in one query for 3 credits.',
@@ -472,6 +485,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_resolve',
+    scope: SCOPE_READ,
     title: 'Resolve a legal identifier to CELEX',
     description:
       'Turn a EUR-Lex URL, an ELI URI, an ECLI (e.g. ECLI:EU:C:2020:559) or a bare CELEX into the canonical CELEX number plus EUR-Lex links. ECLIs resolve only for case law in the LexAPI corpus (404 otherwise). resolvedVia: celex, url, ecli-corpus, eli-corpus, eli-cellar (Publications Office register) or eli (derived from the ELI pattern, unverified). verified: false is normal for CELEX and URL inputs, which are not looked up. Cost: 1 credit.',
@@ -488,6 +502,7 @@ export const tools: ToolDef[] = [
   // ── Documents ───────────────────────────────────────────────────────
   {
     name: 'lex_get_document',
+    scope: SCOPE_READ,
     title: 'Fetch an EU document by CELEX',
     description:
       'A parsed EU document by CELEX: metadata plus body (articles, recitals, judgment paragraphs, annexes). Large documents return an outline first; articleId returns one article and include returns selected parts. content: null means no published text — textAvailability says why and may point to the latest consolidated version. Consolidated CELEXes (0…-YYYYMMDD) are labelled as not the authentic text, with the base act. Cost: 1 credit from the corpus, 4 via the Publications Office, 5 live (every call is charged).',
@@ -519,6 +534,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_get_documents_batch',
+    scope: SCOPE_READ,
     title: 'Fetch several EU documents',
     description:
       'Fetch up to 50 documents by CELEX in one call (clamped to the plan\'s maxBatchSize, see lex_info). Per-document failures are listed in errors; documents without published text stay in documents with textAvailability. Same per-document cost as lex_get_document (1 / 4 / 5 credits); trimmed items are not charged.',
@@ -560,6 +576,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_get_metadata',
+    scope: SCOPE_READ,
     title: 'EU document metadata',
     description:
       'Metadata only for a CELEX — title, type, author, dates, ECLI/ELI, EuroVoc keywords, EUR-Lex link — without the body. Cost: 1 credit from the corpus, 4 via the Publications Office, 5 live.',
@@ -577,6 +594,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_get_document_by_url',
+    scope: SCOPE_READ,
     title: 'Fetch an EU document by EUR-Lex URL',
     description:
       'Same as lex_get_document, for a eur-lex.europa.eu URL the user pasted (the CELEX is extracted from CELEX:… or uri=…). Returns the English text. ELI and ECLI links are resolved by lex_resolve. Cost: 1 / 4 / 5 credits by source.',
@@ -607,6 +625,7 @@ export const tools: ToolDef[] = [
   // ── Version history (observation snapshots) ─────────────────────────
   {
     name: 'lex_document_versions',
+    scope: SCOPE_READ,
     title: 'Version history of a document',
     description:
       "Every text change LexAPI observed on a document, newest first. These are snapshots of the document as LexAPI fetched it — NOT the law in force on a date (lex_semantic_legislation with asOf, or a consolidated CELEX, returns that). History starts when the document entered the corpus. Cost: 1 credit.",
@@ -639,6 +658,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_get_document_version',
+    scope: SCOPE_READ,
     title: 'A document snapshot by version or date',
     description:
       'The text of one observed snapshot — by version number, or the snapshot LexAPI held on a date (YYYY-MM-DD). This is what LexAPI had fetched then, NOT the law in force on that date; dates before the document entered the corpus return 404. Cost: 1 credit.',
@@ -685,6 +705,7 @@ export const tools: ToolDef[] = [
   // ── Semantic search ─────────────────────────────────────────────────
   {
     name: 'lex_semantic_legislation',
+    scope: SCOPE_READ,
     title: 'Semantic search over EU legislation',
     description:
       'Find EU legislation articles by meaning. Hits: law_id (CELEX), article_ref, law_title, score, snippet. An article_ref art_N is the articleId for lex_get_document; any other form (anx_N annex, rct_a-b recitals, par_N / j_N text windows) is not an article id, and lex_get_document include reads those parts. Consolidated hits (consolidated: true) are not the authentic text; baseCelex names the authentic act. asOf gives the text in force on a date. For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked. Cost: 5 credits; with asOf, plus up to 5 per in-force version fetched live (default max 3 per call; failed fetches free).',
@@ -717,6 +738,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_semantic_case_law',
+    scope: SCOPE_READ,
     title: 'Semantic search over EU case law',
     description:
       'Find CJEU / General Court judgments, orders and AG opinions by meaning. Returns cases with celex (the id works with lex_get_document), case number, ECLI, court, date, score and a summary. hyde: true rewrites short keyword-style queries for better recall (15 credits instead of 5, +1–3 s; refunded to 5 if it falls back). Cost: 5 credits.',
@@ -760,6 +782,7 @@ export const tools: ToolDef[] = [
   // kept on every result — it is required, not optional, context.
   {
     name: 'lex_national_coverage',
+    scope: SCOPE_READ,
     title: 'National-law coverage',
     description:
       "Countries with national-law coverage: live status, legislation/case-law coverage (counts, dates, courts), semantic-search availability, citation-graph measurements (citationGraph: methods, rates, floors; null = not measured), and sources with licence/attribution. The other national tools serve only the countries listed as live here. Free.",
@@ -773,6 +796,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_list_national_documents',
+    scope: SCOPE_READ,
     title: 'Browse national documents',
     description:
       'Browse a country\'s national documents by title/type, newest-first by document date. documentKind ("act" | "decision") tells legislation from case law. Cost: 3 credits per call. Paging: page reaches only the first 1,000 rows; cursor (the previous nextCursor, without page) reaches any depth.',
@@ -817,6 +841,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_get_national_document',
+    scope: SCOPE_READ,
     title: 'Fetch a national document',
     description:
       'A national document by id, e.g. "AT-NOR-12345". Same fields in every country: documentKind ("act" | "decision"); decisions add court, chamber, caseNumbers, citedNorms; articles {number, title, section, text, inForceFrom, inForceTo} (text: null = no text for that unit). Large documents return an outline first; view "full" with offset returns the text. content: null = the source publishes no machine-readable text (textAvailability says why). A document its source withdrew returns a distinct error (410) and nothing of it is served. attribution must be kept with republished content (Terms). Cost: 1 credit.',
@@ -839,6 +864,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_national_semantic_case_law',
+    scope: SCOPE_READ,
     title: 'Semantic search over national case law',
     description:
       'Find one country\'s case law by meaning. Hits carry documentKind, ecli, dateOfDocument, and court/caseNumbers where indexed. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). Cost: 5 credits.',
@@ -873,6 +899,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_national_semantic_legislation',
+    scope: SCOPE_READ,
     title: 'Semantic search over national legislation',
     description:
       'Find one country\'s legislation articles by meaning. There is no asOf: hits are the indexed text, and in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where the index has them. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). Cost: 5 credits.',
@@ -907,6 +934,7 @@ export const tools: ToolDef[] = [
   // ── Citation graph ──────────────────────────────────────────────────
   {
     name: 'lex_cited_by',
+    scope: SCOPE_READ,
     title: 'Documents citing a CELEX',
     description:
       'Inbound citations: documents that cite, amend, correct, repeal, implement, transpose or are based on this act, with the edge type and its provenance. For legislation, amendment / corrigendum / repeal edges are refreshed on read from the Publications Office when stale; relationSync.status "pending" or "skipped" means the stored edges were served and may be incomplete. Other edge types cover only documents LexAPI has extracted. totalEdges is the full count for paging with offset. Cost: 1 credit.',
@@ -928,6 +956,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_cites',
+    scope: SCOPE_READ,
     title: 'Documents a CELEX cites',
     description:
       'Outbound citations: what this document references, amends, repeals, implements, transposes or is based on, with the edge type and its provenance. Only populated for documents whose citations were extracted (lex_extract_citations). Cost: 1 credit.',
@@ -952,6 +981,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_citation_network',
+    scope: SCOPE_READ,
     title: 'Citation neighbourhood of a CELEX',
     description:
       'Both directions at once — documents this one cites and documents citing it — deduplicated, with edge types and provenance per neighbour; paging.citesTotal / citedByTotal give the full counts. Cost: 20 credits, refunded on a partial (timeout) answer (lex_cited_by / lex_cites return one direction for 1 credit).',
@@ -974,6 +1004,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_citation_path',
+    scope: SCOPE_READ,
     title: 'Citation path between two documents',
     description:
       'Shortest chain of outbound citations from one document to another (e.g. how a judgment reaches a directive), optionally over filtered edges only. found: false is a normal answer, not an error. Cost: 20 credits.',
@@ -1006,6 +1037,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_related',
+    scope: SCOPE_READ,
     title: 'Documents related by shared citations',
     description:
       'Documents that cite the most of the same acts as this one (bibliographic coupling) — "what else deals with this"; the edge filters narrow which shared citations count. Needs the seed\'s outbound citations (lex_extract_citations). Cost: 20 credits.',
@@ -1044,6 +1076,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_citation_stats',
+    scope: SCOPE_READ,
     title: 'Citation graph statistics',
     description: 'Totals for the whole LexAPI citation graph plus the 10 most-cited and 10 most-citing documents. includeNational also adds byJurisdiction, byProvenance and transposition (notified measures, and how many LexAPI holds). Cost: 20 credits.',
     inputSchema: {
@@ -1058,6 +1091,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_transposition',
+    scope: SCOPE_READ,
     title: 'Notified national measures for an EU act',
     description:
       'The measures member states (and the UK) notified to the Commission for an EU act (CELEX sector 3, e.g. a directive), by country, from the Publications Office\'s Cellar records. A notification is not a finding that the measure transposes the act, or transposes it completely; the result\'s note states this. Every plan. On BUSINESS+, for live countries only, it also shows which measures LexAPI holds (id, resolved) and adds relations recorded by the national source (provenance "source"). termsRequired: true = the national-source terms are not yet accepted in the dashboard. source.cellar.attribution is the attribution for the Cellar data and must be kept with republished content (Terms). Output is bounded (limit, ~40,000 characters); more gives the next offset. Cost: 5 credits per call or page.',
@@ -1082,6 +1116,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_counterparts',
+    scope: SCOPE_READ,
     title: 'Counterparts of a national act in other countries',
     description:
       'A national document\'s counterparts in the other live countries, through the EU acts it is linked to (via): by a link the national source records or by its notification to the Commission as a measure. Ranked: 1 = recorded by the national source; 2 = a notified measure LexAPI holds; 3 = a notified Cellar record LexAPI does not hold (no id). An EU act (CELEX sector 3) as id groups its measures the same way. Only live countries are returned (see lex_national_coverage). A notification is not a finding that the measure transposes the act. BUSINESS+ only; the national-law allowance does not apply. Output is bounded (limit per act, up to 25 acts, ~40,000 characters); more gives the next offset, and jurisdictions narrows the lookup. Cost: 20 credits per call or page.',
@@ -1101,6 +1136,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_extract_citations',
+    scope: SCOPE_READ,
     title: 'Extract a document\'s citations',
     description:
       'Read a document\'s EUR-Lex notice and add its outbound citations to the graph, so lex_cites / lex_related work for it. Idempotent: returns alreadyExtracted when done before. Cost: 5 credits (1 when already extracted).',
@@ -1123,6 +1159,7 @@ export const tools: ToolDef[] = [
   // ── Export ──────────────────────────────────────────────────────────
   {
     name: 'lex_export',
+    scope: SCOPE_READ,
     title: 'Export corpus rows',
     description:
       'Rows from the LexAPI corpus matching filters — e.g. regulations dated 2024 or documents whose text changed since a date. BUSINESS+ only. An export that fails part-way is reported as incomplete. Cost: 1 credit per row returned, at least 1 per call. Bulk export for ML training needs a separate licence (Terms §6).',
@@ -1210,6 +1247,7 @@ export const tools: ToolDef[] = [
   // ── Webhooks (account state) ────────────────────────────────────────
   {
     name: 'lex_list_webhooks',
+    scope: SCOPE_WEBHOOKS,
     title: 'List webhooks',
     description: 'The account\'s webhooks with status, criteria, watch list and delivery counters. Free.',
     inputSchema: {},
@@ -1223,6 +1261,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_get_webhook',
+    scope: SCOPE_WEBHOOKS,
     title: 'Webhook details and deliveries',
     description: 'One webhook with its recent delivery attempts (status, HTTP response, attempts). Pass deliveriesOffset/deliveriesLimit to page through older deliveries. Free.',
     inputSchema: {
@@ -1252,6 +1291,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_create_webhook',
+    scope: SCOPE_WEBHOOKS,
     title: 'Create a webhook',
     description:
       'Subscribe a URL (must be a public https URL) to (a) new EUR-Lex documents matching searchCriteria and/or (b) changes to watched acts (watchCelex: amendments, corrigenda, repeals, new consolidated versions). Checked hourly; deliveries are free and HMAC-signed. The signing secret is returned only in this response. The number of webhooks is limited by the plan (maxWebhooks in lex_info). Free.',
@@ -1282,6 +1322,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_update_webhook',
+    scope: SCOPE_WEBHOOKS,
     title: 'Update a webhook',
     description:
       'Change a webhook\'s name, URL, searchCriteria, watch list or status; fields left out are unchanged. status ACTIVE re-enables a PAUSED or FAILED webhook and re-queues its recent failed deliveries; PAUSED stops deliveries. Free.',
@@ -1308,6 +1349,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_delete_webhook',
+    scope: SCOPE_WEBHOOKS,
     title: 'Delete a webhook',
     description: 'Permanently delete a webhook and its delivery history. Cannot be undone. Free.',
     inputSchema: { id: webhookId },
@@ -1321,6 +1363,7 @@ export const tools: ToolDef[] = [
 
   {
     name: 'lex_test_webhook',
+    scope: SCOPE_WEBHOOKS,
     title: 'Send a test delivery',
     description: 'POST a signed webhook.test payload to the webhook URL now and report the endpoint\'s response, showing whether the endpoint is reachable and whether it accepts the signed payload. Free.',
     inputSchema: { id: webhookId },
@@ -1370,8 +1413,19 @@ function budgetHitTexts<T extends Record<string, unknown>>(shaped: T, budget: nu
     : shaped;
 }
 
-export function selectTools(opts: { readOnly?: boolean } = {}): ToolDef[] {
-  if (!opts.readOnly) return tools;
-  return tools.filter((t) => !t.write)
+export interface SelectToolsOptions {
+  readOnly?: boolean;
+  /**
+   * The tool scopes of an OAuth connection: only tools whose scope is in the
+   * set are returned. Leave undefined for an API key (scopes do not apply).
+   */
+  scopes?: ReadonlySet<ToolScope>;
+}
+
+export function selectTools(opts: SelectToolsOptions = {}): ToolDef[] {
+  const { scopes } = opts;
+  const permitted = scopes ? tools.filter((t) => scopes.has(t.scope)) : tools;
+  if (!opts.readOnly) return permitted;
+  return permitted.filter((t) => !t.write)
     .map((t) => (t.readOnlyDescription ? { ...t, description: t.readOnlyDescription } : t));
 }

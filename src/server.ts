@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DEFAULT_TIMEOUT_MS, LexAPIClient } from './client.js';
 import type { ClientApp, ClientMode } from './clientHeader.js';
 import { describeError } from './errors.js';
+import type { ToolScope } from './oauth/scope.js';
 import { selectTools, type ToolDef } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
 
@@ -28,6 +29,8 @@ Each tool description states its cost in credits from the user's monthly pool; l
 
 export interface CreateServerOptions {
   readOnly?: boolean;
+  /** The tool scopes of an OAuth connection; undefined for an API key (every tool). */
+  scopes?: ReadonlySet<ToolScope>;
 }
 
 export function createLexServer(client: LexAPIClient, opts: CreateServerOptions = {}): McpServer {

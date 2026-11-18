@@ -79,6 +79,8 @@ export interface UpstreamAuth {
    * fresh headers, an Error to fail with it, or undefined for the normal 401.
    */
   onUnauthorized?(info: { wwwAuthenticate: string | null; body: string }): Promise<'retry' | Error | undefined> | 'retry' | Error | undefined;
+  /** The API answered 403. Return an Error to fail with it, or undefined for the normal 403. */
+  onForbidden?(info: { wwwAuthenticate: string | null }): Error | undefined;
 }
 
 export interface LexAPIClientOptions {
@@ -346,6 +348,14 @@ export class LexAPIClient {
           continue;
         }
         if (verdict instanceof Error) {
+          attemptSignal.dispose();
+          await discard(res);
+          throw verdict;
+        }
+      }
+      if (res.status === 403 && this.auth.onForbidden) {
+        const verdict = this.auth.onForbidden({ wwwAuthenticate: res.headers.get('www-authenticate') });
+        if (verdict) {
           attemptSignal.dispose();
           await discard(res);
           throw verdict;

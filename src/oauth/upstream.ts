@@ -4,6 +4,7 @@
 import type { UpstreamAuth } from '../client.js';
 import { UpstreamAuthError } from '../errors.js';
 import { ExchangeError, type ExchangeCaller, type TokenExchanger } from './exchange.js';
+import { expandScopeSet, SCOPE_READ, SCOPE_WEBHOOKS, type ToolScope } from './scope.js';
 
 /**
  * One per HTTP request. A tool call that hits an auth failure records it
@@ -48,6 +49,17 @@ function isInvalidTokenChallenge(www: string | null): boolean {
 }
 
 /**
+ * The scope an `insufficient_scope` challenge of the API asks for, or
+ * undefined when the header is not one. Only names this server knows are
+ * read from the header.
+ */
+export function insufficientScopeOf(www: string | null): ToolScope | undefined {
+  if (!www || !/\berror\s*=\s*"?insufficient_scope"?/i.test(www)) return undefined;
+  const m = /\bscope\s*=\s*"([^"]{0,200})"/i.exec(www);
+  return expandScopeSet(m ? m[1] : '').has(SCOPE_WEBHOOKS) ? SCOPE_WEBHOOKS : SCOPE_READ;
+}
+
+/**
  * Credential for one MCP request authenticated with an OAuth access token:
  * exchanges it (cached per subject token) and sends the API token as
  * `Authorization: Bearer` — never `x-api-key`, never the inbound token.
@@ -77,6 +89,17 @@ export class OAuthUpstreamAuth implements UpstreamAuth {
       throw err;
     }
     return { authorization: `Bearer ${this.current}` };
+  }
+
+  onForbidden(info: { wwwAuthenticate: string | null }): Error | undefined {
+    const required = insufficientScopeOf(info.wwwAuthenticate);
+    if (!required) return undefined;
+    // The connection does not include this scope (it can be narrower than
+    // the token says): answered as 403 insufficient_scope while the response
+    // is not committed, so the client can ask the user for it.
+    const e = new UpstreamAuthError('insufficient_scope', 403, `required scope: ${required}`, undefined, required);
+    this.gate?.fail(e);
+    return e;
   }
 
   onUnauthorized(info: { wwwAuthenticate: string | null; body: string }): 'retry' | Error {
