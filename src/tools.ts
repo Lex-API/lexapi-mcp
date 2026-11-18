@@ -681,7 +681,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Version history of a document',
     description:
-      "Every text change LexAPI observed on a document, newest first, with observedFrom (when the version began; absent when not recorded). These are snapshots of the document as LexAPI fetched it — NOT the law in force on a date (lex_legislation_as_of gives the version of an EU act for a date). History starts when the document entered the corpus. Cost: 1 credit.",
+      "Every text change LexAPI observed on a document, newest first, with observedFrom (when the version began; absent if not recorded). These are LexAPI's fetch snapshots, NOT the law in force on a date (lex_legislation_as_of gives the version of an EU act for a date). History starts when the document entered the corpus. Cost: 1 credit.",
     inputSchema: {
       celexNumber: celex(),
       language: lang().optional(),
@@ -715,7 +715,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'A document snapshot by version or date',
     description:
-      'The text of one observed snapshot — by version number, or the snapshot LexAPI held at the end of a date (YYYY-MM-DD), with observedFrom / observedUntil (when that version began and was replaced). This is what LexAPI had fetched then, NOT the law in force on that date (lex_legislation_as_of gives the version of an EU act for a date). A date before the document entered the corpus is a 404 (before_tracking); a date LexAPI cannot place between two stored versions is a 404 (boundary_unknown) listing the candidate versions, not charged. Cost: 1 credit.',
+      'One observed snapshot: by version number, or the one LexAPI held at the end of a date (YYYY-MM-DD), with observedFrom / observedUntil. It is what LexAPI had fetched, NOT the law in force on that date (lex_legislation_as_of gives the version of an EU act for a date). A date before the document entered the corpus is a 404 (before_tracking); one LexAPI cannot place is a 404 (boundary_unknown) listing the candidate versions, refunded. Cost: 1 credit.',
     inputSchema: {
       celexNumber: celex(),
       version: wholeNumber(1).optional().describe('Snapshot number (from lex_document_versions).'),
@@ -962,11 +962,11 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Semantic search over national legislation',
     description:
-      'Find one country\'s legislation articles by meaning. Hits are today\'s indexed wording; in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where the index has them. asOf labels each hit for a date and never returns earlier wording: asOfResolved: true (asOfVersion) only when the publisher\'s dates show that today\'s wording already applied on that date; otherwise asOfReason, and the hit keeps today\'s text under asOfLabel, not established as the text for the date. Per-provision dates exist for Austria and Spain; other countries answer asof_not_available. partial: true (partialReason SEARCH_INCOMPLETE) means this one search did not finish: better matches may exist, and hint gives the next step. It is not a statement about which documents LexAPI holds, so it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). asOf adds no cost. Cost: 5 credits.',
+      'Find one country\'s legislation articles by meaning. Hits are today\'s indexed wording; in_force (omitted when unknown) says whether the provision is in force today, with valid_from / valid_to where indexed. asOf labels each hit for a date and never returns earlier wording: asOfResolved: true (asOfVersion) only when the publisher\'s dates, as of LexAPI\'s last recorded read of the act (asOfVersion.checkedAt), show that today\'s wording already applied then; otherwise asOfReason, and the hit keeps today\'s text under asOfLabel, not established as the text for the date. Per-provision dates exist for Austria and Spain; other countries answer asof_not_available. partial: true (partialReason SEARCH_INCOMPLETE): this one search did not finish, better matches may exist and hint gives the next step; it does not indicate a coverage gap. Each hit\'s attribution must be kept with republished content (Terms). asOf adds no cost. Cost: 5 credits.',
     inputSchema: {
       jurisdiction: jurisdiction(),
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision you are looking for.'),
-      asOf: isoDate('Label each hit for this date (YYYY-MM-DD, 1800-01-01 to today (UTC)): whether today\'s wording already applied then. The text stays today\'s; repealed or replaced provisions are not searched.').optional(),
+      asOf: isoDate('Label each hit for this date (YYYY-MM-DD, 1800-01-01 to today (UTC)). The text stays today\'s; repealed or replaced provisions are not searched.').optional(),
       limit: z.number().int().min(1).max(50).default(10).describe('Max hits (plan cap, same as lex_semantic_legislation).'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor (default ≈0.7).'),
       language: nationalLanguage,

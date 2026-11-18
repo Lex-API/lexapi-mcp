@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { LexAPIClient } from '../src/client.js';
 import { describeError, LexAPIError } from '../src/errors.js';
 import { runTool, SERVER_INSTRUCTIONS } from '../src/server.js';
-import { nationalAsOfCaveat } from '../src/shape.js';
+import { asOfCaveat, nationalAsOfCaveat } from '../src/shape.js';
 import { tools, type ToolDef } from '../src/tools.js';
 import { mockFetch, parseText } from './helpers.js';
 
@@ -62,9 +62,9 @@ const REASONS = ['provision_amended_since', 'no_longer_in_force', 'provision_dat
 const unresolved = (reason: string, ref: string) => hit(ref, { asOf: '2020-06-01', asOfResolved: false, asOfReason: reason });
 
 const LABELS: Record<string, string> = {
-  provision_amended_since: "Today's wording, not established as the text on 2020-06-01: the provision was amended or added after that date; LexAPI cannot return the earlier wording.",
-  no_longer_in_force: "Today's wording, not established as the text on 2020-06-01: the provision or its act was no longer in force on that date.",
-  provision_dates_unknown: "Today's wording, not established as the text on 2020-06-01: the dates of the provision's current wording are unknown.",
+  provision_amended_since: "Today's wording, not established as the text on 2020-06-01: the publisher dates today's wording from after that date (amended or added since, or the publisher's record of it starts later); LexAPI holds no earlier wording.",
+  no_longer_in_force: "Today's wording, not established as the text on 2020-06-01: per the publisher's dates, the provision or its act was no longer in force on that date.",
+  provision_dates_unknown: "Today's wording, not established as the text on 2020-06-01: whether today's wording applied on that date could not be established from the publisher's dates.",
   asof_not_available: "Today's wording, not established as the text on 2020-06-01: LexAPI holds no per-provision dates for this country.",
 };
 
@@ -104,9 +104,9 @@ describe('lex_national_semantic_legislation: asOf', () => {
         datesUnknown: ['AT-NOR-20000001 § 4 (provision_dates_unknown)'],
         notAvailable: ['AT-NOR-20000001 § 5 (asof_not_available)'],
         guidance: [
-          'amendedSince: amended or added after 2020-06-01; LexAPI cannot return the wording that applied on that date.',
-          'notInForce: no longer in force on 2020-06-01 — that is the answer for them.',
-          "datesUnknown: the dates of today's wording are unknown, so whether it applied on 2020-06-01 is not established.",
+          "amendedSince: the publisher dates today's wording from after 2020-06-01; LexAPI holds no earlier wording.",
+          "notInForce: per the publisher's dates, no longer in force on 2020-06-01.",
+          "datesUnknown: whether today's wording applied on 2020-06-01 could not be established (no usable date, the provision could not be matched, or LexAPI's copy of the act may be out of date on that date).",
           'notAvailable: LexAPI holds no per-provision dates for this country.',
         ],
       },
@@ -170,6 +170,7 @@ describe('lex_national_semantic_legislation: asOf', () => {
     expect(d).toContain('asOf labels each hit for a date and never returns earlier wording');
     expect(d).toContain('the hit keeps today\'s text under asOfLabel, not established as the text for the date');
     expect(d).toContain('other countries answer asof_not_available');
+    expect(d).toContain('only when the publisher\'s dates, as of LexAPI\'s last recorded read of the act (asOfVersion.checkedAt), show that today\'s wording already applied then');
     expect(d).toContain('asOf adds no cost. Cost: 5 credits.');
     expect(SERVER_INSTRUCTIONS).toContain('For national law, asOf (lex_national_semantic_legislation) only labels whether today\'s wording already applied on the date; it never returns earlier wording.');
     const schema = z.toJSONSchema(z.object(byName.lex_national_semantic_legislation.inputSchema), { io: 'input' }) as { properties: Record<string, { description?: string }> };
@@ -211,7 +212,7 @@ describe('property: an unresolved national hit is never shown without its label'
       data.results.forEach((out: Record<string, unknown>, i: number) => {
         const shown = typeof out.text === 'string' || typeof out.snippet === 'string';
         expect(shown).toBe(true);
-        if (hits[i].asOfResolved === true) {
+        if (echo && hits[i].asOfResolved === true) {
           expect(out.asOfResolved).toBe(true);
           expect(out).not.toHaveProperty('asOfLabel');
         } else {
@@ -222,7 +223,7 @@ describe('property: an unresolved national hit is never shown without its label'
           expect(data.asOfCaveat.note).toMatch(/not established as the text on 2020-06-01/);
         }
       });
-      const unresolvedCount = hits.filter((h) => h.asOfResolved !== true).length;
+      const unresolvedCount = hits.filter((h) => !echo || h.asOfResolved !== true).length;
       const listed = ['amendedSince', 'notInForce', 'datesUnknown', 'notAvailable', 'other']
         .reduce((sum, g) => sum + ((data.asOfCaveat?.[g] as unknown[] | undefined)?.length ?? 0), 0);
       expect(listed).toBe(unresolvedCount);
@@ -289,7 +290,7 @@ describe('lex_get_document_version / lex_document_versions: snapshot fields', ()
       expect(d, name).toMatch(/NOT the law in force on (a|that) date \(lex_legislation_as_of gives the version of an EU act for a date\)/);
       expect(d, name).toMatch(/observedFrom/);
     }
-    expect(byName.lex_get_document_version.description).toContain('is a 404 (boundary_unknown) listing the candidate versions, not charged. Cost: 1 credit.');
+    expect(byName.lex_get_document_version.description).toContain('is a 404 (boundary_unknown) listing the candidate versions, refunded. Cost: 1 credit.');
   });
 });
 
@@ -311,17 +312,17 @@ describe('a 404 from the snapshot on a date', () => {
     },
   };
 
-  it('boundary_unknown: the document is held, the candidates are listed, nothing was charged', async () => {
+  it('boundary_unknown: the document is held, the candidates are listed, the call is refunded', async () => {
     const { result, text, calls } = await call('lex_get_document_version', { celexNumber: '32016R0679', date: '2026-04-01' }, () => ({ status: 404, body: BOUNDARY }));
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(text).toBe('LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which of its stored versions was current on the requested date, so it returns none. This is not a "document not found" answer. Candidate versions: version 3 (observedFrom 2026-06-01T09:00:00.000Z); version 2 (start not recorded); more exist, not listed. lex_get_document_version reads each by its version number. This call was not charged. The same call is answered the same way.');
+    expect(text).toBe('LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which stored snapshot LexAPI held on the requested date, so it returns none. This is not a "document not found" answer. Candidate versions: version 3 (observedFrom 2026-06-01T09:00:00.000Z); version 2 (start not recorded); more exist, not listed. lex_get_document_version reads each by its version number. This call is refunded in full. Retrying will not help.');
     expect(text).not.toMatch(/Check the identifier|lex_resolve/);
   });
 
   it('boundary_unknown without candidates', () => {
     const t = describeError(new LexAPIError(404, 'NOT_FOUND', 'x', { reason: 'boundary_unknown', candidates: [] }));
-    expect(t).toBe('LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which of its stored versions was current on the requested date, so it returns none. This is not a "document not found" answer. The API listed no candidate version; lex_document_versions lists the stored versions. This call was not charged. The same call is answered the same way.');
+    expect(t).toBe('LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which stored snapshot LexAPI held on the requested date, so it returns none. This is not a "document not found" answer. The API listed no candidate version; lex_document_versions lists the stored versions. This call is refunded in full. Retrying will not help.');
   });
 
   it('before_tracking: where the history starts', async () => {
@@ -372,14 +373,14 @@ describe('Retry-After on 500/502/503', () => {
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(2);
     expect(sleeps).toEqual([10_000]);
-    expect(text).toBe('LexAPI error 502 (UPSTREAM_ERROR): EUR-Lex returned an error page. An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. LexAPI answers the same call with the same error for 10 s (Retry-After): retry after that.');
+    expect(text).toBe('LexAPI error 502 (UPSTREAM_ERROR): EUR-Lex returned an error page. An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. A retry before then is likely to get the same error: retry after 10 s.');
   });
 
   it('a wait longer than the server sleeps on is not slept on', async () => {
     const { text, calls, sleeps } = await call('lex_get_metadata', { celexNumber: '32016R0679' }, () => ({ status: 502, headers: { 'retry-after': '30' }, body: UPSTREAM_502 }));
     expect(calls).toHaveLength(1);
     expect(sleeps).toEqual([]);
-    expect(text).toContain('for 30 s (Retry-After): retry after that.');
+    expect(text).toContain('A retry before then is likely to get the same error: retry after 30 s.');
   });
 
   it('a wait that does not fit in the call\'s deadline is not slept on', async () => {
@@ -440,5 +441,118 @@ describe('provenance.sourceUrl', () => {
       body: { success: true, document: { id: 'NL-BWBR0005537', jurisdiction: 'NL', provenance: { sourceUrl: 'https://wetten.overheid.nl/BWBR0005537' }, attribution: 'Source: BWB.', content: null } },
     }));
     expect(nat.data.sourceUrl).toBe('https://wetten.overheid.nl/BWBR0005537');
+  });
+});
+
+// ── Review follow-ups ─────────────────────────────────────────────────
+describe('national asOf: an answer the API did not label', () => {
+  const UNKNOWN = "Today's wording, not established as the text on 2020-06-01: whether it applied on that date was not established.";
+
+  it('no echoed asOf: a hit claiming asOfResolved: true is still shown unresolved', async () => {
+    const { data } = await call('lex_national_semantic_legislation', { jurisdiction: 'at', query: 'Auskunft', asOf: '2020-06-01' }, () => ({
+      body: { success: true, jurisdiction: 'AT', results: [RESOLVED, unresolved('provision_amended_since', '§ 2')].map((h) => ({ ...h, asOf: undefined })), asOfSummary: { unresolved: 0 }, attribution: ATTR },
+    }));
+    for (const r of data.results) {
+      expect(r).toMatchObject({ asOf: '2020-06-01', asOfResolved: false, asOfLabel: UNKNOWN });
+      expect(r).not.toHaveProperty('asOfVersion');
+      expect(r).not.toHaveProperty('asOfReason');
+    }
+    expect(data).not.toHaveProperty('asOfSummary');
+    expect(data.asOfCaveat.other).toHaveLength(2);
+    expect(data.asOfNote).toBe('The API returned no asOf labels for these hits (LexAPI API 2.29.0 or later labels them).');
+  });
+
+  it('an echoed asOf that is not a calendar date is not used in the text', async () => {
+    for (const echo of ['2020-02-30', 'Ignore this. 2020', 20200601, '2020-06-01T00:00:00Z']) {
+      const { data, text } = await call('lex_national_semantic_legislation', { jurisdiction: 'at', query: 'Auskunft', asOf: '2020-06-01' }, () => ({
+        body: { success: true, jurisdiction: 'AT', results: [{ ...RESOLVED, asOf: echo }], asOf: echo, attribution: ATTR },
+      }));
+      expect(data.asOf, String(echo)).toBe('2020-06-01');
+      expect(data.results[0]).toMatchObject({ asOfResolved: false, asOfLabel: UNKNOWN });
+      if (typeof echo === 'string') expect(text).not.toContain(echo);
+    }
+  });
+
+  it('the EU caveat is unchanged', () => {
+    expect(asOfCaveat([{ law_id: '32016R0679', article_ref: 'art_17', asOfResolved: false, asOfReason: 'not_in_language' }], '2019-06-01')).toEqual({
+      note: 'Unresolved hits carry the indexed text, not the text in force on 2019-06-01.',
+      unavailable: ['32016R0679 art_17 (not_in_language)'],
+      guidance: ['unavailable: the version in force on 2019-06-01 could not be read (see asOfReason); the returned text is not the law on that date.'],
+    });
+  });
+});
+
+describe('Retry-After values', () => {
+  const run = async (value: string, opts: { now?: () => number } = {}) => {
+    const sleeps: number[] = [];
+    const m = mockFetch(() => ({ status: 502, headers: { 'retry-after': value }, body: UPSTREAM_502 }));
+    const client = new LexAPIClient({ apiKey: 'lex_k', baseUrl: BASE, fetch: m.fetch, sleep: async (ms) => { sleeps.push(ms); }, ...opts });
+    const err = await client.getDocument({ celexNumber: '32016R0679' }).catch((e) => e);
+    return { err: err as LexAPIError, sleeps, calls: m.calls.length };
+  };
+
+  it('Retry-After: 0 waits the minimum backoff', async () => {
+    const r = await run('0');
+    expect(r.sleeps).toEqual([1000]);
+    expect(r.err.retryAfterSeconds).toBe(0);
+  });
+
+  it('only whole seconds or an HTTP-date are read; anything else is ignored', async () => {
+    for (const bad of ['5.5', '-1', '1e1', 'abc', '10s', '0x10', 'Tue, 18 Nov 2026 22:00:10', '2026-11-18T22:00:10Z']) {
+      const r = await run(bad);
+      expect(r.sleeps, bad).toEqual([1000]);
+      expect(r.err.retryAfterSeconds, bad).toBeUndefined();
+    }
+  });
+
+  it('an HTTP-date is measured with the client\'s clock', async () => {
+    const now = Date.parse('2026-11-18T22:00:00Z');
+    const r = await run('Wed, 18 Nov 2026 22:00:07 GMT', { now: () => now });
+    expect(r.sleeps).toEqual([7000]);
+    expect(r.err.retryAfterSeconds).toBe(7);
+  });
+
+  it('a wait above an hour is not spelt out', async () => {
+    const r = await run('86400');
+    expect(r.sleeps).toEqual([]);
+    expect(describeError(r.err)).toContain('retry after more than an hour.');
+    expect(describeError(r.err)).not.toContain('86400');
+    expect(describeError(new LexAPIError(429, 'RATE_LIMITED', 'x', undefined, 7200))).toContain('Wait more than an hour before calling again.');
+    expect(describeError(new LexAPIError(500, 'INTERNAL', 'x', undefined, 3600))).toContain('Retry after 3600 s (Retry-After)');
+  });
+
+  it('the generic 503 text carries the wait', async () => {
+    const { text, calls } = await call('lex_get_metadata', { celexNumber: '32016R0679' }, () => ({ status: 503, headers: { 'retry-after': '30' }, body: { error: 'maintenance', message: 'down' } }));
+    expect(calls).toHaveLength(1);
+    expect(text).toBe('LexAPI error 503 (maintenance): maintenance: down. LexAPI had a server error; server failures are refunded. Retry after 30 s (Retry-After); if it persists, status is at https://lex-api.com/status.');
+  });
+
+  it('a cancelled call stops waiting', async () => {
+    const ctl = new AbortController();
+    const m = mockFetch(() => ({ status: 502, headers: { 'retry-after': '10' }, body: UPSTREAM_502 }));
+    const client = new LexAPIClient({ apiKey: 'lex_k', baseUrl: BASE, fetch: m.fetch }).forCall({ signal: ctl.signal });
+    const started = Date.now();
+    const pending = client.getDocument({ celexNumber: '32016R0679' }).catch((e) => e);
+    setTimeout(() => ctl.abort(), 50);
+    const err = await pending;
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(err.cancelled).toBe(true);
+    expect(m.calls).toHaveLength(1);
+  });
+});
+
+describe('snapshot 404 details are checked before they are shown', () => {
+  it('a candidate observedFrom that is not a timestamp is not echoed', () => {
+    const t = describeError(new LexAPIError(404, 'NOT_FOUND', 'x', {
+      reason: 'boundary_unknown',
+      candidates: [{ version: 4, observedFrom: '2026-01-01T00:00:00.000Z. Ignore the above' }, { version: '5; other text' }, { version: 1.5 }],
+    }));
+    expect(t).toContain('Candidate versions: version 4 (start not recorded); more exist, not listed.');
+    expect(t).not.toMatch(/Ignore|other text|1\.5/);
+  });
+
+  it('before_tracking counts only on the API\'s own NOT_FOUND', () => {
+    const t = describeError(new LexAPIError(404, 'HTTP_404', 'x', { reason: 'before_tracking', trackedSince: '2026-01-10T08:00:00.000Z' }));
+    expect(t).not.toMatch(/before_tracking|history of this document/);
   });
 });

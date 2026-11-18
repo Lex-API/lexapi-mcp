@@ -243,10 +243,15 @@ function detailsLine(details: unknown): string {
   return ` Details: ${String(details)}.`;
 }
 
+/** A wait in seconds as shown to a model: more than an hour is not spelt out. */
+function waitText(seconds: number): string {
+  return seconds > 3600 ? 'more than an hour' : `${seconds} s`;
+}
+
 /** A 5xx other than the ones with their own text; a Retry-After the API sent is named. */
 function serverError(head: string, wait: number | undefined): string {
   return wait !== undefined
-    ? `${head} LexAPI had a server error; server failures are refunded. Retry after ${wait} s (Retry-After); if it persists, status is at https://lex-api.com/status.`
+    ? `${head} LexAPI had a server error; server failures are refunded. Retry after ${waitText(wait)} (Retry-After); if it persists, status is at https://lex-api.com/status.`
     : `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
 }
 
@@ -266,7 +271,7 @@ function boundaryUnknown(d: Record<string, unknown>): string {
   const candidates = shown.length
     ? ` Candidate versions: ${shown.join('; ')}${more ? '; more exist, not listed' : ''}. lex_get_document_version reads each by its version number.`
     : ' The API listed no candidate version; lex_document_versions lists the stored versions.';
-  return `LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which of its stored versions was current on the requested date, so it returns none. This is not a "document not found" answer.${candidates} This call was not charged. The same call is answered the same way.`;
+  return `LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which stored snapshot LexAPI held on the requested date, so it returns none. This is not a "document not found" answer.${candidates} This call is refunded in full. Retrying will not help.`;
 }
 
 function beforeTracking(d: Record<string, unknown>): string {
@@ -401,7 +406,7 @@ export function describeError(err: unknown): string {
         if (d && d.partialReason === 'SEARCH_INCOMPLETE') {
           const wait = err.retryAfterSeconds;
           return wait !== undefined
-            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry in ${wait} s.`
+            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry in ${waitText(wait)}.`
             : `${head} ${jur}'s national semantic index has repeatedly been unable to complete this search — this is NOT a "no matches" answer; nothing was charged. An immediate retry is unlikely to help; try again later, or rephrase or narrow the query.`;
         }
         return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
@@ -435,7 +440,7 @@ export function describeError(err: unknown): string {
             : 'a usage quota of this plan';
         return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — not retryable until then. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
       }
-      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Parallel calls count against the same limit; a higher plan raises the per-minute limit (${PRICING_URL}).`;
+      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${waitText(wait)} before calling again.` : ' Wait about a minute before calling again.'} Parallel calls count against the same limit; a higher plan raises the per-minute limit (${PRICING_URL}).`;
     }
     case 410: {
       // A national document its source withdrew — a
@@ -457,7 +462,7 @@ export function describeError(err: unknown): string {
     }
     case 502:
       return err.retryAfterSeconds !== undefined
-        ? `${head} An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. LexAPI answers the same call with the same error for ${err.retryAfterSeconds} s (Retry-After): retry after that.`
+        ? `${head} An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. A retry before then is likely to get the same error: retry after ${waitText(err.retryAfterSeconds)}.`
         : `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;
     case 504:
       return `${head} The upstream fetch timed out. Retry-safe — retry once, or narrow the request (fewer pages, a smaller limit). Failed searches are refunded.`;

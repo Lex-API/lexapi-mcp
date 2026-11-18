@@ -1164,7 +1164,7 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
  * the index has nothing (compacted away here); `documentKind`, `title` and
  * the act's validity come from the hit's `document` summary.
  */
-export function shapeNationalLegislationHit(r: unknown, asOf?: string): Obj {
+export function shapeNationalLegislationHit(r: unknown, asOf?: string, labelled = true): Obj {
   if (!isObj(r)) return {};
   const d = isObj(r.document) ? r.document : {};
   return compact({
@@ -1180,7 +1180,7 @@ export function shapeNationalLegislationHit(r: unknown, asOf?: string): Obj {
     score: round3(r.score),
     language: r.language,
     // With asOf, the label comes before the text it qualifies.
-    ...(asOf ? nationalAsOfFields(r, asOf) : {}),
+    ...(asOf ? nationalAsOfFields(r, asOf, labelled) : {}),
     snippet: r.snippet,
     text: r.text,
     // From the index (as of today), or our row's confirmed-repeal override
@@ -1201,9 +1201,9 @@ export function shapeNationalLegislationHit(r: unknown, asOf?: string): Obj {
 // these means that an earlier version could not be read: LexAPI holds no
 // earlier wording at all.
 const NATIONAL_AS_OF_MEANING: Record<string, string> = {
-  provision_amended_since: 'the provision was amended or added after that date; LexAPI cannot return the earlier wording',
-  no_longer_in_force: 'the provision or its act was no longer in force on that date',
-  provision_dates_unknown: 'the dates of the provision\'s current wording are unknown',
+  provision_amended_since: 'the publisher dates today\'s wording from after that date (amended or added since, or the publisher\'s record of it starts later); LexAPI holds no earlier wording',
+  no_longer_in_force: 'per the publisher\'s dates, the provision or its act was no longer in force on that date',
+  provision_dates_unknown: 'whether today\'s wording applied on that date could not be established from the publisher\'s dates',
   asof_not_available: 'LexAPI holds no per-provision dates for this country',
 };
 const NATIONAL_AS_OF_GROUP: Record<string, string> = {
@@ -1226,7 +1226,11 @@ function nationalAsOfMeaning(reason: string | undefined): string {
  * says that the text shown is today's wording, not established as the text
  * for the date. `asOfVersion.validTo: null` (an open end) is kept.
  */
-function nationalAsOfFields(r: Obj, asOf: string): Obj {
+function nationalAsOfFields(r: Obj, asOf: string, labelled: boolean): Obj {
+  if (!labelled) {
+    // The API did not label this answer: nothing it carries counts.
+    return { asOf, asOfResolved: false, asOfLabel: `Today's wording, not established as the text on ${asOf}: ${nationalAsOfMeaning(undefined)}.` };
+  }
   if (r.asOfResolved === true) {
     const v = isObj(r.asOfVersion) ? r.asOfVersion : {};
     const version: Obj = {};
@@ -1255,9 +1259,9 @@ export function nationalAsOfCaveat(results: Obj[], asOf: string): Obj | undefine
     groups[Object.hasOwn(NATIONAL_AS_OF_GROUP, reason) ? NATIONAL_AS_OF_GROUP[reason] : 'other'].push(id);
   }
   const guidance: string[] = [];
-  if (groups.amendedSince.length) guidance.push(`amendedSince: amended or added after ${asOf}; LexAPI cannot return the wording that applied on that date.`);
-  if (groups.notInForce.length) guidance.push(`notInForce: no longer in force on ${asOf} — that is the answer for them.`);
-  if (groups.datesUnknown.length) guidance.push(`datesUnknown: the dates of today's wording are unknown, so whether it applied on ${asOf} is not established.`);
+  if (groups.amendedSince.length) guidance.push(`amendedSince: the publisher dates today's wording from after ${asOf}; LexAPI holds no earlier wording.`);
+  if (groups.notInForce.length) guidance.push(`notInForce: per the publisher's dates, no longer in force on ${asOf}.`);
+  if (groups.datesUnknown.length) guidance.push(`datesUnknown: whether today's wording applied on ${asOf} could not be established (no usable date, the provision could not be matched, or LexAPI's copy of the act may be out of date on that date).`);
   if (groups.notAvailable.length) guidance.push('notAvailable: LexAPI holds no per-provision dates for this country.');
   if (groups.other.length) guidance.push(`other: whether today's wording applied on ${asOf} was not established (see asOfReason).`);
   if (!guidance.length) return undefined;
@@ -1268,20 +1272,30 @@ export function nationalAsOfCaveat(results: Obj[], asOf: string): Obj | undefine
   });
 }
 
+/** A calendar date written YYYY-MM-DD. */
+function isCalendarDate(v: unknown): v is string {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
 /**
  * `requestedAsOf`: the asOf the tool sent. An API that does not label hits
- * (before LexAPI API 2.29.0) echoes no asOf; every hit is then labelled
- * unresolved, so no text reads as established for the date.
+ * (before LexAPI API 2.29.0) echoes no asOf, and an echo that is not a
+ * calendar date is not trusted either: every hit is then labelled
+ * unresolved under the requested date, whatever it carries, so no text
+ * reads as established for the date.
  */
 export function shapeNationalLegislation(res: LexResponse<Json>, requestedAsOf?: string): Obj {
   const b = res.body;
-  const echoed = label(b.asOf, 10);
+  const echoed = isCalendarDate(b.asOf) ? b.asOf : undefined;
   const asOf = echoed ?? requestedAsOf;
-  const results = Array.isArray(b.results) ? b.results.map((r) => shapeNationalLegislationHit(r, asOf)) : [];
+  const labelled = echoed !== undefined;
+  const results = Array.isArray(b.results) ? b.results.map((r) => shapeNationalLegislationHit(r, asOf, labelled)) : [];
   return compact({
     jurisdiction: b.jurisdiction,
     asOf,
-    asOfSummary: asOf && isObj(b.asOfSummary) ? compact({ unresolved: num(b.asOfSummary.unresolved) }) : undefined,
+    asOfSummary: labelled && isObj(b.asOfSummary) ? compact({ unresolved: num(b.asOfSummary.unresolved) }) : undefined,
     resultCount: results.length,
     results,
     hint: b.hint,

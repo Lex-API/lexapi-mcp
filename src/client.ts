@@ -160,7 +160,9 @@ export class LexAPIClient {
     this.maxRetries = opts.maxRetries ?? 1;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetch ?? fetch;
-    this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    // The default sleep ends early when the call is cancelled; the loop then
+    // reports the cancellation before any further request.
+    this.sleep = opts.sleep ?? ((ms) => abortableSleep(ms, this.signal));
     this.clientHeader = clientHeaderValue({ mode: opts.mode, tool: opts.tool, app: opts.app });
   }
 
@@ -364,7 +366,7 @@ export class LexAPIClient {
       // A used-up legacy quota (QUOTA_EXHAUSTED) cannot succeed
       // before it refills, whatever its Retry-After says: never retried.
       if (res.status === 429 && canRetry && attempt < this.maxRetries && !(await isQuotaExhausted(res))) {
-        const wait = retryAfterSeconds(res);
+        const wait = retryAfterSeconds(res, this.now());
         const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
         if (wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S && canWait(waitMs)) {
           attemptSignal.dispose();
@@ -381,7 +383,7 @@ export class LexAPIClient {
       // search has repeatedly come back incomplete, so it is not retried.
       const incomplete = res.status === 503 ? await incompleteSearch(res) : undefined;
       if (incomplete) {
-        const wait = retryAfterSeconds(res) ?? incomplete.retryAfter;
+        const wait = retryAfterSeconds(res, this.now()) ?? incomplete.retryAfter;
         const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
         if (canRetry && !incompleteRetried && attempt < this.maxRetries && wait !== undefined
           && wait <= MAX_RETRY_AFTER_SLEEP_S && remaining() - waitMs >= MIN_INCOMPLETE_RETRY_REMAINING_MS) {
@@ -403,8 +405,10 @@ export class LexAPIClient {
         // or one that would leave too little of the deadline, is not slept
         // on: the error is returned with the wait in it.
         const transient = res.status === 500 || res.status === 502 || res.status === 503;
-        const named = transient ? retryAfterSeconds(res) : undefined;
-        const waitMs = named === undefined ? 500 * 2 ** (attempt + 1) : Math.max(1, named) * 1000;
+        const named = transient ? retryAfterSeconds(res, this.now()) : undefined;
+        const backoff = 500 * 2 ** (attempt + 1);
+        // Never shorter than the backoff (Retry-After: 0 included).
+        const waitMs = named === undefined ? backoff : Math.max(backoff, named * 1000);
         if (transient && canRetry && attempt < this.maxRetries && (named === undefined || named <= MAX_RETRY_AFTER_SLEEP_S)
           && canWait(waitMs) && !(res.status === 503 && await isServerTimeout(res))) {
           attemptSignal.dispose();
@@ -440,7 +444,7 @@ export class LexAPIClient {
           parsed.message,
           parsed.details,
           // A quota 429 has no meaningful retry-after.
-          quota ? undefined : (retryAfterSeconds(res) ?? parsed.retryAfter),
+          quota ? undefined : (retryAfterSeconds(res, this.now()) ?? parsed.retryAfter),
           parsed.resetsAt,
           parsed.pastDue && { ...parsed.pastDue, siteHost: this.baseOrigin?.hostname },
         );
@@ -629,14 +633,35 @@ async function isServerTimeout(res: Response): Promise<boolean> {
   }
 }
 
-function retryAfterSeconds(res: Response): number | undefined {
-  const raw = res.headers.get('retry-after');
+/** Retry-After: whole seconds, or an IMF-fixdate HTTP-date (RFC 9110). */
+const RETRY_AFTER_SECONDS_RE = /^\d{1,10}$/;
+const HTTP_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * Seconds to wait from a Retry-After header: a non-negative whole number of
+ * seconds, or an HTTP-date measured against `now`. Any other value is ignored.
+ */
+export function retryAfterSeconds(res: Response, now: number): number | undefined {
+  const raw = res.headers.get('retry-after')?.trim();
   if (!raw) return undefined;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
+  if (RETRY_AFTER_SECONDS_RE.test(raw)) return Number(raw);
+  if (!HTTP_DATE_RE.test(raw)) return undefined;
   const date = Date.parse(raw);
-  if (!Number.isNaN(date)) return Math.max(0, Math.ceil((date - Date.now()) / 1000));
-  return undefined;
+  return Number.isNaN(date) ? undefined : Math.max(0, Math.ceil((date - now) / 1000));
+}
+
+/** A sleep that resolves early when `signal` aborts. */
+function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 function safeJson(text: string): unknown {
