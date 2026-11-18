@@ -51,6 +51,17 @@ const exhausted = (weight = 5) => ({
 });
 const rateLimited = () => ({ status: 429, headers: { 'retry-after': '30' }, body: { error: 'Rate limit exceeded', code: 'RATE_LIMITED', retryAfter: 30 } });
 const tierForbidden = () => ({ status: 403, body: { success: false, code: 'TIER_FORBIDDEN', error: 'National-law access is not included in your plan', jurisdiction: 'AT' } });
+// A failed subscription payment: the API refuses every request (the test client's base is api.example.test).
+const pastDue = () => ({
+  status: 403,
+  body: {
+    success: false, code: 'PAYMENT_PAST_DUE', error: 'Payment past due',
+    message: 'Your subscription payment failed, so API requests are refused. Pay the open invoice or update your card at javascript:alert(1); see the pricing page to upgrade your plan.',
+    accessEndedAt: '2026-11-25T09:14:03.000Z', billingUrl: 'https://api.example.test/dashboard#billing',
+  },
+});
+const PAST_DUE_TEXT = 'LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds (access ended at 2026-11-25T09:14:03.000Z); no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard (https://api.example.test/dashboard#billing). Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.';
+const NOT_PAST_DUE_WORDS = /plan|pricing|upgrade|javascript/i;
 const allowanceExhausted = () => ({
   status: 402,
   headers: { 'x-national-limit': '30', 'x-national-remaining': '0' },
@@ -842,6 +853,49 @@ describe('lex_check_citation', () => {
     expect(notLive.data.notChecked[0].note).toMatch(/no route for FR.*not live/);
   });
 
+  it('a payment past due: the first refused call ends the tool call, with the past-due text', async () => {
+    for (const args of [{ identifier: 'AT-NOR-1' }, { identifier: '32016R0679', article: '17' }, { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }]) {
+      const r = await call('lex_check_citation', args, () => pastDue());
+      expect(r.calls, args.identifier).toHaveLength(1);
+      expect(r.result.isError).toBe(true);
+      expect(r.text).toBe(PAST_DUE_TEXT);
+      expect(r.text).not.toMatch(NOT_PAST_DUE_WORDS);
+    }
+    // Refused after the free coverage call: the document read is the last call.
+    const later = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : pastDue()));
+    expect(later.paths).toEqual(['/national/coverage', '/at/documents/AT-NOR-1']);
+    expect(later.text).toBe(PAST_DUE_TEXT);
+    // Refused after a resolve that was answered: reported as payment_past_due, never as plan.
+    const partial = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj', article: '17' }, (c) => (
+      c.url.pathname.endsWith('/resolve')
+        ? { body: { success: true, identifierType: 'eli', resolvedVia: 'eli-cellar', verified: true, celex: '32016R0679', urls: GDPR_URLS } }
+        : pastDue()
+    ));
+    expect(partial.paths).toEqual(['/resolve', '/documentContent']);
+    expect(partial.data.notChecked).toEqual([{ what: 'existence, title, in-force status, article', call: 'lex_get_document', reason: 'payment_past_due', error: PAST_DUE_TEXT }]);
+    expect(partial.text).not.toMatch(NOT_PAST_DUE_WORDS);
+  });
+
+  it('the route 404 of a country that is not served is recognised by details.reason, only on the API\'s own NOT_FOUND', async () => {
+    const reply = (body: unknown) => (c: Call) => (isCoverage(c) ? { body: AT_LIVE } : { status: 404, body });
+    const marked = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, reply({ success: false, error: { code: 'NOT_FOUND', message: 'No such route.', details: { reason: 'unknown_endpoint' } } }));
+    expect(marked.data.notChecked[0]).toMatchObject({ reason: 'not_found' });
+    expect(marked.data.notChecked[0].note).toMatch(/no route for AT.*not live/);
+    // The same mark on a 404 that is not the API's typed answer, another reason, and a proxy page.
+    for (const body of [
+      { error: 'Not Found', details: { reason: 'unknown_endpoint' } },
+      { success: false, error: { code: 'GONE_AWAY', message: 'x', details: { reason: 'unknown_endpoint' } } },
+      { success: false, error: { code: 'NOT_FOUND', message: 'No such version', details: { reason: 'version_not_held' } } },
+    ]) {
+      const r = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, reply(body));
+      expect(r.data.exists, JSON.stringify(body)).toBe('unknown');
+      expect(r.data.notChecked[0].note, JSON.stringify(body)).toMatch(/was not the API's own answer about this document id/);
+      expect(r.data.notChecked[0].note).not.toMatch(/not live/);
+    }
+    const proxy = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { status: 404, raw: '<html>Not Found</html>' }));
+    expect(proxy.data.notChecked[0].note).toMatch(/was not the API's own answer about this document id/);
+  });
+
   it('a national id behind a plan gate, or withdrawn, is the API error', async () => {
     const gated = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => tierForbidden());
     expect(gated.result.isError).toBe(true);
@@ -1010,6 +1064,19 @@ describe('lex_act_history', () => {
     expect(data.incomplete[1].part).toMatch(/document dates/);
     expect(data.changes.repeals[0].dateNotRead).toMatchObject({ reason: 'credits_exhausted' });
     expect(data.changes.repeals[0].dateNotRead.error).toMatch(/^not run/);
+  });
+
+  it('a payment past due: one call, the past-due text; after the relations, no further call', async () => {
+    const first = await call('lex_act_history', { celexNumber: '32006R1907', dates: 3 }, () => pastDue());
+    expect(first.calls).toHaveLength(1);
+    expect(first.result.isError).toBe(true);
+    expect(first.text).toBe(PAST_DUE_TEXT);
+    const { data, calls, text } = await call('lex_act_history', { celexNumber: '32006R1907', dates: 3 }, route({ act: pastDue() }));
+    expect(calls).toHaveLength(2); // the three date reads were not started
+    expect(data.stopped).toEqual({ reason: 'payment_past_due', detail: PAST_DUE_TEXT });
+    expect(data.incomplete[0]).toMatchObject({ call: 'lex_get_metadata', reason: 'payment_past_due', error: PAST_DUE_TEXT });
+    expect(data.changes.repeals[0].dateNotRead).toEqual({ reason: 'payment_past_due', error: 'not run: an earlier call of this tool call ended with payment_past_due' });
+    expect(text).not.toMatch(NOT_PAST_DUE_WORDS);
   });
 
   it('partial: a date read hits the rate limit, the rest are not started', async () => {
@@ -1241,6 +1308,40 @@ describe('lex_research', () => {
     });
     expect(data.incomplete).toBe(true);
     expect(data.stopped).toMatchObject({ reason: 'plan', scope: 'national searches' });
+  });
+
+  it('a payment past due: reported as payment_past_due, and no further search is started', async () => {
+    // EU only: both searches are under way at once, both are refused.
+    const eu = await call('lex_research', { query: 'right to erasure' }, () => pastDue());
+    expect(eu.calls).toHaveLength(2);
+    expect(eu.data.sources.map((s: any) => [s.status, s.reason, s.error])).toEqual([['failed', 'payment_past_due', PAST_DUE_TEXT], ['failed', 'payment_past_due', PAST_DUE_TEXT]]);
+    expect(eu.data.stopped).toEqual({ reason: 'payment_past_due', detail: PAST_DUE_TEXT });
+    expect(eu.data.results).toEqual([]);
+    expect(eu.text).not.toMatch(NOT_PAST_DUE_WORDS);
+
+    // With countries: the coverage call is refused, and nothing else is sent.
+    const all = await call('lex_research', { query: 'Datenschutz', jurisdictions: ['eu', 'at', 'de'] }, () => pastDue());
+    expect(all.paths).toEqual(['/national/coverage']);
+    expect(all.data.coverage).toMatchObject({ reason: 'payment_past_due', error: PAST_DUE_TEXT });
+    expect(all.data.sources).toHaveLength(6);
+    for (const s of all.data.sources) {
+      expect(s).toMatchObject({ status: 'not_run', reason: 'payment_past_due', error: 'not run: an earlier call of this tool call ended with payment_past_due' });
+    }
+    expect(all.data.stopped).toEqual({ reason: 'payment_past_due', detail: PAST_DUE_TEXT });
+    expect(all.text).not.toMatch(NOT_PAST_DUE_WORDS);
+
+    // Refused on the searches, national ones included: not a stop of the national searches only.
+    const many = await call('lex_research', { query: 'Datenschutz', jurisdictions: ['eu', 'at', 'de', 'nl', 'es', 'cz', 'si', 'pl'] }, (c) => (
+      c.url.pathname.endsWith('/national/coverage')
+        ? { body: coverage([['AT', true], ['DE', true], ['NL', true], ['ES', true], ['CZ', true], ['SI', true], ['PL', true]]) }
+        : pastDue()
+    ));
+    expect(many.calls.length).toBeLessThanOrEqual(4); // coverage, and the searches already under way
+    expect(many.data.sources).toHaveLength(16);
+    expect(many.data.sources.every((s: any) => s.status !== 'ok' && s.reason === 'payment_past_due')).toBe(true);
+    expect(many.data.sources.filter((s: any) => s.status === 'not_run').length).toBeGreaterThanOrEqual(13);
+    expect(many.data.stopped).toEqual({ reason: 'payment_past_due', detail: PAST_DUE_TEXT });
+    expect(many.text).not.toMatch(NOT_PAST_DUE_WORDS);
   });
 
   it('a plan refusal stops the remaining national searches', async () => {

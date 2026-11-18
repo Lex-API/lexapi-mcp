@@ -42,6 +42,8 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 - Every parameter has a description; the fields inside `lex_update_webhook.searchCriteria` are described once, on `lex_create_webhook`, and the parameter points there. Date and CELEX formats are stated in the descriptions and checked as before; they are no longer repeated as regular expressions in the schema.
 - With `LEXAPI_MCP_READ_ONLY`, the remaining descriptions do not name the hidden tools.
 - A test compares the credit costs in the descriptions, the 402 texts, the `lex_export` billing line and the README credits column with the API's operation weights (`tests/fixtures/operation-weights.json`, refreshed with `scripts/refresh-operation-weights.mjs`).
+- Errors: a `403 PAYMENT_PAST_DUE` (a subscription payment failed and was not completed in time, so the API refuses requests until it succeeds) has its own text. It says that the payment failed, that access returns when the open invoice is paid or the card is updated in the dashboard, that the call is not retryable until then and that no credits were charged. The API's `billingUrl` is shown when it is an https URL on the host of the configured API base URL, and `accessEndedAt` when it is a valid UTC timestamp. Before, it read as a plan refusal with a pointer to the pricing page. `lex_check_citation`, `lex_act_history` and `lex_research` report it as `payment_past_due` and start no further call. Other `403` texts are unchanged.
+- The `404` for a route the API does not have is recognised by `error.details.reason: "unknown_endpoint"` (LexAPI API 2.27.0) when the API sends it, and by its message on older versions. Other `404` texts are unchanged.
 
 ## 0.5.1 — 2026-11-16
 

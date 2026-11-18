@@ -435,6 +435,7 @@ export class LexAPIClient {
           // A quota 429 has no meaningful retry-after.
           quota ? undefined : (retryAfterSeconds(res) ?? parsed.retryAfter),
           parsed.resetsAt,
+          parsed.pastDue && { ...parsed.pastDue, siteHost: this.baseOrigin?.hostname },
         );
       }
 
