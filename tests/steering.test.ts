@@ -50,8 +50,9 @@ describe('model-facing text describes behaviour and does not steer the model', (
   it('error texts', () => {
     const statuses = [400, 401, 402, 403, 404, 409, 410, 422, 429, 500, 502, 503, 504];
     const codes = ['X', 'CREDITS_EXHAUSTED', 'NATIONAL_ALLOWANCE_EXHAUSTED', 'NATIONAL_TERMS_NOT_ACCEPTED', 'NATIONAL_SEMANTIC_NOT_ENABLED',
-      'NATIONAL_SEMANTIC_UNAVAILABLE', 'NATIONAL_SEMANTIC_FILTER_UNREACHABLE', 'TIMEOUT', 'QUOTA_EXHAUSTED', 'DOCUMENT_WITHDRAWN', 'ENDPOINT_NOT_AVAILABLE'];
-    const details = [undefined, { jurisdiction: 'AT', partialReason: 'SEARCH_INCOMPLETE', resetsAt: '2026-12-01T00:00:00Z', limit: 10, id: 'AT-NOR-1' }];
+      'NATIONAL_SEMANTIC_UNAVAILABLE', 'NATIONAL_SEMANTIC_FILTER_UNREACHABLE', 'TIMEOUT', 'QUOTA_EXHAUSTED', 'DOCUMENT_WITHDRAWN', 'ENDPOINT_NOT_AVAILABLE', 'PAYMENT_PAST_DUE'];
+    const details = [undefined, { jurisdiction: 'AT', partialReason: 'SEARCH_INCOMPLETE', resetsAt: '2026-12-01T00:00:00Z', limit: 10, id: 'AT-NOR-1' },
+      { billingUrl: 'https://lex-api.com/dashboard#billing', accessEndedAt: '2026-11-25T09:14:03.000Z' }];
     for (const status of statuses) {
       for (const code of codes) {
         for (const d of details) {

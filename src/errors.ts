@@ -3,6 +3,7 @@
 // LexAPI answers errors in two shapes (docs.md "Errors & retries"):
 //   typed:  { success: false, error: { code, message, details? } }
 //   legacy: { error: "slug or sentence", message?, details?, retryAfter?, upgradeUrl?, usage? }
+//           — the 403 PAYMENT_PAST_DUE body adds `billingUrl` and `accessEndedAt`.
 //           — newer servers also send a top-level `code` (e.g. RATE_LIMITED,
 //           QUOTA_EXHAUSTED) and, on quota 429s, a top-level `resetsAt`.
 // We normalise both, then turn the status into a message that says what
@@ -70,15 +71,49 @@ export class UpstreamAuthError extends Error {
 /** Code of the error a tool raises when the API has no such route: the deployment is older than the endpoint. */
 export const ENDPOINT_NOT_AVAILABLE = 'ENDPOINT_NOT_AVAILABLE';
 
+/** `error.details.reason` of the API's 404 for a route it does not have (LexAPI API 2.27.0 or later). */
+const UNKNOWN_ENDPOINT_REASON = 'unknown_endpoint';
+
+function hasUnknownEndpointReason(details: unknown): boolean {
+  return !!details && typeof details === 'object' && !Array.isArray(details)
+    && (details as Record<string, unknown>).reason === UNKNOWN_ENDPOINT_REASON;
+}
+
 /**
  * Whether a 404 is about the route, not about a document. The API answers
- * an unmatched route with the same code as an unknown document (NOT_FOUND),
- * so its message tells them apart; a 404 without that typed code did not
+ * an unmatched route with the same code as an unknown document (NOT_FOUND)
+ * and marks it with `details.reason: "unknown_endpoint"`; no other 404
+ * carries that value. An API older than 2.27.0 sends no such field, so the
+ * message prefix is still accepted. A 404 without the typed code did not
  * come from an endpoint either.
  */
 export function isUnknownEndpoint(err: unknown): err is LexAPIError {
   return err instanceof LexAPIError && err.status === 404
-    && (err.code !== 'NOT_FOUND' || /^Unknown API endpoint\b/i.test(err.message.trim()));
+    && (hasUnknownEndpointReason(err.details)
+      || err.code !== 'NOT_FOUND'
+      || /^Unknown API endpoint\b/i.test(err.message.trim()));
+}
+
+const MAX_BILLING_URL_LENGTH = 300;
+const MAX_TIMESTAMP_LENGTH = 40;
+
+/** An absolute https URL in printable ASCII, without credentials; anything else is not shown. */
+function httpsUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > MAX_BILLING_URL_LENGTH) return undefined;
+  if (!/^https:\/\/[!-~]+$/.test(value) || /[<>"'`\\()]/.test(value)) return undefined;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' && !u.username && !u.password ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An ISO 8601 instant (`2026-11-25T09:14:03.000Z`); anything else is not shown. */
+function isoInstant(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > MAX_TIMESTAMP_LENGTH) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/.test(value)) return undefined;
+  return Number.isNaN(Date.parse(value)) ? undefined : value;
 }
 
 export function parseErrorBody(
@@ -115,6 +150,9 @@ export function parseErrorBody(
   if (typeof j.acceptUrl === 'string') strayFields.acceptUrl = j.acceptUrl;
   // National semantic 503/422: why the search could not be completed.
   if (typeof j.partialReason === 'string') strayFields.partialReason = j.partialReason;
+  // 403 PAYMENT_PAST_DUE: where the invoice is paid, and when access ended.
+  if (typeof j.billingUrl === 'string' && j.billingUrl.length <= MAX_BILLING_URL_LENGTH) strayFields.billingUrl = j.billingUrl;
+  if (typeof j.accessEndedAt === 'string' && j.accessEndedAt.length <= MAX_TIMESTAMP_LENGTH) strayFields.accessEndedAt = j.accessEndedAt;
   const jurisdictionFallback = Object.keys(strayFields).length ? strayFields : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
@@ -222,6 +260,14 @@ export function describeError(err: unknown): string {
         const url = d && typeof d.acceptUrl === 'string' ? ` (${d.acceptUrl})` : '';
         return `${head} The account must accept the national-source terms once in the LexAPI dashboard${url} before national documents are served; retrying before that does not help. Nothing was charged.`;
       }
+      // A failed subscription payment that was not completed in time: every
+      // request is refused until it succeeds. Not a plan question, so no
+      // pricing pointer; the API's own sentence is not repeated.
+      if (err.code === 'PAYMENT_PAST_DUE') {
+        const ended = d ? isoInstant(d.accessEndedAt) : undefined;
+        const billing = d ? httpsUrl(d.billingUrl) : undefined;
+        return `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses its API requests until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}. The account holder restores access by paying the open invoice or updating the card in the LexAPI dashboard${billing ? ` (${billing})` : ''}. Not retryable until then; nothing was charged for this call.`;
+      }
       return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
       if (err.code === ENDPOINT_NOT_AVAILABLE) return `${head} The same call is answered the same way until the API is updated, so it is not retryable.`;
@@ -235,7 +281,8 @@ export function describeError(err: unknown): string {
       // matched, which for a country code can only mean it is unlaunched).
       const isNational = (d && typeof d.jurisdiction === 'string')
         || /^Document not found:/i.test(err.message)
-        || /Unknown API endpoint/i.test(err.message);
+        || /Unknown API endpoint/i.test(err.message)
+        || hasUnknownEndpointReason(d);
       if (isNational) {
         // "Unknown API endpoint" is the generic 404 for ANY unmatched route,
         // not only an unlaunched country — these tools only ever build

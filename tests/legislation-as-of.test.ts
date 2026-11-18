@@ -432,6 +432,18 @@ describe('lex_legislation_as_of: errors', () => {
     expect(r.text).not.toMatch(/Unknown API endpoint|country|lex_national|Check the identifier|No EU act/);
   });
 
+  it('the route 404 is recognised by details.reason, with or without the message prefix', async () => {
+    const marked = (message: string, reason: unknown) => () => ({ status: 404, body: { success: false, error: { code: 'NOT_FOUND', message, details: { reason } } } });
+    for (const message of ['Unknown API endpoint: POST /api/v1/legislation/as-of.', 'No such route.']) {
+      const r = await call(args, marked(message, 'unknown_endpoint'));
+      expect(r.text, message).toContain('LexAPI error 404 (ENDPOINT_NOT_AVAILABLE): This LexAPI deployment does not offer this endpoint yet');
+    }
+    // Another reason on the endpoint's own 404: an answer about the act.
+    const own = await call(args, marked('No EU act with the CELEX number 32016R0679 was found.', 'act_not_found'));
+    expect(own.text).toContain('LexAPI error 404 (NOT_FOUND): No EU act with the CELEX number 32016R0679 was found.');
+    expect(own.text).not.toMatch(/ENDPOINT_NOT_AVAILABLE|deployment/);
+  });
+
   it('a 404 that is not the API\'s typed answer is read as a missing endpoint too', async () => {
     for (const reply of [{ status: 404, raw: '<html>Not Found</html>' }, { status: 404, body: { error: 'Not Found' } }]) {
       const r = await call(args, () => reply);
