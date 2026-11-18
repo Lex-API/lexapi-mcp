@@ -50,7 +50,7 @@ export class LexAPITransportError extends Error {
  * response is still uncommitted (src/oauth/upstream.ts); otherwise the
  * model sees describeError's text as a tool error.
  */
-export type UpstreamAuthKind = 'invalid_token' | 'config' | 'client_auth' | 'unavailable' | 'rate_limited' | 'upstream' | 'api_rejected';
+export type UpstreamAuthKind = 'invalid_token' | 'insufficient_scope' | 'config' | 'client_auth' | 'unavailable' | 'rate_limited' | 'upstream' | 'api_rejected';
 
 export class UpstreamAuthError extends Error {
   constructor(
@@ -59,6 +59,8 @@ export class UpstreamAuthError extends Error {
     /** Token-free reason. */
     public readonly description: string,
     public readonly retryAfterSeconds?: number,
+    /** `insufficient_scope` only: the scope the refused call needs. */
+    public readonly requiredScope?: 'lex:read' | 'lex:webhooks',
   ) {
     super(description);
     this.name = 'UpstreamAuthError';
@@ -154,6 +156,8 @@ export function describeError(err: unknown): string {
     switch (err.kind) {
       case 'invalid_token':
         return `LexAPI sign-in expired or was revoked (${err.description}). Reconnecting LexAPI in the MCP client (signing in again) restores access; retrying with the same sign-in does not.`;
+      case 'insufficient_scope':
+        return `This LexAPI connection is not permitted to do this (${err.description}). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not. An API key is not limited this way.`;
       case 'rate_limited':
         return `LexAPI sign-in is rate limited right now.${err.retryAfterSeconds !== undefined ? ` Wait ${err.retryAfterSeconds} s before calling again.` : ' Wait a little before calling again.'}`;
       case 'upstream':

@@ -26,6 +26,18 @@ Then run `/mcp` in Claude Code and choose *Authenticate* for `lexapi`; your brow
 
 Any client that supports MCP authorization (OAuth 2.1) connects the same way: point it at `https://mcp.lex-api.com/v1`.
 
+### Scopes
+
+A connection made by signing in carries OAuth scopes, and is offered the tools they cover. API keys are not subject to scopes.
+
+| Scope | Allows |
+|---|---|
+| `lex:read` | Every tool except the webhook tools. |
+| `lex:webhooks` | The webhook tools (`lex_list_webhooks`, `lex_get_webhook`, `lex_create_webhook`, `lex_update_webhook`, `lex_delete_webhook`, `lex_test_webhook`). |
+| `lex` | Both. Signing in grants `lex`. |
+
+A tool outside the connection's scopes is not listed. Calling it is answered `403` with a `WWW-Authenticate: Bearer error="insufficient_scope"` challenge whose `scope` names what to request.
+
 ### With an API key instead
 
 Clients without OAuth support send a key from the dashboard as `Authorization: Bearer lex_...`:

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DEFAULT_TIMEOUT_MS, LexAPIClient } from './client.js';
 import type { ClientApp, ClientMode } from './clientHeader.js';
 import { describeError } from './errors.js';
+import { TOOL_SCOPES, type ToolScope } from './oauth/scope.js';
 import { selectTools, type ToolDef } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
 
@@ -26,8 +27,13 @@ National law (member-state legislation and case law): the lex_national_* tools s
 
 Each tool description states its cost in credits from the user's monthly pool; lex_info returns the credit balance and the plan's search-page, batch-size and webhook limits. A 402 means credits or the national-law allowance are exhausted and a 429 means a rate limit; the error text gives the details.`;
 
+/** Added to the instructions of an OAuth connection that does not hold every scope. */
+export const NARROWED_INSTRUCTIONS = 'Some LexAPI features are not enabled on this connection; reconnect to grant them.';
+
 export interface CreateServerOptions {
   readOnly?: boolean;
+  /** The tool scopes of an OAuth connection; undefined for an API key (every tool). */
+  scopes?: ReadonlySet<ToolScope>;
 }
 
 export function createLexServer(client: LexAPIClient, opts: CreateServerOptions = {}): McpServer {
@@ -40,12 +46,16 @@ export function createLexServer(client: LexAPIClient, opts: CreateServerOptions 
     },
     {
       capabilities: { tools: {} },
-      instructions: SERVER_INSTRUCTIONS,
+      instructions: narrowed(opts.scopes) ? `${SERVER_INSTRUCTIONS}\n\n${NARROWED_INSTRUCTIONS}` : SERVER_INSTRUCTIONS,
     },
   );
 
   for (const tool of selectTools(opts)) registerTool(server, tool, client);
   return server;
+}
+
+function narrowed(scopes: ReadonlySet<ToolScope> | undefined): boolean {
+  return scopes !== undefined && !TOOL_SCOPES.every((n) => scopes.has(n));
 }
 
 function registerTool(server: McpServer, tool: ToolDef, client: LexAPIClient): void {

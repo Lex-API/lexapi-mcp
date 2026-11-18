@@ -9,7 +9,7 @@
 import { createPublicKey, verify as cryptoVerify, type KeyObject } from 'node:crypto';
 
 import { readCappedText, ResponseTooLargeError } from './body.js';
-import { OAUTH_SCOPE } from './config.js';
+import { expandScopeSet } from './scope.js';
 
 /**
  * Clock skew allowed on `exp`, `iat` and `nbf`: 5 s either way, kept
@@ -366,7 +366,10 @@ export async function verifyAccessToken(token: string, opts: VerifyOptions): Pro
     if (c.nbf - CLOCK_SKEW_S > nowS) throw new InvalidTokenError('token not yet valid');
   }
 
-  if (typeof c.scope !== 'string' || !c.scope.split(' ').includes(OAUTH_SCOPE)) throw new InvalidTokenError('insufficient scope');
+  // At least one scope this server knows (`lex`, `lex:read`, `lex:webhooks`); other names are ignored.
+  // A token without one is answered 401 invalid_token, not 403 insufficient_scope: that is what
+  // such a token was answered before the narrower scopes existed, kept for compatibility.
+  if (typeof c.scope !== 'string' || expandScopeSet(c.scope).size === 0) throw new InvalidTokenError('insufficient scope');
   for (const name of ['sub', 'client_id', 'gid', 'sid', 'jti'] as const) {
     if (!nonEmptyString(c[name])) throw new InvalidTokenError(`missing ${name} claim`);
   }

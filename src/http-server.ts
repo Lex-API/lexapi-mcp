@@ -6,13 +6,14 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { isWellFormedKey, LexAPIClient } from './client.js';
 import { classifyCredential, deriveClientAddress, type Credential } from './credentials.js';
 import { UpstreamAuthError } from './errors.js';
-import { bearerChallenge, OAuthConfigError, oauthConfigFromEnv, protectedResourceMetadata, type OAuthConfig } from './oauth/config.js';
+import { bearerChallenge, insufficientScopeChallenge, OAuthConfigError, oauthConfigFromEnv, protectedResourceMetadata, stepUpScope, type OAuthConfig } from './oauth/config.js';
 import { EXCHANGE_DEADLINE_MS, TokenExchanger } from './oauth/exchange.js';
 import { InvalidTokenError, JwksCache, JwksUnavailableError, verifyAccessToken, type AccessTokenClaims } from './oauth/jwt.js';
 import { redact } from './oauth/redact.js';
+import { expandScopeSet, type ToolScope } from './oauth/scope.js';
 import { OAuthUpstreamAuth, ResponseGate } from './oauth/upstream.js';
 import { clientFromEnv, createLexServer, PACKAGE_NAME, PROGRESS_INTERVAL_MS, readOnlyFromEnv } from './server.js';
-import { selectTools } from './tools.js';
+import { selectTools, type ToolDef } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
 
 const MCP_PATH = '/v1';
@@ -270,6 +271,30 @@ function invalidTokenChallenge(res: ServerResponse, cfg: OAuthConfig, reason: st
   });
 }
 
+/** A valid token that does not permit the request: `403 insufficient_scope`, naming the scope to ask for. */
+function insufficientScope(res: ServerResponse, cfg: OAuthConfig, description: string, required: ToolScope, granted: ReadonlySet<ToolScope>): void {
+  writeJson(res, 403, { error: 'insufficient_scope', error_description: description, scope: stepUpScope(cfg, required, granted) }, {
+    'WWW-Authenticate': insufficientScopeChallenge(cfg, description, required, granted),
+  });
+}
+
+/**
+ * The first `tools/call` in a JSON-RPC body (one message or a batch) that
+ * names a tool of this server whose scope the connection lacks. A name
+ * that is not a tool here is left to the MCP layer.
+ */
+export function refusedToolCall(body: unknown, available: readonly ToolDef[], granted: ReadonlySet<ToolScope>): ToolDef | undefined {
+  for (const message of Array.isArray(body) ? body : [body]) {
+    if (!message || typeof message !== 'object') continue;
+    const { method, params } = message as { method?: unknown; params?: unknown };
+    if (method !== 'tools/call' || !params || typeof params !== 'object') continue;
+    const name = (params as { name?: unknown }).name;
+    const tool = typeof name === 'string' ? available.find((t) => t.name === name) : undefined;
+    if (tool && !granted.has(tool.scope)) return tool;
+  }
+  return undefined;
+}
+
 /** The parsed JSON-RPC body, or undefined after an error response was written. */
 async function readBodyOrRespond(req: IncomingMessage, res: ServerResponse): Promise<{ body: unknown } | undefined> {
   try {
@@ -375,7 +400,15 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse, ctx: Ctx): P
   }
   const parsed = await readBodyOrRespond(req, res);
   if (!parsed) return;
-  await serveWithOAuth(req, res, parsed.body, cred.token, claims, oauth, ctx);
+  // The connection's scopes decide which tools it is offered; a call to a
+  // tool outside them is answered here, before anything is sent upstream.
+  const granted = expandScopeSet(claims.scope);
+  const refused = refusedToolCall(parsed.body, selectTools({ readOnly: readOnlyFromEnv(ctx.env) }), granted);
+  if (refused) {
+    insufficientScope(res, oauth.cfg, `${refused.name} needs the ${refused.scope} scope`, refused.scope, granted);
+    return;
+  }
+  await serveWithOAuth(req, res, parsed.body, cred.token, claims, granted, oauth, ctx);
 }
 
 /**
@@ -393,6 +426,7 @@ async function serveWithOAuth(
   body: unknown,
   token: string,
   claims: AccessTokenClaims,
+  granted: ReadonlySet<ToolScope>,
   oauth: OAuthRuntime,
   ctx: Ctx,
 ): Promise<void> {
@@ -403,7 +437,7 @@ async function serveWithOAuth(
     mode: 'hosted',
     ...(ctx.fetch ? { fetch: ctx.fetch } : {}),
   });
-  const server = createLexServer(client, { readOnly: readOnlyFromEnv(ctx.env) });
+  const server = createLexServer(client, { readOnly: readOnlyFromEnv(ctx.env), scopes: granted });
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, keepAliveMs: SSE_KEEP_ALIVE_MS });
   const streams: { reader?: ReadableStreamDefaultReader<Uint8Array> } = {};
   res.on('close', () => {
@@ -429,7 +463,7 @@ async function serveWithOAuth(
   const failure = gate.failure;
   if (failure) {
     reader?.cancel().catch(() => {});
-    writeUpstreamAuthFailure(res, failure, oauth.cfg);
+    writeUpstreamAuthFailure(res, failure, oauth.cfg, granted);
     return;
   }
 
@@ -483,9 +517,13 @@ export function toWebRequest(req: IncomingMessage): Request {
   return new Request(new URL(req.url ?? '/', 'http://localhost'), { method: req.method ?? 'POST', headers });
 }
 
-function writeUpstreamAuthFailure(res: ServerResponse, err: UpstreamAuthError, cfg: OAuthConfig): void {
+function writeUpstreamAuthFailure(res: ServerResponse, err: UpstreamAuthError, cfg: OAuthConfig, granted: ReadonlySet<ToolScope>): void {
   if (err.httpStatus === 401) {
     invalidTokenChallenge(res, cfg, err.description);
+    return;
+  }
+  if (err.kind === 'insufficient_scope' && err.requiredScope) {
+    insufficientScope(res, cfg, err.description, err.requiredScope, granted);
     return;
   }
   const message = err.httpStatus === 500
