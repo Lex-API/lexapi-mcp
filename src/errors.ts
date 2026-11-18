@@ -144,7 +144,7 @@ export function describeError(err: unknown): string {
   if (err instanceof LexAPITransportError) {
     if (err.cancelled) return 'Cancelled: the client cancelled this request before LexAPI answered.';
     if (err.redirectRefused) {
-      return `Redirect not followed: ${err.message}. The same call is answered the same way, so it is not retryable. If LEXAPI_BASE_URL is set, check that it is the API's own address (default https://lex-api.com/api/v1).`;
+      return `Redirect not followed: ${err.message}. The same call is answered the same way, so it is not retryable. Where this server is run with LEXAPI_BASE_URL set, that value must be the API's own address (default https://lex-api.com/api/v1).`;
     }
     return err.timedOut
       ? `LexAPI did not answer in time (${err.message}). Live EUR-Lex fetches can take longer than an MCP client waits; the call is safe to retry once, and a repeat may be served from the LexAPI corpus. If it keeps timing out, narrow the request (fewer pages, a smaller limit) or raise the client's tool timeout (Claude Code: MCP_TOOL_TIMEOUT) and LEXAPI_TIMEOUT_MS.`

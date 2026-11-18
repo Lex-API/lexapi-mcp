@@ -397,12 +397,34 @@ describe('national ids and title searches in decomposed form (NFD)', () => {
     }
   });
 
-  it('lex_list_national_documents sends q and documentType composed (NFC)', async () => {
+  it('lex_list_national_documents sends q composed (NFC), and documentType as given', async () => {
     const { calls } = await call('lex_list_national_documents', { jurisdiction: 'at', q: 'A\u0308rztegesetz', documentType: 'Erla\u0308uterung' }, () => ({
       body: { success: true, jurisdiction: 'AT', results: [] },
     }));
     expect(calls[0].url.searchParams.get('q')).toBe('\u00c4rztegesetz');
-    expect(calls[0].url.searchParams.get('type')).toBe('Erl\u00e4uterung');
+    expect(calls[0].url.searchParams.get('type')).toBe('Erla\u0308uterung');
+  });
+
+  it('length limits are checked on the composed form, and published as minLength / maxLength', () => {
+    const q = byName.lex_list_national_documents.inputSchema.q as z.ZodType;
+    const id = byName.lex_get_national_document.inputSchema.id as z.ZodType;
+    // "Äb" typed decomposed is three code units and two once composed: under the minimum of 3.
+    expect('A\u0308b').toHaveLength(3);
+    expect(q.safeParse('A\u0308b').success).toBe(false);
+    expect(q.safeParse('ab').success).toBe(false);
+    expect(q.safeParse('A\u0308bc').data).toBe('\u00c4bc');
+    expect(q.safeParse(' abc ').data).toBe('abc');
+    // 200 composed characters fit, however they were typed; 201 do not.
+    expect(q.safeParse('A\u0308'.repeat(200)).data).toBe('\u00c4'.repeat(200));
+    expect(q.safeParse('\u00c4'.repeat(201)).success).toBe(false);
+    expect(id.safeParse('A\u0308'.repeat(200)).data).toBe('\u00c4'.repeat(200));
+    expect(id.safeParse('x'.repeat(201)).success).toBe(false);
+    expect(id.safeParse('   ').success).toBe(false);
+    const list = z.toJSONSchema(z.object(byName.lex_list_national_documents.inputSchema), { io: 'input' }) as { properties: Record<string, unknown> };
+    const get = z.toJSONSchema(z.object(byName.lex_get_national_document.inputSchema), { io: 'input' }) as { properties: Record<string, unknown>; required: string[] };
+    expect(list.properties.q).toEqual({ type: 'string', minLength: 3, maxLength: 200, description: 'Title search, 3–200 characters.' });
+    expect(get.properties.id).toEqual({ type: 'string', minLength: 1, maxLength: 200, description: 'National document id, e.g. "AT-NOR-12345".' });
+    expect(get.required).toContain('id');
   });
 });
 

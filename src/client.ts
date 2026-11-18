@@ -238,7 +238,7 @@ export class LexAPIClient {
       }
       // Only the scheme is named: the rest of such a target is not an address.
       if (next.protocol !== 'http:' && next.protocol !== 'https:') {
-        throw refused(`a redirect to a target that is not http or https (${next.protocol.replace(/[^a-z0-9+.:-]/gi, '')}), which is not followed`);
+        throw refused(`a redirect to a target that is not http or https (${next.protocol.replace(/[^a-z0-9+.:-]/gi, '').slice(0, 32)}), which is not followed`);
       }
       if (!this.sameApi(next)) {
         throw refused(`a redirect to another host (${next.origin}), which is not followed`);

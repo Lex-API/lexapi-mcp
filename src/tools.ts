@@ -190,7 +190,7 @@ const includeNational = z.boolean().optional().describe('Add national documents 
 // parameter of tools/list; this checks the same range and publishes
 // { type: "integer", minimum }.
 const wholeNumber = (min: number) => z.number().min(min)
-  .refine((v) => Number.isSafeInteger(v), 'must be a whole number')
+  .refine((v) => Number.isSafeInteger(v), 'must be a whole number within the safe integer range')
   .meta({ type: 'integer' });
 const edgeOffset = wholeNumber(0).default(0).describe('Paging offset, in edges.');
 const webhookId = z.string().trim().min(1).max(64).describe('Webhook id (from lex_list_webhooks).');
@@ -235,8 +235,15 @@ const oneArticle = (d = 'Return only this article: "17", "art_17", "Article 17",
   z.string().trim().min(1).max(40).optional().describe(d);
 const acceptLanguages = (d: string) => z.union([z.array(lang()).min(1), z.literal('any')]).optional().describe(d);
 
+/**
+ * Text sent composed (NFC). Its length is checked on the composed form, the
+ * one the API counts; the limits are published as minLength / maxLength.
+ */
+const composed = (min: number, max: number) => z.string().trim().transform((v) => v.normalize('NFC'))
+  .pipe(z.string().min(min).max(max))
+  .meta({ minLength: min, maxLength: max });
 /** A national document id as it is sent: composed (NFC), as the API stores ids; its case is kept. */
-const nationalId = () => z.string().trim().min(1).max(200).transform((v) => v.normalize('NFC'));
+const nationalId = () => composed(1, 200);
 
 /** The id as it is sent: upper case and, for a national id with accented letters, composed (NFC). */
 export function normCelex(v: string): string {
@@ -771,8 +778,8 @@ export const tools: ToolDef[] = [
       'Browse a country\'s national documents by title/type, newest-first by document date. documentKind ("act" | "decision") tells legislation from case law. Cost: 3 credits per call. Paging: page reaches only the first 1,000 rows; cursor (the previous nextCursor, without page) reaches any depth.',
     inputSchema: {
       jurisdiction: jurisdiction(),
-      q: z.string().trim().min(3).max(200).transform((v) => v.normalize('NFC')).optional().describe('Title search, 3–200 characters.'),
-      documentType: z.string().trim().min(1).max(200).transform((v) => v.normalize('NFC')).optional().describe('Document type as stored for this country.'),
+      q: composed(3, 200).optional().describe('Title search, 3–200 characters.'),
+      documentType: z.string().trim().min(1).max(200).optional().describe('Document type as stored for this country.'),
       page: wholeNumber(1).optional().describe('1-based page, first 1,000 rows only. Omit when paging with cursor.'),
       cursor: z.string().trim().min(1).optional().describe('Opaque cursor from a previous call\'s nextCursor — pages past the first 1,000 rows. Not combined with page.'),
       limit: z.number().int().min(1).max(100).default(20).describe('Rows per page.'),

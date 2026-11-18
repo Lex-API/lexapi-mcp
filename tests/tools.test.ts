@@ -886,6 +886,9 @@ describe('whole-number parameters without an upper bound', () => {
       for (const bad of [min - 1, -1, 1.5, min + 0.5, 2 ** 53, 1e300, Infinity, -Infinity, NaN, '3', null, true]) {
         expect(s.safeParse(bad).success, `${tool}.${param} ${String(bad)}`).toBe(false);
       }
+      for (const bad of [1.5, 2 ** 53]) {
+        expect(s.safeParse(bad).error?.issues[0].message, `${tool}.${param} ${bad}`).toBe('must be a whole number within the safe integer range');
+      }
     }
   });
 });

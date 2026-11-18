@@ -253,6 +253,20 @@ describe('a redirect to another host', () => {
       expect(apiSeen, location).toHaveLength(1); // not retried
     }
     expect(otherSeen).toHaveLength(0);
+
+    // A scheme of any length is shown cut to 32 characters.
+    routes = { '/api/v1/info': () => ({ status: 302, location: `${'x'.repeat(500)}:y` }) };
+    const long = await client().info().catch((x) => x);
+    expect(long.message).toBe(`the API answered with a redirect to a target that is not http or https (${'x'.repeat(32)}), which is not followed`);
+  });
+
+  it('the error text names LEXAPI_BASE_URL only as a setting of a server that has it', async () => {
+    routes = { '/api/v1/info': () => ({ status: 302, location: `${otherOrigin}/x` }) };
+    for (const mode of ['stdio', 'hosted'] as const) {
+      const text = describeError(await client({ mode }).info().catch((x) => x));
+      expect(text, mode).toContain('Where this server is run with LEXAPI_BASE_URL set, that value must be the API\'s own address');
+      expect(text, mode).not.toMatch(/If LEXAPI_BASE_URL is set|check that/);
+    }
   });
 
   it('a same-origin target with a user name or password is refused at once, without them in the error', async () => {

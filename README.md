@@ -121,7 +121,7 @@ Error messages state what to do (a 402 gives the credits needed and the reset da
 ## Privacy and support
 
 - With each API request the server sends an `X-LexAPI-Client` header naming itself and its version, how it runs (`hosted` or `stdio`), the tool being called and, in stdio mode, the MCP client's name and version.
-- The server sends credentials only to the configured API origin (`LEXAPI_BASE_URL`) and does not follow redirects to other hosts. A redirect from the API is followed only on that same origin (scheme, host and port; a different port is a different origin, also when `LEXAPI_BASE_URL` names a non-default port), or from `http` to `https` on the same host when neither names a port.
+- The server sends credentials only to the configured API origin (`LEXAPI_BASE_URL`) and does not follow redirects to other hosts. A redirect from the API is followed only on that same origin (scheme, host and port; a different port is a different origin, also when `LEXAPI_BASE_URL` names a non-default port), or from `http` to `https` on the same host when both use their default port.
 - Privacy notice: [lex-api.com/privacy](https://lex-api.com/privacy?ref=npm-mcp)
 - Support: [support@lex-api.com](mailto:support@lex-api.com) · [lex-api.com/support](https://lex-api.com/support?ref=npm-mcp)
 
