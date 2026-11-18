@@ -397,13 +397,20 @@ export class LexAPIClient {
         // 504 is NOT retried: it already means a 90 s upstream budget ran out.
         // Nor is a 503 TIMEOUT: a server-side time budget ran out, and the
         // same request would run out of it again.
-        const backoff = 500 * 2 ** (attempt + 1);
-        if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)
-          && !(res.status === 503 && await isServerTimeout(res))) {
+        // A Retry-After on these (a document 502 names the cooldown before
+        // LexAPI asks the source again; an earlier retry gets the same 502)
+        // replaces the backoff. A wait longer than MAX_RETRY_AFTER_SLEEP_S,
+        // or one that would leave too little of the deadline, is not slept
+        // on: the error is returned with the wait in it.
+        const transient = res.status === 500 || res.status === 502 || res.status === 503;
+        const named = transient ? retryAfterSeconds(res) : undefined;
+        const waitMs = named === undefined ? 500 * 2 ** (attempt + 1) : Math.max(1, named) * 1000;
+        if (transient && canRetry && attempt < this.maxRetries && (named === undefined || named <= MAX_RETRY_AFTER_SLEEP_S)
+          && canWait(waitMs) && !(res.status === 503 && await isServerTimeout(res))) {
           attemptSignal.dispose();
           await discard(res);
           attempt++;
-          await this.sleep(backoff);
+          await this.sleep(waitMs);
           continue;
         }
       }

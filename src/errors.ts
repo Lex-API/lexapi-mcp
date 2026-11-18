@@ -243,6 +243,40 @@ function detailsLine(details: unknown): string {
   return ` Details: ${String(details)}.`;
 }
 
+/** A 5xx other than the ones with their own text; a Retry-After the API sent is named. */
+function serverError(head: string, wait: number | undefined): string {
+  return wait !== undefined
+    ? `${head} LexAPI had a server error; server failures are refunded. Retry after ${wait} s (Retry-After); if it persists, status is at https://lex-api.com/status.`
+    : `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
+}
+
+/** Candidate versions listed in a boundary_unknown 404. */
+const MAX_CANDIDATES = 10;
+
+function boundaryUnknown(d: Record<string, unknown>): string {
+  const listed = Array.isArray(d.candidates) ? d.candidates : [];
+  const shown = listed
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object' && !Array.isArray(c) && Number.isSafeInteger(c.version) && (c.version as number) >= 1)
+    .slice(0, MAX_CANDIDATES)
+    .map((c) => {
+      const from = isoInstant(c.observedFrom);
+      return `version ${c.version as number} (${from ? `observedFrom ${from}` : 'start not recorded'})`;
+    });
+  const more = d.candidatesTruncated === true || listed.length > shown.length;
+  const candidates = shown.length
+    ? ` Candidate versions: ${shown.join('; ')}${more ? '; more exist, not listed' : ''}. lex_get_document_version reads each by its version number.`
+    : ' The API listed no candidate version; lex_document_versions lists the stored versions.';
+  return `LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which of its stored versions was current on the requested date, so it returns none. This is not a "document not found" answer.${candidates} This call was not charged. The same call is answered the same way.`;
+}
+
+function beforeTracking(d: Record<string, unknown>): string {
+  const since = isoInstant(d.trackedSince);
+  const lookup = d.inForceLookup && typeof d.inForceLookup === 'object'
+    ? ' For the version of the EU act for a date, lex_legislation_as_of answers.'
+    : '';
+  return `LexAPI error 404 (NOT_FOUND, before_tracking): LexAPI's history of this document starts ${since ? `at ${since}` : 'after the requested date'}; it holds no snapshot from before then. The document itself is held: lex_document_versions lists its snapshots.${lookup} These snapshots are LexAPI's fetch history, not the law in force on a date. This answer costs 1 credit.`;
+}
+
 /**
  * The tool-result text for a failed call. Never includes the API key: the
  * key only travels in a request header and is never part of any message.
@@ -324,6 +358,10 @@ export function describeError(err: unknown): string {
       return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
       if (err.code === ENDPOINT_NOT_AVAILABLE) return `${head} The same call is answered the same way until the API is updated, so it is not retryable.`;
+      // The snapshot-on-a-date route (LexAPI API 2.28.0): the document is
+      // held, but no snapshot answers the date. Not a missing document.
+      if (err.code === 'NOT_FOUND' && d?.reason === 'boundary_unknown') return boundaryUnknown(d);
+      if (err.code === 'NOT_FOUND' && d?.reason === 'before_tracking') return beforeTracking(d);
       // National 404s take three shapes, none of which point at lex_resolve
       // or lex_search (both EU-only): the typed document-id miss (`details:
       // {id, jurisdiction}`, via the jurisdiction fallback above), the
@@ -372,7 +410,7 @@ export function describeError(err: unknown): string {
       if (err.code === 'TIMEOUT') {
         return `${head} The lookup ran out of its server-side time budget; nothing was charged. Narrow it with jurisdictions, or retry later.`;
       }
-      return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
+      return serverError(head, err.retryAfterSeconds);
     case 422:
       // The national index cannot search this slice completely and had
       // nothing left to return; the same request gets the same answer.
@@ -418,13 +456,13 @@ export function describeError(err: unknown): string {
       return `${head} Gone. Not retryable; nothing was charged.`;
     }
     case 502:
-      return `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;
+      return err.retryAfterSeconds !== undefined
+        ? `${head} An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. LexAPI answers the same call with the same error for ${err.retryAfterSeconds} s (Retry-After): retry after that.`
+        : `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;
     case 504:
       return `${head} The upstream fetch timed out. Retry-safe — retry once, or narrow the request (fewer pages, a smaller limit). Failed searches are refunded.`;
     default:
-      if (err.status >= 500) {
-        return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
-      }
+      if (err.status >= 500) return serverError(head, err.retryAfterSeconds);
       return `${head}${detailsLine(err.details)}`;
   }
 }

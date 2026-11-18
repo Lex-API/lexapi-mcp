@@ -628,7 +628,7 @@ describe('identity, versions, info, export', () => {
     const byDate = await call('lex_get_document_version', { celexNumber: '32016R0679', date: '2026-06-15' }, reply);
     expect(byDate.calls[0].url.pathname).toBe('/api/v1/documents/32016R0679/at/2026-06-15');
     expect(byDate.data.content.articles).toHaveLength(2);
-    expect(byDate.data.semantics).toMatch(/not a legal in-force/);
+    expect(byDate.data.semantics).toBe('Observation snapshots (as fetched by LexAPI), not the law in force on a date.');
     // The date the snapshot was looked up for is not an in-force date.
     expect(byDate.data.snapshotDate).toBe('2026-06-15');
     expect(byDate.data).not.toHaveProperty('asOf');

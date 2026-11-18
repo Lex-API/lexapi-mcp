@@ -513,11 +513,11 @@ describe('lex_national_semantic_legislation', () => {
     for (const k of ['section', 'valid_from', 'valid_to', 'law_type']) expect(data.results[0]).not.toHaveProperty(k);
   });
 
-  it('has no asOf parameter, and says what a hit carries instead', () => {
-    expect(byName.lex_national_semantic_legislation.inputSchema).not.toHaveProperty('asOf');
+  it('says what a hit carries, and that asOf labels today\'s wording', () => {
+    expect(byName.lex_national_semantic_legislation.inputSchema).toHaveProperty('asOf');
     const d = byName.lex_national_semantic_legislation.description;
     expect(d).toMatch(/in_force \(omitted when unknown\) says whether the provision is in force today/);
-    expect(d).not.toMatch(/current text only/);
+    expect(d).not.toMatch(/current text only|There is no asOf/);
   });
 });
 

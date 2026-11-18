@@ -97,8 +97,8 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_get_metadata` | Metadata only. | 1 · 4 · 5 |
 | `lex_get_document_by_url` | A document from a pasted EUR-Lex URL. | 1 · 4 · 5 |
 | `lex_legislation_as_of` | The version of an EU act listed for a date and, optionally, one article, annex or recital of it. | 1 (4 · 5 when the text is fetched) |
-| `lex_document_versions` | LexAPI's observed version history of a document. | 1 |
-| `lex_get_document_version` | One observed snapshot, by version number or date. | 1 |
+| `lex_document_versions` | LexAPI's observed version history of a document: fetch snapshots, not the law in force on a date. | 1 |
+| `lex_get_document_version` | One observed snapshot, by version number or the one held at the end of a date. | 1 |
 | `lex_cited_by` · `lex_cites` | Inbound / outbound citations, with each edge's type and provenance. | 1 |
 | `lex_citation_network` | Both directions in one call. | 20 |
 | `lex_citation_path` | Shortest citation chain between two documents. | 20 |
@@ -111,7 +111,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_national_coverage` | Which countries' national law is live, with sources and licences. | free |
 | `lex_list_national_documents` | Browse a country's national legislation and case law. | 3 |
 | `lex_get_national_document` | A national document by id. | 1 |
-| `lex_national_semantic_case_law` · `lex_national_semantic_legislation` | Semantic search over one country's case law / legislation. | 5 |
+| `lex_national_semantic_case_law` · `lex_national_semantic_legislation` | Semantic search over one country's case law / legislation. On legislation, `asOf` labels whether today's wording already applied on a date; it never returns earlier wording. | 5 |
 | `lex_info` | Your plan, credit balance and limits. | free |
 | `lex_list_webhooks` · `lex_get_webhook` | Your webhooks and their deliveries. | free |
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and changes to watched acts (paid plans). | free |

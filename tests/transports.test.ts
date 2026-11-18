@@ -103,8 +103,10 @@ describe('MCP protocol (in-memory)', () => {
     // The three workflow tools (lex_check_citation, lex_act_history,
     // lex_research) add ~6.4k: measured 64.8k. Whole-number parameters
     // without an upper bound no longer publish a maximum: measured 64.5k.
-    // lex_legislation_as_of adds ~2.0k: measured 66.54k.
-    expect(listJson.length).toBeLessThan(66_600);
+    // lex_legislation_as_of adds ~2.0k: measured 66.54k. asOf on
+    // lex_national_semantic_legislation and the snapshot fields on the two
+    // version tools add ~1.0k: measured 67.52k.
+    expect(listJson.length).toBeLessThan(67_600);
     expect(listJson).not.toContain(String(Number.MAX_SAFE_INTEGER));
     // [tool, parameter, minimum], as a client receives them.
     const whole: Array<[string, string, number]> = [
@@ -120,17 +122,17 @@ describe('MCP protocol (in-memory)', () => {
     }
     // The instructions are in every client's context too: measured 3.3k;
     // 3.7k with the workflow tools and the in-force label; 3.77k with
-    // lex_legislation_as_of.
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_800);
+    // lex_legislation_as_of; 3.93k with the national asOf sentence.
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(4_000);
 
     // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools,
-    // 59.25k with lex_legislation_as_of.
+    // 59.25k with lex_legislation_as_of, 60.24k with national asOf.
     const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
     const [ra, rb] = InMemoryTransport.createLinkedPair();
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(59_300);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(60_300);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);
