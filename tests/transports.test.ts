@@ -103,7 +103,8 @@ describe('MCP protocol (in-memory)', () => {
     // The three workflow tools (lex_check_citation, lex_act_history,
     // lex_research) add ~6.4k: measured 64.8k. Whole-number parameters
     // without an upper bound no longer publish a maximum: measured 64.5k.
-    expect(listJson.length).toBeLessThan(64_550);
+    // lex_legislation_as_of adds ~1.95k: measured 66.45k.
+    expect(listJson.length).toBeLessThan(66_500);
     expect(listJson).not.toContain(String(Number.MAX_SAFE_INTEGER));
     // [tool, parameter, minimum], as a client receives them.
     const whole: Array<[string, string, number]> = [
@@ -121,16 +122,18 @@ describe('MCP protocol (in-memory)', () => {
     // 3.7k with the workflow tools and the in-force label.
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_750);
 
-    // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools.
+    // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools,
+    // 59.2k with lex_legislation_as_of.
     const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
     const [ra, rb] = InMemoryTransport.createLinkedPair();
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(57_600);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(59_250);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);
+    expect(client.getInstructions()).toContain('otherwise lex_legislation_as_of resolves it for a known act, and asOf in a search.');
 
     // Invalid arguments are rejected by the SDK before any HTTP call.
     const before = seen.length;

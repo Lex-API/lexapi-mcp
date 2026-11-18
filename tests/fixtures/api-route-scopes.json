@@ -18,6 +18,7 @@
     ["POST", "/parse", "lex:read"],
     ["POST", "/search/semantic", "lex:read"],
     ["POST", "/legislation/semantic", "lex:read"],
+    ["POST", "/legislation/as-of", "lex:read"],
     ["POST", "/:jurisdiction/search/semantic", "lex:read"],
     ["POST", "/:jurisdiction/legislation/semantic", "lex:read"],
     ["GET", "/webhooks", "lex:webhooks"],

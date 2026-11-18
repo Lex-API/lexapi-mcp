@@ -550,6 +550,16 @@ const AS_OF_RETRYABLE = new Set([
 ]);
 const AS_OF_USER_ACTION = new Set(['insufficient_credits']);
 
+type AsOfGroup = 'notInForce' | 'retryable' | 'needsCredits' | 'unavailable';
+
+/** The class of an asOfReason; a reason not listed above is `unavailable`. */
+function asOfGroupOf(reason: string): AsOfGroup {
+  if (AS_OF_NOT_IN_FORCE.has(reason)) return 'notInForce';
+  if (AS_OF_RETRYABLE.has(reason)) return 'retryable';
+  if (AS_OF_USER_ACTION.has(reason)) return 'needsCredits';
+  return 'unavailable';
+}
+
 /**
  * One instruction per class of unresolved hit present. Every unresolved
  * hit carries the indexed text; what the model should do differs:
@@ -560,15 +570,12 @@ const AS_OF_USER_ACTION = new Set(['insufficient_credits']);
  *     the version in force could not be read; don't quote it as of that date.
  */
 export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
-  const groups: Record<string, string[]> = { notInForce: [], retryable: [], needsCredits: [], unavailable: [] };
+  const groups: Record<AsOfGroup, string[]> = { notInForce: [], retryable: [], needsCredits: [], unavailable: [] };
   for (const r of results) {
     if (r.asOfResolved !== false) continue;
     const reason = String(r.asOfReason ?? 'unknown');
     const id = `${String(r.law_id ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''} (${reason})`;
-    if (AS_OF_NOT_IN_FORCE.has(reason)) groups.notInForce.push(id);
-    else if (AS_OF_RETRYABLE.has(reason)) groups.retryable.push(id);
-    else if (AS_OF_USER_ACTION.has(reason)) groups.needsCredits.push(id);
-    else groups.unavailable.push(id);
+    groups[asOfGroupOf(reason)].push(id);
   }
   const guidance: string[] = [];
   if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; their returned text is not the law on that date.`);
@@ -580,6 +587,117 @@ export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
     note: `Unresolved hits carry the indexed text, not the text in force on ${asOf}.`,
     ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
     guidance,
+  });
+}
+
+// ── The version of an act for a date (POST /legislation/as-of) ─────
+// What each asOfReason of the lookup means (API reference, "Unresolved").
+const DATE_OUTSIDE = 'The date is outside the act\'s dates.';
+const NOT_FETCHED = 'The text could not be fetched now.';
+const NOT_PAID = 'The fetch was not paid for, so it was not made.';
+const AS_OF_LOOKUP_MEANING: Record<string, string> = {
+  not_yet_adopted: DATE_OUTSIDE,
+  not_yet_in_force: DATE_OUTSIDE,
+  no_longer_in_force: DATE_OUTSIDE,
+  in_force_dates_unknown: 'The act\'s dates do not establish whether it was in force on the date, or could not be read.',
+  act_type_not_supported: 'The act is not a regulation, directive, decision or other act of the institutions (CELEX sector 3), for example a treaty or an international agreement; the lookup does not cover it.',
+  version_list_unavailable: 'The list of versions, or of the acts amending the act, could not be read.',
+  version_lookup_cap: 'A lookup limit was reached.',
+  not_in_language: 'The version for the date has no text in the requested language.',
+  amendment_not_consolidated: 'An act amending this act may have applied by the date, and no listed version is known to include it.',
+  text_unavailable: 'The version has no text at the source.',
+  article_not_in_version: 'The version has no such article, annex or recital.',
+  provision_ambiguous: 'More than one part of the text answers to the requested provision.',
+  version_not_parsed: 'The text is not split into identifiable parts of the requested kind.',
+  fetch_budget_exhausted: NOT_FETCHED,
+  fetch_pending: NOT_FETCHED,
+  fetch_capacity: NOT_FETCHED,
+  fetch_failed: NOT_FETCHED,
+  fetch_timeout: NOT_FETCHED,
+  request_deadline: NOT_FETCHED,
+  insufficient_credits: NOT_PAID,
+  credit_check_failed: NOT_PAID,
+};
+
+/** The caveat of an unresolved lookup: the reason's class (as in asOfCaveat), what the reason means, and what follows. */
+export function asOfLookupCaveat(reason: string, asOf: string, versionEstablished: boolean): Obj {
+  const group = asOfGroupOf(reason);
+  const guidance: Record<AsOfGroup, string> = {
+    notInForce: `notInForce: the act was not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for this date.`,
+    retryable: 'retryable: the version or its text could not be read in this call (busy, time or lookup limits) — calling again shortly may resolve it.',
+    needsCredits: 'needsCredits: the credit pool could not cover fetching the text.',
+    unavailable: `unavailable: the text for ${asOf} was not established (see meaning).`,
+  };
+  return compact({
+    note: versionEstablished
+      ? `Unresolved: no text is returned for ${asOf}. asOfVersion is the version listed for that date; the requested provision of it was not established.`
+      : `Unresolved: no version and no text are returned for ${asOf}.`,
+    group,
+    meaning: AS_OF_LOOKUP_MEANING[reason],
+    guidance: guidance[group],
+  });
+}
+
+const AS_OF_VERSION_KEYS = ['celex', 'kind', 'date', 'validUntil', 'checkedAt'] as const;
+const AS_OF_ACT_KEYS = ['celex', 'dateOfDocument', 'entryIntoForce', 'endOfValidity', 'inForceToday'] as const;
+const AS_OF_PROVISION_KEYS = ['id', 'number', 'title', 'text'] as const;
+const PROVENANCE_KEYS = ['publisher', 'sourceUrl', 'sourceIdentifier', 'retrievedAt', 'contentHash', 'versionIdentifier', 'language', 'licence'] as const;
+/** Characters of a provision's text returned by lex_legislation_as_of (the default budget of the document tools). */
+export const AS_OF_PROVISION_BUDGET = 40_000;
+
+/** The listed keys of an API object that are present, as they are; undefined when it is not an object or has none. */
+function pick(o: unknown, keys: readonly string[]): Obj | undefined {
+  if (!isObj(o)) return undefined;
+  const out: Obj = {};
+  for (const k of keys) if (o[k] !== undefined && o[k] !== null) out[k] = o[k];
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * A POST /legislation/as-of answer → compact form. Only an answer with
+ * `asOfResolved: true` keeps a provision text and the consolidated labels;
+ * any other answer carries `asOfResolved: false`, the reason and a caveat,
+ * and never a text.
+ */
+export function shapeAsOfLookup(body: unknown, budget = AS_OF_PROVISION_BUDGET): Obj {
+  const b = isObj(body) ? body : {};
+  const resolved = b.asOfResolved === true;
+  const asOfVersion = pick(b.asOfVersion, AS_OF_VERSION_KEYS);
+  const head = {
+    document: b.document,
+    language: b.language,
+    asOf: b.asOf,
+    asOfResolved: resolved,
+  };
+  const tail = { act: pick(b.act, AS_OF_ACT_KEYS), provenance: pick(b.provenance, PROVENANCE_KEYS) };
+  if (!resolved) {
+    return compact({
+      ...head,
+      asOfReason: b.asOfReason,
+      asOfVersion,
+      ...tail,
+      asOfCaveat: asOfLookupCaveat(String(b.asOfReason ?? 'unknown'), String(b.asOf ?? 'the date'), asOfVersion !== undefined),
+    });
+  }
+  const provision = isObj(b.provision) && typeof b.provision.text === 'string' ? pick(b.provision, AS_OF_PROVISION_KEYS) : undefined;
+  let note: string | undefined;
+  if (provision) {
+    const text = provision.text as string;
+    if (text.length > budget) {
+      provision.text = `${text.slice(0, budget)} …[truncated: ${text.length - budget} more characters]`;
+      note = `provision.text is cut to ${budget} of ${text.length} characters. lex_get_document reads ${str(asOfVersion?.celex) ?? 'the version'} in parts (articleId or include, with offset).`;
+    }
+  }
+  return compact({
+    ...head,
+    asOfVersion,
+    ...tail,
+    provision,
+    consolidated: b.consolidated,
+    consolidatedAsOf: b.consolidatedAsOf,
+    baseCelex: b.baseCelex,
+    consolidatedNote: b.consolidatedNote,
+    note,
   });
 }
 

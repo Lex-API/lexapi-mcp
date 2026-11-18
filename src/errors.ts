@@ -67,6 +67,20 @@ export class UpstreamAuthError extends Error {
   }
 }
 
+/** Code of the error a tool raises when the API has no such route: the deployment is older than the endpoint. */
+export const ENDPOINT_NOT_AVAILABLE = 'ENDPOINT_NOT_AVAILABLE';
+
+/**
+ * Whether a 404 is about the route, not about a document. The API answers
+ * an unmatched route with the same code as an unknown document (NOT_FOUND),
+ * so its message tells them apart; a 404 without that typed code did not
+ * come from an endpoint either.
+ */
+export function isUnknownEndpoint(err: unknown): err is LexAPIError {
+  return err instanceof LexAPIError && err.status === 404
+    && (err.code !== 'NOT_FOUND' || /^Unknown API endpoint\b/i.test(err.message.trim()));
+}
+
 export function parseErrorBody(
   json: unknown,
   rawText: string,
@@ -210,6 +224,7 @@ export function describeError(err: unknown): string {
       }
       return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
+      if (err.code === ENDPOINT_NOT_AVAILABLE) return `${head} The same call is answered the same way until the API is updated, so it is not retryable.`;
       // National 404s take three shapes, none of which point at lex_resolve
       // or lex_search (both EU-only): the typed document-id miss (`details:
       // {id, jurisdiction}`, via the jurisdiction fallback above), the
