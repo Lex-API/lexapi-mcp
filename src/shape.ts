@@ -625,7 +625,7 @@ export function asOfLookupCaveat(reason: string, asOf: string, versionEstablishe
   const guidance: Record<AsOfGroup, string> = {
     notInForce: `notInForce: the act was not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for this date.`,
     retryable: 'retryable: the version or its text could not be read in this call (busy, time or lookup limits) — calling again shortly may resolve it.',
-    needsCredits: 'needsCredits: the credit pool could not cover fetching the text.',
+    needsCredits: 'needsCredits: the credit pool could not cover fetching the text. A fetch reserves 5 credits, so a pool holding fewer than 5 gets insufficient_credits even for an answer that would cost 4.',
     unavailable: `unavailable: the text for ${asOf} was not established (see meaning).`,
   };
   return compact({
@@ -633,59 +633,88 @@ export function asOfLookupCaveat(reason: string, asOf: string, versionEstablishe
       ? `Unresolved: no text is returned for ${asOf}. asOfVersion is the version listed for that date; the requested provision of it was not established.`
       : `Unresolved: no version and no text are returned for ${asOf}.`,
     group,
-    meaning: AS_OF_LOOKUP_MEANING[reason],
+    meaning: Object.hasOwn(AS_OF_LOOKUP_MEANING, reason) ? AS_OF_LOOKUP_MEANING[reason] : undefined,
     guidance: guidance[group],
   });
 }
 
 const AS_OF_VERSION_KEYS = ['celex', 'kind', 'date', 'validUntil', 'checkedAt'] as const;
 const AS_OF_ACT_KEYS = ['celex', 'dateOfDocument', 'entryIntoForce', 'endOfValidity', 'inForceToday'] as const;
-const AS_OF_PROVISION_KEYS = ['id', 'number', 'title', 'text'] as const;
 const PROVENANCE_KEYS = ['publisher', 'sourceUrl', 'sourceIdentifier', 'retrievedAt', 'contentHash', 'versionIdentifier', 'language', 'licence'] as const;
 /** Characters of a provision's text returned by lex_legislation_as_of (the default budget of the document tools). */
 export const AS_OF_PROVISION_BUDGET = 40_000;
+/** Longest value of a field that is an id, a date, a link or a one-line label. */
+const AS_OF_FIELD_MAX = 500;
+/** Longest heading (number, title) of a provision. */
+const AS_OF_HEADING_MAX = 300;
 
-/** The listed keys of an API object that are present, as they are; undefined when it is not an object or has none. */
-function pick(o: unknown, keys: readonly string[]): Obj | undefined {
+/** A non-empty string no longer than `max`; anything else (an object, a list, a number) is undefined. */
+function label(v: unknown, max = AS_OF_FIELD_MAX): string | undefined {
+  return typeof v === 'string' && v.trim() && v.length <= max ? v : undefined;
+}
+
+/** The listed keys of an API object whose value is a label (a boolean for `flags`); undefined when it is not an object or has none. */
+function pick(o: unknown, keys: readonly string[], flags: readonly string[] = []): Obj | undefined {
   if (!isObj(o)) return undefined;
   const out: Obj = {};
-  for (const k of keys) if (o[k] !== undefined && o[k] !== null) out[k] = o[k];
+  for (const k of keys) {
+    const v = flags.includes(k) ? (typeof o[k] === 'boolean' ? o[k] : undefined) : label(o[k]);
+    if (v !== undefined) out[k] = v;
+  }
   return Object.keys(out).length ? out : undefined;
+}
+
+/** `text` cut to at most `max` UTF-16 units, never between the two halves of a surrogate pair. */
+function cutText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
 }
 
 /**
  * A POST /legislation/as-of answer → compact form. Only an answer with
  * `asOfResolved: true` keeps a provision text and the consolidated labels;
  * any other answer carries `asOfResolved: false`, the reason and a caveat,
- * and never a text.
+ * and never a text. A field is copied only when it has the expected type.
  */
 export function shapeAsOfLookup(body: unknown, budget = AS_OF_PROVISION_BUDGET): Obj {
   const b = isObj(body) ? body : {};
   const resolved = b.asOfResolved === true;
   const asOfVersion = pick(b.asOfVersion, AS_OF_VERSION_KEYS);
+  const language = label(b.language);
+  const asOf = label(b.asOf);
   const head = {
-    document: b.document,
-    language: b.language,
-    asOf: b.asOf,
+    document: label(b.document),
+    language,
+    asOf,
     asOfResolved: resolved,
   };
-  const tail = { act: pick(b.act, AS_OF_ACT_KEYS), provenance: pick(b.provenance, PROVENANCE_KEYS) };
+  const tail = { act: pick(b.act, AS_OF_ACT_KEYS, ['inForceToday']), provenance: pick(b.provenance, PROVENANCE_KEYS) };
   if (!resolved) {
+    const reason = label(b.asOfReason);
     return compact({
       ...head,
-      asOfReason: b.asOfReason,
+      asOfReason: reason,
       asOfVersion,
       ...tail,
-      asOfCaveat: asOfLookupCaveat(String(b.asOfReason ?? 'unknown'), String(b.asOf ?? 'the date'), asOfVersion !== undefined),
+      asOfCaveat: asOfLookupCaveat(reason ?? 'unknown', asOf ?? 'the date', asOfVersion !== undefined),
     });
   }
-  const provision = isObj(b.provision) && typeof b.provision.text === 'string' ? pick(b.provision, AS_OF_PROVISION_KEYS) : undefined;
+  const p = isObj(b.provision) && typeof b.provision.text === 'string' && b.provision.text.trim() ? b.provision : undefined;
+  let provision: Obj | undefined;
   let note: string | undefined;
-  if (provision) {
-    const text = provision.text as string;
-    if (text.length > budget) {
-      provision.text = `${text.slice(0, budget)} …[truncated: ${text.length - budget} more characters]`;
-      note = `provision.text is cut to ${budget} of ${text.length} characters. lex_get_document reads ${str(asOfVersion?.celex) ?? 'the version'} in parts (articleId or include, with offset).`;
+  if (p) {
+    const full = p.text as string;
+    const kept = cutText(full, budget);
+    provision = compact({
+      id: label(p.id),
+      number: typeof p.number === 'string' ? truncate(p.number, AS_OF_HEADING_MAX) : undefined,
+      title: typeof p.title === 'string' ? truncate(p.title, AS_OF_HEADING_MAX) : undefined,
+      text: kept.length < full.length ? `${kept} …[truncated: ${full.length - kept.length} more characters]` : full,
+    });
+    if (kept.length < full.length) {
+      const celex = label(asOfVersion?.celex);
+      note = `provision.text is cut to ${kept.length} of ${full.length} characters. The whole text is read with lex_get_document${celex ? ` for ${celex}` : ''}${celex && language ? `, language ${language}` : ''} (articleId or include, with offset).`;
     }
   }
   return compact({
@@ -693,10 +722,10 @@ export function shapeAsOfLookup(body: unknown, budget = AS_OF_PROVISION_BUDGET):
     asOfVersion,
     ...tail,
     provision,
-    consolidated: b.consolidated,
-    consolidatedAsOf: b.consolidatedAsOf,
-    baseCelex: b.baseCelex,
-    consolidatedNote: b.consolidatedNote,
+    consolidated: b.consolidated === true ? true : undefined,
+    consolidatedAsOf: label(b.consolidatedAsOf),
+    baseCelex: label(b.baseCelex),
+    consolidatedNote: label(b.consolidatedNote),
     note,
   });
 }

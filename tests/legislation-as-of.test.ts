@@ -19,6 +19,7 @@ const NAME = 'lex_legislation_as_of';
 const tool = tools.find((t) => t.name === NAME)!;
 const TODAY = new Date().toISOString().slice(0, 10);
 const LEAK = 'TEXT-THAT-MUST-NOT-BE-RETURNED';
+const weights = JSON.parse(readFileSync(new URL('./fixtures/operation-weights.json', import.meta.url), 'utf8')) as { weights: Record<string, number>; cellarHit: number };
 
 // Every asOfReason of the endpoint, with the class the result reports.
 const REASONS: Record<string, 'notInForce' | 'retryable' | 'needsCredits' | 'unavailable'> = {
@@ -150,6 +151,22 @@ describe('lex_legislation_as_of: input', () => {
     for (const document of ['GDPR!', 'https://eur-lex.europa.eu/eli/reg/2016/679/oj', '', 5]) expect(ok({ ...base, document }), String(document)).toBe(false);
   });
 
+  it('a treaty CELEX written with a slash is accepted here, and only here', async () => {
+    for (const document of ['12012M/TXT', '12012e/txt', 'CELEX:12016ME/TXT']) expect(ok({ ...base, document }), document).toBe(true);
+    for (const document of ['eur-lex.europa.eu/eli/reg/2016/679/oj', 'eli/reg/2016/679/oj', '/32016R0679', '32016R0679/../x y', 'a/b', '12012M/']) expect(ok({ ...base, document }), document).toBe(false);
+    const others = tools.filter((t) => t.name !== NAME);
+    for (const t of others) {
+      for (const key of ['celexNumber', 'from', 'to', 'id', 'identifier']) {
+        if (!(key in t.inputSchema) || key === 'identifier' || t.name.includes('webhook') || t.name.includes('national')) continue;
+        expect(z.object({ [key]: t.inputSchema[key] }).safeParse({ [key]: '12012M/TXT' }).success, `${t.name}.${key}`).toBe(false);
+      }
+    }
+    expect(z.object(tools.find((t) => t.name === 'lex_get_document')!.inputSchema).safeParse({ celexNumber: '12012M/TXT' }).success).toBe(false);
+    const { data, calls } = await call({ document: '12012m/txt', asOf: '2019-06-01' });
+    expect(calls[0].body).toEqual({ document: '12012M/TXT', asOf: '2019-06-01' });
+    expect(data).toMatchObject({ document: '12012M/TXT', asOfResolved: false, asOfReason: 'act_type_not_supported' });
+  });
+
   it('provision and language are optional and checked', () => {
     for (const provision of ['art_5', '5', '6a', 'anx_III', 'rct_26', 'rct_26-28']) expect(ok({ ...base, provision }), provision).toBe(true);
     for (const provision of ['', 'x'.repeat(41), 5]) expect(ok({ ...base, provision }), String(provision)).toBe(false);
@@ -213,10 +230,63 @@ describe('lex_legislation_as_of: a resolved answer', () => {
     const long = 'y'.repeat(AS_OF_PROVISION_BUDGET + 1234);
     const { data } = await call({ document: '32016R0679', asOf: '2019-06-01', provision: 'anx_I' }, { text: long });
     expect(data.provision.text).toBe(`${'y'.repeat(AS_OF_PROVISION_BUDGET)} …[truncated: 1234 more characters]`);
-    expect(data.note).toBe(`provision.text is cut to ${AS_OF_PROVISION_BUDGET} of ${long.length} characters. lex_get_document reads 02016R0679-20160504 in parts (articleId or include, with offset).`);
+    expect(data.note).toBe(`provision.text is cut to ${AS_OF_PROVISION_BUDGET} of ${long.length} characters. The whole text is read with lex_get_document for 02016R0679-20160504, language en (articleId or include, with offset).`);
+    const german = await call({ document: '32016R0679', asOf: '2019-06-01', provision: 'anx_I', language: 'de' }, { text: long });
+    expect(german.data.note).toContain('lex_get_document for 02016R0679-20160504, language de (');
     const exact = await call({ document: '32016R0679', asOf: '2019-06-01', provision: 'anx_I' }, { text: 'y'.repeat(AS_OF_PROVISION_BUDGET) });
     expect(exact.data.provision.text).toHaveLength(AS_OF_PROVISION_BUDGET);
     expect(exact.data).not.toHaveProperty('note');
+  });
+
+  it('the cut never splits a surrogate pair', () => {
+    const body = (text: string) => ({ asOfResolved: true, asOfVersion: VERSION, language: 'en', provision: { id: 'anx_I', text } });
+    const text = (t: string, budget: number) => (shapeAsOfLookup(body(t), budget).provision as { text: string }).text;
+    // "𝒜" is two UTF-16 units; a budget ending between them keeps neither.
+    expect(text(`ab𝒜cd`, 3)).toBe('ab …[truncated: 4 more characters]');
+    expect(text(`ab𝒜cd`, 4)).toBe('ab𝒜 …[truncated: 2 more characters]');
+    expect(text(`ab𝒜cd`, 2)).toBe('ab …[truncated: 4 more characters]');
+    expect(shapeAsOfLookup(body(`ab𝒜cd`), 3).note).toMatch(/^provision\.text is cut to 2 of 6 characters\./);
+    for (let budget = 1; budget < 12; budget++) {
+      const kept = text('𝒜𝒜𝒜𝒜𝒜𝒜', budget).split(' …[')[0];
+      expect(kept, String(budget)).toBe('𝒜'.repeat(Math.floor(budget / 2)));
+    }
+  });
+
+  it('a field of another type is dropped, never copied or written into a note', () => {
+    const hostile: unknown[] = [{ toString: 'x', a: LEAK }, [LEAK], 5, true, null, '', 'z'.repeat(501), { text: LEAK }];
+    for (const h of hostile) {
+      const fields = { document: h, language: h, asOf: h, asOfReason: h, consolidated: h === true ? 'yes' : h, consolidatedAsOf: h, baseCelex: h, consolidatedNote: h };
+      const nested = {
+        asOfVersion: { celex: h, kind: h, date: h, validUntil: h, checkedAt: h, extra: LEAK },
+        act: { celex: h, dateOfDocument: h, entryIntoForce: h, endOfValidity: h, inForceToday: typeof h === 'boolean' ? 'yes' : h, extra: LEAK },
+        provenance: { publisher: h, sourceUrl: h, sourceIdentifier: h, retrievedAt: h, contentHash: h, versionIdentifier: h, language: h, licence: h, extra: LEAK },
+      };
+      const no = shapeAsOfLookup({ ...fields, ...nested, asOfResolved: false, provision: { id: h, number: h, title: h, text: LEAK } });
+      expect(no, JSON.stringify(h)).toEqual({
+        asOfResolved: false,
+        asOfCaveat: { note: 'Unresolved: no version and no text are returned for the date.', group: 'unavailable', guidance: 'unavailable: the text for the date was not established (see meaning).' },
+      });
+      const yes = shapeAsOfLookup({ ...fields, ...nested, asOfResolved: true, provision: { id: h, number: h, title: h, text: 'the text', extra: LEAK } });
+      // An over-long heading is capped, not dropped; an over-long id is dropped.
+      const capped = typeof h === 'string' && h.length > 300 ? `${h.slice(0, 299)}…` : undefined;
+      expect(yes, JSON.stringify(h).slice(0, 40)).toEqual({ asOfResolved: true, provision: { ...(capped ? { number: capped, title: capped } : {}), text: 'the text' } });
+      if (typeof h !== 'string' || !h) expect(shapeAsOfLookup({ asOfResolved: true, provision: { id: 'art_1', text: h } }), JSON.stringify(h)).toEqual({ asOfResolved: true });
+    }
+    // A reason named like a built-in property has no meaning, and booleans are kept only where one is expected.
+    for (const reason of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(shapeAsOfLookup({ asOfResolved: false, asOfReason: reason }).asOfCaveat).not.toHaveProperty('meaning');
+    }
+    expect(shapeAsOfLookup({ asOfResolved: true, act: { celex: '32016R0679', inForceToday: false }, consolidated: true })).toEqual({ asOfResolved: true, act: { celex: '32016R0679', inForceToday: false }, consolidated: true });
+    // A truncated text with no usable version or language still gets a note, without them.
+    expect(shapeAsOfLookup({ asOfResolved: true, asOfVersion: { celex: { a: 1 } }, language: ['en'], provision: { id: 'art_1', text: 'abcdef' } }, 3).note)
+      .toBe('provision.text is cut to 3 of 6 characters. The whole text is read with lex_get_document (articleId or include, with offset).');
+  });
+
+  it('the headings of a provision are capped', () => {
+    const out = shapeAsOfLookup({ asOfResolved: true, provision: { id: 'art_1', number: 'N'.repeat(1000), title: 'T'.repeat(1000), text: 'x' } }).provision as Record<string, string>;
+    expect(out.number).toBe(`${'N'.repeat(299)}…`);
+    expect(out.title).toBe(`${'T'.repeat(299)}…`);
+    expect(out.text).toBe('x');
   });
 
   it('the credits block is not copied; a nearly empty pool adds a notice', async () => {
@@ -229,13 +299,39 @@ describe('lex_legislation_as_of: a resolved answer', () => {
 });
 
 describe('lex_legislation_as_of: an unresolved answer', () => {
-  it('the stand-in and the tool know the same 21 reasons', () => {
-    expect(Object.keys(REASONS)).toHaveLength(21);
-    for (const reason of Object.keys(REASONS)) {
+  it('every reason: its class and its meaning', () => {
+    const outside = 'The date is outside the act\'s dates.';
+    const notFetched = 'The text could not be fetched now.';
+    const notPaid = 'The fetch was not paid for, so it was not made.';
+    const table = Object.fromEntries(Object.keys(REASONS).map((reason) => {
       const c = asOfLookupCaveat(reason, '2019-06-01', false);
-      expect(c.group, reason).toBe(REASONS[reason]);
-      expect(typeof c.meaning, reason).toBe('string');
-    }
+      return [reason, [c.group, c.meaning]];
+    }));
+    expect(table).toEqual({
+      not_yet_adopted: ['notInForce', outside],
+      not_yet_in_force: ['notInForce', outside],
+      no_longer_in_force: ['notInForce', outside],
+      in_force_dates_unknown: ['unavailable', 'The act\'s dates do not establish whether it was in force on the date, or could not be read.'],
+      act_type_not_supported: ['unavailable', 'The act is not a regulation, directive, decision or other act of the institutions (CELEX sector 3), for example a treaty or an international agreement; the lookup does not cover it.'],
+      version_list_unavailable: ['retryable', 'The list of versions, or of the acts amending the act, could not be read.'],
+      version_lookup_cap: ['retryable', 'A lookup limit was reached.'],
+      not_in_language: ['unavailable', 'The version for the date has no text in the requested language.'],
+      amendment_not_consolidated: ['unavailable', 'An act amending this act may have applied by the date, and no listed version is known to include it.'],
+      text_unavailable: ['unavailable', 'The version has no text at the source.'],
+      article_not_in_version: ['unavailable', 'The version has no such article, annex or recital.'],
+      provision_ambiguous: ['unavailable', 'More than one part of the text answers to the requested provision.'],
+      version_not_parsed: ['unavailable', 'The text is not split into identifiable parts of the requested kind.'],
+      fetch_budget_exhausted: ['retryable', notFetched],
+      fetch_pending: ['retryable', notFetched],
+      fetch_capacity: ['retryable', notFetched],
+      fetch_failed: ['retryable', notFetched],
+      fetch_timeout: ['retryable', notFetched],
+      request_deadline: ['retryable', notFetched],
+      insufficient_credits: ['needsCredits', notPaid],
+      credit_check_failed: ['retryable', notPaid],
+    });
+    expect(Object.keys(table)).toHaveLength(21);
+    expect(Object.fromEntries(Object.entries(table).map(([k, v]) => [k, v[0]]))).toEqual(REASONS);
   });
 
   for (const [reason, group] of Object.entries(REASONS)) {
@@ -284,7 +380,7 @@ describe('lex_legislation_as_of: an unresolved answer', () => {
     const pending = await call({ document: '32016R0679', asOf: '2019-06-01', provision: 'why_fetch_pending' });
     expect(pending.data.asOfCaveat.guidance).toMatch(/calling again shortly may resolve it/);
     const credits = await call({ document: '32016R0679', asOf: '2019-06-01', provision: 'why_insufficient_credits' });
-    expect(credits.data.asOfCaveat.guidance).toBe('needsCredits: the credit pool could not cover fetching the text.');
+    expect(credits.data.asOfCaveat.guidance).toBe(`needsCredits: the credit pool could not cover fetching the text. A fetch reserves ${weights.weights.document_fetch} credits, so a pool holding fewer than ${weights.weights.document_fetch} gets insufficient_credits even for an answer that would cost ${weights.cellarHit}.`);
   });
 
   it('only asOfResolved: true is a resolved answer', () => {
@@ -376,7 +472,9 @@ describe('lex_legislation_as_of: scope, read-only mode and texts', () => {
 
   it('the description says what the answer is and is not', () => {
     const d = tool.description;
-    expect(d.length).toBeLessThan(900);
+    expect(d.length).toBeLessThan(1000);
+    expect(d).toContain('a retroactive amendment counts from the date of the amending act');
+    expect(d).toContain('(1 if the fetch fails or finds no text)');
     expect(d).toContain('only when asOfResolved is true');
     expect(d).toContain('no text is returned');
     expect(d).toContain('It does not say whether an individual provision applied on the date');
@@ -386,9 +484,9 @@ describe('lex_legislation_as_of: scope, read-only mode and texts', () => {
   });
 
   it('the server instructions point at it for a known act', () => {
-    expect(SERVER_INSTRUCTIONS).toContain('otherwise lex_legislation_as_of resolves it for a known act, and asOf in a search.');
+    expect(SERVER_INSTRUCTIONS).toContain('otherwise lex_legislation_as_of gives the version of a known act for a date, and asOf does so for search hits.');
     expect(SERVER_INSTRUCTIONS).toContain('lex_semantic_legislation with asOf returns the law in force on a date');
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_750);
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(3_800);
   });
 });
 

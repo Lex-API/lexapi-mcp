@@ -90,6 +90,13 @@ const celex = (what = 'CELEX number') =>
   z.string().trim().refine((v) => CELEX_RE.test(v), `${what} must look like 32016R0679, 62018CJ0311, 02016R0679-20180524 or 32013R0952R(04)`)
     .describe(`${what}, e.g. 32016R0679.`);
 
+// lex_legislation_as_of only: the forms above, and the CELEX of a treaty or
+// agreement written with a slash (12012M/TXT), which the API answers as an
+// act type the lookup does not cover.
+const SLASH_CELEX_RE = /^(?:CELEX:)?[0-9CE][0-9]{4}[A-Z]{1,2}[0-9A-Z()_/-]{2,30}$/i;
+const actCelex = () =>
+  z.string().trim().refine((v) => CELEX_RE.test(v) || SLASH_CELEX_RE.test(v), 'CELEX number of the act must look like 32016R0679 or 02016R0679-20180524');
+
 // National-corpus ids (e.g. `AT-NOR-10001597`, `SI-JUD-UPRS-2025-I.U.727.2022.`):
 // a two-letter jurisdiction prefix, which is how the API recognises them on
 // the citation graph, then the source's own identifier, letters of any
@@ -646,9 +653,9 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'The version of an EU act for a date',
     description:
-      'For a known EU regulation, directive or decision and a date: the version the Publications Office lists for that date (the newest consolidated version dated on or before it, else the act as published in the Official Journal) and, with provision, the text of one article, annex or recitals in it. lex_semantic_legislation with asOf is the search by meaning. The version and text are established only when asOfResolved is true; otherwise asOfReason says why and no text is returned. It does not say whether an individual provision applied on the date; act.inForceToday is about today. Consolidated versions have no legal force; the authentic act is baseCelex as published in the Official Journal. Cost: 1 credit when no text is fetched; when the provision\'s text is fetched, 4 via the Publications Office or 5 live, whatever the answer (1 if the fetch fails).',
+      'For a known EU regulation, directive or decision and a date: the version the Publications Office lists for that date (the newest consolidated version dated on or before it, else the act as published in the Official Journal) and, with provision, the text of one article, annex or recitals in it. lex_semantic_legislation with asOf is the search by meaning. The version and text are established only when asOfResolved is true; otherwise asOfReason says why and no text is returned. It does not say whether an individual provision applied on the date; act.inForceToday is about today; a retroactive amendment counts from the date of the amending act. Consolidated versions have no legal force; the authentic act is baseCelex as published in the Official Journal. Cost: 1 credit when no text is fetched; when the provision\'s text is fetched, 4 via the Publications Office or 5 live, whatever the answer (1 if the fetch fails or finds no text).',
     inputSchema: {
-      document: celex('CELEX number of the act').describe('CELEX number of the act, e.g. 32016R0679; a consolidated CELEX is read as its base act. lex_resolve turns a URL or ELI into one.'),
+      document: actCelex().describe('CELEX number of the act, e.g. 32016R0679; a consolidated CELEX is read as its base act. lex_resolve turns a URL or ELI into one.'),
       asOf: isoDate('The date (YYYY-MM-DD, 1952-01-01 to today (UTC)).'),
       provision: z.string().trim().min(1).max(40).optional().describe('One whole article ("art_5", "5", "6a"), an annex by the numeral or letter in its heading ("anx_III"), or recitals ("rct_26", "rct_26-28"; at most 50). Paragraphs and points are not addressable. Omitted: the version only.'),
       language: lang('Language of the text (default en).').optional(),

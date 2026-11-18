@@ -54,7 +54,7 @@ const EXPECTED: Record<string, Expected> = {
   lex_legislation_as_of: {
     ops: ['legislation_as_of', 'document_fetch'],
     settles: true,
-    says: [`Cost: ${credits(w.legislation_as_of)} when no text is fetched; when the provision's text is fetched, ${fx.cellarHit} via the Publications Office or ${w.document_fetch} live, whatever the answer (${w.legislation_as_of} if the fetch fails).`],
+    says: [`Cost: ${credits(w.legislation_as_of)} when no text is fetched; when the provision's text is fetched, ${fx.cellarHit} via the Publications Office or ${w.document_fetch} live, whatever the answer (${w.legislation_as_of} if the fetch fails or finds no text).`],
   },
   lex_document_versions: { ops: ['document_versions'], says: [`Cost: ${credits(w.document_versions)}.`] },
   lex_get_document_version: { ops: ['document_version_fetch'], says: [`Cost: ${credits(w.document_version_fetch)}.`] },
