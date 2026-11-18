@@ -9,7 +9,7 @@
 //     started;
 //   - all calls of one tool call share that call's deadline.
 
-import { describeError, LexAPIError, LexAPITransportError } from './errors.js';
+import { describeError, isMarkedUnknownEndpoint, LexAPIError, LexAPITransportError } from './errors.js';
 import {
   compact,
   consolidatedBaseOf,
@@ -31,7 +31,7 @@ type Obj = Record<string, unknown>;
 // ── Failures ───────────────────────────────────────────────────────
 export type FailureReason =
   | 'credits_exhausted' | 'national_allowance_exhausted' | 'rate_limited' | 'quota_exhausted'
-  | 'plan' | 'terms_not_accepted' | 'not_found' | 'withdrawn' | 'semantic_not_enabled'
+  | 'plan' | 'payment_past_due' | 'terms_not_accepted' | 'not_found' | 'withdrawn' | 'semantic_not_enabled'
   | 'search_incomplete' | 'timeout' | 'upstream_error' | 'network' | 'rejected'
   | 'not_live' | 'not_listed' | 'unconfirmed_not_found' | 'unreadable_response' | 'different_document';
 
@@ -46,7 +46,7 @@ interface Failure {
 }
 
 /** After one of these, a later call of the same tool call cannot succeed either. */
-const STOPS_ALL = new Set<FailureReason>(['credits_exhausted', 'rate_limited', 'quota_exhausted']);
+const STOPS_ALL = new Set<FailureReason>(['credits_exhausted', 'rate_limited', 'quota_exhausted', 'payment_past_due']);
 
 /**
  * What a failed call means for the result. Errors that are not an API answer
@@ -62,6 +62,12 @@ function failureOf(err: unknown): Failure {
       : { reason: 'network', error: `LexAPI could not be reached (${err.message})`, cause: err };
   }
   if (!(err instanceof LexAPIError) || err.status === 401) throw err;
+  // A failed subscription payment: every request is refused until it
+  // succeeds. The text is describeError's, not the API's message: the
+  // address in it is shown only after it was checked.
+  if (err.status === 403 && err.code === 'PAYMENT_PAST_DUE') {
+    return { reason: 'payment_past_due', error: describeError(err), cause: err };
+  }
   const d = isObj(err.details) ? err.details : {};
   const reason: FailureReason =
     err.status === 402 ? (err.code === 'NATIONAL_ALLOWANCE_EXHAUSTED' ? 'national_allowance_exhausted' : 'credits_exhausted')
@@ -96,7 +102,7 @@ type Outcome = { res: LexResponse<Json>; failure?: undefined } | { res?: undefin
 
 class Calls {
   private readonly end: number;
-  /** Set once the credit pool or the rate limit is exhausted, or a redirect was not followed. */
+  /** Set once the credit pool or the rate limit is exhausted, a payment is past due, or a redirect was not followed. */
   stopped?: Failure;
   succeeded = 0;
   private lowest: { remaining: number; body: unknown } | undefined;
@@ -731,7 +737,7 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         call,
         ...shown(read.failure),
         note: notLive ? `lex_national_coverage lists ${code} as not live, and the document read was answered 404, so the document could not be looked up.`
-          : /Unknown API endpoint/i.test(err.message)
+          : /Unknown API endpoint/i.test(err.message) || isMarkedUnknownEndpoint(err)
           ? `LexAPI has no route for ${code}: the country is not live (lex_national_coverage lists the live ones), or the prefix is not a country code.`
           : 'The 404 was not the API\'s own answer about this document id, so it does not show that the document does not exist.',
       }],

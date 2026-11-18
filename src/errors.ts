@@ -3,15 +3,27 @@
 // LexAPI answers errors in two shapes (docs.md "Errors & retries"):
 //   typed:  { success: false, error: { code, message, details? } }
 //   legacy: { error: "slug or sentence", message?, details?, retryAfter?, upgradeUrl?, usage? }
-//           — the 403 PAYMENT_PAST_DUE body adds `billingUrl` and `accessEndedAt`.
 //           — newer servers also send a top-level `code` (e.g. RATE_LIMITED,
 //           QUOTA_EXHAUSTED) and, on quota 429s, a top-level `resetsAt`.
+//           — the 403 PAYMENT_PAST_DUE body adds `billingUrl` and `accessEndedAt`.
 // We normalise both, then turn the status into a message that says what
 // happened AND what to do next — the model relays it to the user, so it has
 // to be actionable without the model knowing LexAPI's billing rules.
 
 const DASHBOARD_URL = 'https://lex-api.com/dashboard?ref=mcp';
 const PRICING_URL = 'https://lex-api.com/pricing?ref=mcp';
+
+/**
+ * What a 403 PAYMENT_PAST_DUE body says about the account, as received:
+ * strings of bounded length, not yet checked for what they hold.
+ * describeError shows a value only after checking it.
+ */
+export interface PastDueInfo {
+  billingUrl?: string;
+  accessEndedAt?: string;
+  /** Hostname of the API base URL the answer came from; `billingUrl` is shown only on this host. */
+  siteHost?: string;
+}
 
 export class LexAPIError extends Error {
   constructor(
@@ -24,6 +36,8 @@ export class LexAPIError extends Error {
     public readonly retryAfterSeconds?: number,
     /** When an exhausted legacy quota refills (`resetsAt`, else `usage.resetsAt`). */
     public readonly resetsAt?: string,
+    /** 403 PAYMENT_PAST_DUE only. */
+    public readonly pastDue?: PastDueInfo,
   ) {
     super(message);
     this.name = 'LexAPIError';
@@ -94,33 +108,69 @@ export function isUnknownEndpoint(err: unknown): err is LexAPIError {
       || /^Unknown API endpoint\b/i.test(err.message.trim()));
 }
 
+/**
+ * The API's own typed 404 for a route it does not have, by its mark alone.
+ * Narrower than isUnknownEndpoint: a 404 from a proxy or another server is
+ * not one.
+ */
+export function isMarkedUnknownEndpoint(err: unknown): err is LexAPIError {
+  return err instanceof LexAPIError && err.status === 404 && err.code === 'NOT_FOUND' && hasUnknownEndpointReason(err.details);
+}
+
 const MAX_BILLING_URL_LENGTH = 300;
 const MAX_TIMESTAMP_LENGTH = 40;
 
-/** An absolute https URL in printable ASCII, without credentials; anything else is not shown. */
-function httpsUrl(value: unknown): string | undefined {
+/** A domain name: not an IP literal, and no punycode label. */
+function isPlainDomain(host: string): boolean {
+  return /^[a-z0-9.-]+$/.test(host) && !/^[0-9.]+$/.test(host) && !/(^|\.)xn--/.test(host);
+}
+
+/**
+ * An absolute https URL in printable ASCII, without credentials, on the
+ * host the API was called on (`siteHost`, a domain name); anything else is
+ * not shown.
+ */
+function billingLink(value: unknown, siteHost: unknown): string | undefined {
   if (typeof value !== 'string' || value.length > MAX_BILLING_URL_LENGTH) return undefined;
   if (!/^https:\/\/[!-~]+$/.test(value) || /[<>"'`\\()]/.test(value)) return undefined;
+  if (typeof siteHost !== 'string' || !isPlainDomain(siteHost)) return undefined;
   try {
     const u = new URL(value);
-    return u.protocol === 'https:' && !u.username && !u.password ? value : undefined;
+    return u.protocol === 'https:' && !u.username && !u.password && u.hostname === siteHost ? value : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** An ISO 8601 instant (`2026-11-25T09:14:03.000Z`); anything else is not shown. */
+/**
+ * A UTC instant as the API writes it (`2026-11-25T09:14:03.000Z`; the
+ * fraction may be shorter or absent) that names a real date and time;
+ * anything else is not shown.
+ */
 function isoInstant(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length > MAX_TIMESTAMP_LENGTH) return undefined;
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/.test(value)) return undefined;
-  return Number.isNaN(Date.parse(value)) ? undefined : value;
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(value);
+  if (!m) return undefined;
+  const normalised = `${m[1]}.${(m[2] ?? '').padEnd(3, '0')}Z`;
+  const t = Date.parse(normalised);
+  return !Number.isNaN(t) && new Date(t).toISOString() === normalised ? value : undefined;
+}
+
+/** `billingUrl` / `accessEndedAt` of one object, kept only as strings of bounded length. */
+function pastDueFields(o: unknown): PastDueInfo | undefined {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+  const r = o as Record<string, unknown>;
+  const out: PastDueInfo = {};
+  if (typeof r.billingUrl === 'string' && r.billingUrl.length <= MAX_BILLING_URL_LENGTH) out.billingUrl = r.billingUrl;
+  if (typeof r.accessEndedAt === 'string' && r.accessEndedAt.length <= MAX_TIMESTAMP_LENGTH) out.accessEndedAt = r.accessEndedAt;
+  return Object.keys(out).length ? out : undefined;
 }
 
 export function parseErrorBody(
   json: unknown,
   rawText: string,
   status: number,
-): { code: string; message: string; details?: unknown; retryAfter?: number; resetsAt?: string } {
+): { code: string; message: string; details?: unknown; retryAfter?: number; resetsAt?: string; pastDue?: PastDueInfo } {
   const fallback = { code: `HTTP_${status}`, message: rawText.trim().slice(0, 300) || `HTTP ${status}` };
   if (!json || typeof json !== 'object' || Array.isArray(json)) return fallback;
   const j = json as Record<string, unknown>;
@@ -150,14 +200,13 @@ export function parseErrorBody(
   if (typeof j.acceptUrl === 'string') strayFields.acceptUrl = j.acceptUrl;
   // National semantic 503/422: why the search could not be completed.
   if (typeof j.partialReason === 'string') strayFields.partialReason = j.partialReason;
-  // 403 PAYMENT_PAST_DUE: where the invoice is paid, and when access ended.
-  if (typeof j.billingUrl === 'string' && j.billingUrl.length <= MAX_BILLING_URL_LENGTH) strayFields.billingUrl = j.billingUrl;
-  if (typeof j.accessEndedAt === 'string' && j.accessEndedAt.length <= MAX_TIMESTAMP_LENGTH) strayFields.accessEndedAt = j.accessEndedAt;
   const jurisdictionFallback = Object.keys(strayFields).length ? strayFields : undefined;
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
     const eo = e as Record<string, unknown>;
+    const pastDue = pastDueFields(j) ?? pastDueFields(eo.details);
     return {
+      ...(pastDue ? { pastDue } : {}),
       code: typeof eo.code === 'string' ? eo.code : (topCode ?? fallback.code),
       message:
         typeof eo.message === 'string' ? eo.message
@@ -171,7 +220,11 @@ export function parseErrorBody(
   // Legacy: `error` is a short sentence ("Invalid API key"), `message` the detail.
   const errStr = typeof e === 'string' ? e : undefined;
   const msg = typeof j.message === 'string' ? j.message : undefined;
+  // 403 PAYMENT_PAST_DUE: where the invoice is paid and when access ended,
+  // read at the top level whatever else the body carries.
+  const pastDue = pastDueFields(j);
   return {
+    ...(pastDue ? { pastDue } : {}),
     code: topCode ?? errStr ?? fallback.code,
     message: errStr && msg ? `${errStr}: ${msg}` : (msg ?? errStr ?? fallback.message),
     details: j.details ?? j.usage ?? jurisdictionFallback,
@@ -264,9 +317,9 @@ export function describeError(err: unknown): string {
       // request is refused until it succeeds. Not a plan question, so no
       // pricing pointer; the API's own sentence is not repeated.
       if (err.code === 'PAYMENT_PAST_DUE') {
-        const ended = d ? isoInstant(d.accessEndedAt) : undefined;
-        const billing = d ? httpsUrl(d.billingUrl) : undefined;
-        return `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses its API requests until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}. The account holder restores access by paying the open invoice or updating the card in the LexAPI dashboard${billing ? ` (${billing})` : ''}. Not retryable until then; nothing was charged for this call.`;
+        const ended = isoInstant(err.pastDue?.accessEndedAt);
+        const billing = billingLink(err.pastDue?.billingUrl, err.pastDue?.siteHost);
+        return `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard${billing ? ` (${billing})` : ''}. Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.`;
       }
       return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
