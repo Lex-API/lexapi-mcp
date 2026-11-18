@@ -104,6 +104,7 @@ const SAMPLES: Record<string, Array<Record<string, unknown>>> = {
   lex_get_documents_batch: [{ celexNumbers: ['32016R0679', '32018R1725'] }],
   lex_get_metadata: [{ celexNumber: '32016R0679' }],
   lex_get_document_by_url: [{ url: 'https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32016R0679' }],
+  lex_legislation_as_of: [{ document: '32016R0679', asOf: '2019-06-01', provision: 'art_17' }],
   lex_document_versions: [{ celexNumber: '32016R0679' }],
   lex_get_document_version: [{ celexNumber: '32016R0679', version: 1 }, { celexNumber: '32016R0679', date: '2020-01-01' }],
   lex_semantic_legislation: [{ query: 'right to erasure' }],

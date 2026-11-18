@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { LexAPIError } from './errors.js';
+import { ENDPOINT_NOT_AVAILABLE, isUnknownEndpoint, LexAPIError } from './errors.js';
 import { SCOPE_READ, SCOPE_WEBHOOKS, type ToolScope } from './oauth/scope.js';
 import { webhookUrlProblem } from './webhookUrl.js';
 import { actHistory, checkCitation, isNationalId, NATIONAL_ID_RE, research } from './workflows.js';
@@ -11,6 +11,7 @@ import {
   creditNotice,
   isObj,
   nationalAllowanceOf,
+  shapeAsOfLookup,
   shapeCaseLaw,
   shapeCitedBy,
   shapeCites,
@@ -88,6 +89,13 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const celex = (what = 'CELEX number') =>
   z.string().trim().refine((v) => CELEX_RE.test(v), `${what} must look like 32016R0679, 62018CJ0311, 02016R0679-20180524 or 32013R0952R(04)`)
     .describe(`${what}, e.g. 32016R0679.`);
+
+// lex_legislation_as_of only: the forms above, and the CELEX of a treaty or
+// agreement written with a slash (12012M/TXT), which the API answers as an
+// act type the lookup does not cover.
+const SLASH_CELEX_RE = /^(?:CELEX:)?[0-9CE][0-9]{4}[A-Z]{1,2}[0-9A-Z()_/-]{2,30}$/i;
+const actCelex = () =>
+  z.string().trim().refine((v) => CELEX_RE.test(v) || SLASH_CELEX_RE.test(v), 'CELEX number of the act must look like 32016R0679 or 02016R0679-20180524');
 
 // National-corpus ids (e.g. `AT-NOR-10001597`, `SI-JUD-UPRS-2025-I.U.727.2022.`):
 // a two-letter jurisdiction prefix, which is how the API recognises them on
@@ -274,6 +282,8 @@ export interface ToolDef {
   /** The description shown to an OAuth connection without lex:read, when `description` names a read tool. */
   withoutReadDescription?: string;
   inputSchema: z.ZodRawShape;
+  /** Parameters outside inputSchema are a validation error (otherwise they are dropped). */
+  strict?: boolean;
   annotations: ToolAnnotations;
   /** Not read-only (webhooks, citation extraction). Hidden when LEXAPI_MCP_READ_ONLY is set. */
   write?: boolean;
@@ -290,6 +300,20 @@ function explain402(why: string) {
   return (err: unknown): never => {
     if (err instanceof LexAPIError && err.status === 402 && err.code === 'CREDITS_EXHAUSTED') {
       throw new LexAPIError(err.status, err.code, `${err.message.trim().replace(/[.\s]+$/, '')}. ${why}`, err.details, err.retryAfterSeconds, err.resetsAt);
+    }
+    throw err;
+  };
+}
+
+/**
+ * For `.catch()`: the API's 404 for the route itself (a deployment older
+ * than the endpoint) becomes an error that says so. The endpoint's own 404,
+ * for a document it does not know, passes through unchanged.
+ */
+function endpointSince(apiVersion: string, route: string, meanwhile: string) {
+  return (err: unknown): never => {
+    if (isUnknownEndpoint(err)) {
+      throw new LexAPIError(404, ENDPOINT_NOT_AVAILABLE, `This LexAPI deployment does not offer this endpoint yet (${route}, LexAPI API ${apiVersion} or later). ${meanwhile}`);
     }
     throw err;
   };
@@ -621,6 +645,31 @@ export const tools: ToolDef[] = [
         extractedCelex: res.body.extractedCelex,
         ...shapeDocument(res.body.document, res.headers, contentOpts(a)),
       }));
+    },
+  },
+
+  {
+    name: 'lex_legislation_as_of',
+    scope: SCOPE_READ,
+    title: 'The version of an EU act for a date',
+    description:
+      'For a known EU regulation, directive or decision and a date: the version the Publications Office lists for that date (the newest consolidated version dated on or before it, else the act as published in the Official Journal) and, with provision, the text of one article, annex or recitals in it. lex_semantic_legislation with asOf is the search by meaning. The version and text are established only when asOfResolved is true; otherwise asOfReason says why and no text is returned. It does not say whether an individual provision applied on the date; act.inForceToday is about today; a retroactive amendment counts from the date of the amending act. Consolidated versions have no legal force; the authentic act is baseCelex as published in the Official Journal. Cost: 1 credit when no text is fetched; when the provision\'s text is fetched, 4 via the Publications Office or 5 live, whatever the answer (1 if the fetch fails or finds no text).',
+    inputSchema: {
+      document: actCelex().describe('CELEX number of the act, e.g. 32016R0679; a consolidated CELEX is read as its base act. lex_resolve turns a URL or ELI into one.'),
+      asOf: isoDate('The date (YYYY-MM-DD, 1952-01-01 to today (UTC)).'),
+      provision: z.string().trim().min(1).max(40).optional().describe('One whole article ("art_5", "5", "6a"), an annex by the numeral or letter in its heading ("anx_III"), or recitals ("rct_26", "rct_26-28"; at most 50). Paragraphs and points are not addressable. Omitted: the version only.'),
+      language: lang('Language of the text (default en).').optional(),
+    },
+    strict: true,
+    annotations: READ,
+    handler: async (a, client) => {
+      const res = await client.legislationAsOf(compact({
+        document: normCelex(a.document),
+        asOf: a.asOf,
+        provision: a.provision,
+        language: a.language,
+      })).catch(endpointSince('2.26.0', 'POST /legislation/as-of', 'lex_semantic_legislation with asOf, and lex_get_document with a consolidated CELEX, do not need it.'));
+      return withNotice(res, shapeAsOfLookup(res.body));
     },
   },
 
@@ -1424,6 +1473,11 @@ export interface SelectToolsOptions {
    * set are returned. Leave undefined for an API key (scopes do not apply).
    */
   scopes?: ReadonlySet<ToolScope>;
+}
+
+/** The schema a tool's arguments are validated with. */
+export function inputSchemaOf(tool: ToolDef) {
+  return tool.strict ? z.strictObject(tool.inputSchema) : z.object(tool.inputSchema);
 }
 
 export function selectTools(opts: SelectToolsOptions = {}): ToolDef[] {

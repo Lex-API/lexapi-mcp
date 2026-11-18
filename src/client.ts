@@ -464,6 +464,7 @@ export class LexAPIClient {
   getDocumentByUrl(body: Json) { return this.request('POST', '/documents/url', { body }); }
   recentDocuments(query: Query) { return this.request('GET', '/documents/recent', { query }); }
   resolve(body: Json) { return this.request('POST', '/resolve', { body }); }
+  legislationAsOf(body: Json) { return this.request('POST', '/legislation/as-of', { body }); }
 
   // ── Version history (observation snapshots) ──────────────────────
   listVersions(celex: string, query: Query) {

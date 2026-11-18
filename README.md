@@ -96,6 +96,7 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_get_documents_batch` | Up to 50 documents at once (plan-capped). | per document, as above |
 | `lex_get_metadata` | Metadata only. | 1 · 4 · 5 |
 | `lex_get_document_by_url` | A document from a pasted EUR-Lex URL. | 1 · 4 · 5 |
+| `lex_legislation_as_of` | The version of an EU act listed for a date and, optionally, one article, annex or recital of it. | 1 (4 · 5 when the text is fetched) |
 | `lex_document_versions` | LexAPI's observed version history of a document. | 1 |
 | `lex_get_document_version` | One observed snapshot, by version number or date. | 1 |
 | `lex_cited_by` · `lex_cites` | Inbound / outbound citations, with each edge's type and provenance. | 1 |
@@ -116,6 +117,9 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and changes to watched acts (paid plans). | free |
 
 The first three tools are made of the calls the others make: a value the API did not return is reported as `unknown`, and a part that could not be fetched is named with the reason. Two values are computed by the tools from what the API returned: `onDate.status` (a date compared with the returned dates) and `celexYear` (the year in a CELEX number). The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
+
+`lex_legislation_as_of` with `{ "document": "32016R0679", "asOf": "2019-06-01", "provision": "art_17" }` returns the version listed for 1 June 2019 (`02016R0679-20160504`) and Article 17 in it.
+The version and text are established only when `asOfResolved` is `true`; otherwise `asOfReason` says why and no text is returned.
 
 ## Configuration
 
