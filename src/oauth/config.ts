@@ -7,7 +7,7 @@
 // OAuth on but lost the secret must fail loudly, not run with sign-in off).
 
 import { DEFAULT_BASE_URL } from '../client.js';
-import { expandScopeSet, KNOWN_SCOPES, SCOPE_ALL, stepUpScopes, TOOL_SCOPES, type ToolScope } from './scope.js';
+import { expandScopeSet, KNOWN_SCOPES, SCOPE_ALL, SCOPE_READ, stepUpScopes, TOOL_SCOPES, type ToolScope } from './scope.js';
 
 export const OAUTH_SCOPE = SCOPE_ALL;
 export const DEFAULT_ISSUER = 'https://lex-api.com';
@@ -182,6 +182,10 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OAuthC
     : scopesSupported.includes(OAUTH_SCOPE) ? [OAUTH_SCOPE] : scopesSupported;
   if (!defaultScopes.every((n) => scopesSupported.includes(n))) {
     throw new OAuthConfigError('LEXAPI_OAUTH_DEFAULT_SCOPE may only name scopes listed in LEXAPI_OAUTH_SCOPES');
+  }
+  // The scope a new connection is asked for must include the read tools.
+  if (!expandScopeSet(defaultScopes).has(SCOPE_READ)) {
+    throw new OAuthConfigError(`LEXAPI_OAUTH_DEFAULT_SCOPE must include ${OAUTH_SCOPE} or ${SCOPE_READ}`);
   }
 
   return {

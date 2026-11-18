@@ -297,9 +297,16 @@ describe('configuration: LEXAPI_OAUTH_SCOPES and LEXAPI_OAUTH_DEFAULT_SCOPE', ()
       { LEXAPI_OAUTH_SCOPES: 'lex:read' },
       { LEXAPI_OAUTH_SCOPES: 'lex:webhooks' },
       { LEXAPI_OAUTH_SCOPES: 'lex:read', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:read' },
+      // A default scope without the read tools.
+      { LEXAPI_OAUTH_SCOPES: NARROW, LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:webhooks' },
+      { LEXAPI_OAUTH_SCOPES: 'lex:read lex:webhooks', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:webhooks' },
+      { LEXAPI_OAUTH_SCOPES: 'lex lex:webhooks', LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:webhooks' },
     ] as Array<Record<string, string>>) {
       expect(() => cfg(env), JSON.stringify(env)).toThrow(OAuthConfigError);
     }
+    expect(() => cfg({ LEXAPI_OAUTH_SCOPES: NARROW, LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex:webhooks' })).toThrow('LEXAPI_OAUTH_DEFAULT_SCOPE must include lex or lex:read');
+    // A blank value is an unset one.
+    expect(cfg({ LEXAPI_OAUTH_SCOPES: '  ', LEXAPI_OAUTH_DEFAULT_SCOPE: ' ' })).toMatchObject({ scopesSupported: ['lex'], defaultScope: 'lex' });
     expect(() => oauthConfigFromEnv({ LEXAPI_OAUTH_SCOPES: 'lex' })).toThrow(/LEXAPI_OAUTH_SCOPES is set but LEXAPI_OAUTH_CLIENT_SECRET is not/);
     expect(() => oauthConfigFromEnv({ LEXAPI_OAUTH_DEFAULT_SCOPE: 'lex' })).toThrow(/LEXAPI_OAUTH_DEFAULT_SCOPE is set but/);
   });
@@ -357,8 +364,17 @@ describe('a 403 insufficient_scope from the API', () => {
       'Bearer error="insufficient_scopes"', 'Bearer error=insufficient_scopes', 'Bearer error="not_insufficient_scope"', 'Bearer xerror="insufficient_scope"',
       'Bearer error_description="error=insufficient_scope"', 'Bearer realm="lexapi", error_description="x, error=\\"insufficient_scope\\""',
       'Bearer error="invalid_token", error_description="was error=insufficient_scope"', 'Bearer error="invalid_token", error="insufficient_scope"',
-      'Bearer error="Insufficient_Scope"', 'error="insufficient_scope"', 'Bearer realm="unterminated, error="insufficient_scope']) {
+      'Bearer error="Insufficient_Scope"', 'error="insufficient_scope"', 'XBearer error="insufficient_scope"', 'x Bearer error="insufficient_scope"',
+      'Bearer error=', 'Bearer error= , error="insufficient_scope"', 'Bearer realm=, error="insufficient_scope"', 'Bearer realm= ,error=insufficient_scope', `Bearer realm="${'x'.repeat(1000)}", error="insufficient_scope"`, 'Bearer realm="unterminated, error="insufficient_scope']) {
       expect(isInsufficientScopeChallenge(no), String(no)).toBe(false);
+    }
+  });
+
+  it('a crafted header is answered at once', () => {
+    for (const www of [`Bearer a=${' '.repeat(100_000)}"`, `Bearer a=${' '.repeat(900)}"`, `Bearer ${'a= '.repeat(300)}"`, `Bearer a="${'\\\\'.repeat(450)}`, `Bearer${' '.repeat(100_000)}`]) {
+      const t0 = performance.now();
+      expect(isInsufficientScopeChallenge(www)).toBe(false);
+      expect(performance.now() - t0).toBeLessThan(50);
     }
   });
 
@@ -577,6 +593,19 @@ describe('OAuth connections over HTTP', () => {
     expect(r.status).toBe(403);
     expect(r.headers.get('www-authenticate')).toBe(challenge('lex:read lex:webhooks', 'required scope: lex:webhooks'));
     expect(r.json).toEqual({ error: 'insufficient_scope', error_description: 'required scope: lex:webhooks', scope: 'lex:read lex:webhooks' });
+  });
+});
+
+describe('a refusal by the API keeps the scopes the token holds', () => {
+  it('token `lex:read lex:webhooks`, connection without lex:read: the challenge for a read tool asks for both', async () => {
+    const base = await start({ LEXAPI_OAUTH_SCOPES: NARROW });
+    const auth = bearer('lex:read lex:webhooks', 'hooksonly');
+    as.grants.get('grant_hooksonly')!.scope = 'lex:webhooks';
+    expect((await call(base, auth, 'lex_list_webhooks')).json.result.isError).toBeUndefined();
+    const r = await call(base, auth, 'lex_info');
+    expect(r.status).toBe(403);
+    expect(r.headers.get('www-authenticate')).toBe(challenge('lex:read lex:webhooks', 'required scope: lex:read'));
+    expect(r.json).toEqual({ error: 'insufficient_scope', error_description: 'required scope: lex:read', scope: 'lex:read lex:webhooks' });
   });
 });
 

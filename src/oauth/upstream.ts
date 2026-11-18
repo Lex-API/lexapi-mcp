@@ -48,7 +48,9 @@ function isInvalidTokenChallenge(www: string | null): boolean {
   return !!www && /\berror\s*=\s*"?invalid_token"?/i.test(www);
 }
 
-const AUTH_PARAM = /\s*([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,"]*))\s*(?:,|$)/y;
+const AUTH_PARAM = /\s*([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,"]+))\s*(?:,|$)/y;
+/** A challenge of the API is a few hundred characters; anything much longer is not read. */
+const MAX_CHALLENGE_LENGTH = 1000;
 
 /**
  * True for a Bearer challenge whose `error` parameter is exactly
@@ -57,7 +59,7 @@ const AUTH_PARAM = /\s*([A-Za-z0-9_-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^\s,"]*))
  */
 export function isInsufficientScopeChallenge(www: string | null): boolean {
   const m = www ? /^\s*Bearer\s+/i.exec(www) : null;
-  if (!www || !m) return false;
+  if (!www || !m || www.length > MAX_CHALLENGE_LENGTH) return false;
   AUTH_PARAM.lastIndex = m[0].length;
   for (let p = AUTH_PARAM.exec(www); p; p = AUTH_PARAM.exec(www)) {
     if (p[1].toLowerCase() === 'error') return (p[2] ?? p[3]) === 'insufficient_scope';
