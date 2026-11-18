@@ -105,7 +105,7 @@ describe('MCP protocol (in-memory)', () => {
     // without an upper bound no longer publish a maximum: measured 64.5k.
     // lex_legislation_as_of adds ~2.0k: measured 66.54k. asOf on
     // lex_national_semantic_legislation and the snapshot fields on the two
-    // version tools add ~0.8k: measured 67.33k.
+    // version tools add ~1.0k: measured 67.50k.
     expect(listJson.length).toBeLessThan(67_600);
     expect(listJson).not.toContain(String(Number.MAX_SAFE_INTEGER));
     // [tool, parameter, minimum], as a client receives them.
@@ -126,7 +126,7 @@ describe('MCP protocol (in-memory)', () => {
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(4_000);
 
     // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools,
-    // 59.25k with lex_legislation_as_of, 60.05k with national asOf.
+    // 59.25k with lex_legislation_as_of, 60.22k with national asOf.
     const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
     const [ra, rb] = InMemoryTransport.createLinkedPair();
     await roServer.connect(ra);

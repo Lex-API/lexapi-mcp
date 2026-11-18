@@ -1203,7 +1203,7 @@ export function shapeNationalLegislationHit(r: unknown, asOf?: string, labelled 
 const NATIONAL_AS_OF_MEANING: Record<string, string> = {
   provision_amended_since: 'the publisher dates today\'s wording from after that date (amended or added since, or the publisher\'s record of it starts later); LexAPI holds no earlier wording',
   no_longer_in_force: 'per the publisher\'s dates, the provision or its act was no longer in force on that date',
-  provision_dates_unknown: 'whether today\'s wording applied on that date could not be established from the publisher\'s dates',
+  provision_dates_unknown: 'whether today\'s wording applied on that date could not be established from the publisher\'s dates; the hit\'s valid_from alone does not establish it',
   asof_not_available: 'LexAPI holds no per-provision dates for this country',
 };
 const NATIONAL_AS_OF_GROUP: Record<string, string> = {
@@ -1250,20 +1250,22 @@ function nationalAsOfFields(r: Obj, asOf: string, labelled: boolean): Obj {
 }
 
 /** One line per class of unresolved national hit present, as asOfCaveat does for EU hits. */
-export function nationalAsOfCaveat(results: Obj[], asOf: string): Obj | undefined {
+export function nationalAsOfCaveat(results: Obj[], asOf: string, labelled = true): Obj | undefined {
   const groups: Record<string, string[]> = { amendedSince: [], notInForce: [], datesUnknown: [], notAvailable: [], other: [] };
   for (const r of results) {
     if (r.asOfResolved === true) continue;
     const reason = typeof r.asOfReason === 'string' ? r.asOfReason : 'unknown';
-    const id = `${String(r.law_id ?? r.documentId ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''} (${reason})`;
+    const id = `${String(r.law_id ?? r.documentId ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''}${labelled ? ` (${reason})` : ''}`;
     groups[Object.hasOwn(NATIONAL_AS_OF_GROUP, reason) ? NATIONAL_AS_OF_GROUP[reason] : 'other'].push(id);
   }
   const guidance: string[] = [];
-  if (groups.amendedSince.length) guidance.push(`amendedSince: the publisher dates today's wording from after ${asOf}; LexAPI holds no earlier wording.`);
+  if (groups.amendedSince.length) guidance.push(`amendedSince: the publisher dates today's wording from after ${asOf} (amended or added since, or its record starts later); LexAPI holds no earlier wording.`);
   if (groups.notInForce.length) guidance.push(`notInForce: per the publisher's dates, no longer in force on ${asOf}.`);
-  if (groups.datesUnknown.length) guidance.push(`datesUnknown: whether today's wording applied on ${asOf} could not be established (no usable date, the provision could not be matched, or LexAPI's copy of the act may be out of date on that date).`);
+  if (groups.datesUnknown.length) guidance.push(`datesUnknown: whether today's wording applied on ${asOf} could not be established (for instance: no usable date, the provision could not be matched, LexAPI's copy of the act may be out of date on that date, or the dates could not be read); valid_from alone does not establish it.`);
   if (groups.notAvailable.length) guidance.push('notAvailable: LexAPI holds no per-provision dates for this country.');
-  if (groups.other.length) guidance.push(`other: whether today's wording applied on ${asOf} was not established (see asOfReason).`);
+  if (groups.other.length) guidance.push(labelled
+    ? `other: whether today's wording applied on ${asOf} was not established (see asOfReason).`
+    : `other: whether today's wording applied on ${asOf} was not established.`);
   if (!guidance.length) return undefined;
   return compact({
     note: `Unresolved hits carry today's wording, which is not established as the text on ${asOf}. asOf never returns earlier wording.`,
@@ -1280,18 +1282,25 @@ function isCalendarDate(v: unknown): v is string {
 }
 
 /**
- * `requestedAsOf`: the asOf the tool sent. An API that does not label hits
- * (before LexAPI API 2.29.0) echoes no asOf, and an echo that is not a
- * calendar date is not trusted either: every hit is then labelled
- * unresolved under the requested date, whatever it carries, so no text
- * reads as established for the date.
+ * `requestedAsOf`: the asOf the tool sent. The API's per-hit labels are
+ * used only when it echoes exactly that date. A missing, invalid or
+ * different echo (an API before LexAPI API 2.29.0 echoes none) puts every
+ * hit under the requested date as unresolved, whatever it carries, so no
+ * text reads as established for a date. Without a requested asOf, any echo
+ * and any per-hit as-of field are ignored.
  */
 export function shapeNationalLegislation(res: LexResponse<Json>, requestedAsOf?: string): Obj {
   const b = res.body;
-  const echoed = isCalendarDate(b.asOf) ? b.asOf : undefined;
-  const asOf = echoed ?? requestedAsOf;
-  const labelled = echoed !== undefined;
+  const asOf = requestedAsOf;
+  const echo = isCalendarDate(b.asOf) ? b.asOf : undefined;
+  const labelled = asOf !== undefined && echo === asOf;
   const results = Array.isArray(b.results) ? b.results.map((r) => shapeNationalLegislationHit(r, asOf, labelled)) : [];
+  let asOfNote: string | undefined;
+  if (asOf && !labelled) {
+    asOfNote = echo
+      ? `The API answered for ${echo}, not the requested ${asOf}; its per-hit labels are not used and no hit counts as resolved.`
+      : 'The API\'s answer did not echo the requested asOf as a date; its per-hit labels are not used.';
+  }
   return compact({
     jurisdiction: b.jurisdiction,
     asOf,
@@ -1302,8 +1311,8 @@ export function shapeNationalLegislation(res: LexResponse<Json>, requestedAsOf?:
     partial: b.partial,
     partialReason: b.partialReason,
     attribution: b.attribution,
-    asOfCaveat: asOf ? nationalAsOfCaveat(results, asOf) : undefined,
-    asOfNote: asOf && !echoed ? 'The API returned no asOf labels for these hits (LexAPI API 2.29.0 or later labels them).' : undefined,
+    asOfCaveat: asOf ? nationalAsOfCaveat(results, asOf, labelled) : undefined,
+    asOfNote,
   });
 }
 

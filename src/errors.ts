@@ -248,10 +248,15 @@ function waitText(seconds: number): string {
   return seconds > 3600 ? 'more than an hour' : `${seconds} s`;
 }
 
+/** The Retry-After of a 5xx, as a model reads it. */
+function namedWait(seconds: number): string {
+  return `The API names a wait of ${waitText(seconds)}; a retry before it has passed is likely to get the same error.`;
+}
+
 /** A 5xx other than the ones with their own text; a Retry-After the API sent is named. */
 function serverError(head: string, wait: number | undefined): string {
   return wait !== undefined
-    ? `${head} LexAPI had a server error; server failures are refunded. Retry after ${waitText(wait)} (Retry-After); if it persists, status is at https://lex-api.com/status.`
+    ? `${head} LexAPI had a server error; server failures are refunded. ${namedWait(wait)} If it persists, status is at https://lex-api.com/status.`
     : `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
 }
 
@@ -269,9 +274,9 @@ function boundaryUnknown(d: Record<string, unknown>): string {
     });
   const more = d.candidatesTruncated === true || listed.length > shown.length;
   const candidates = shown.length
-    ? ` Candidate versions: ${shown.join('; ')}${more ? '; more exist, not listed' : ''}. lex_get_document_version reads each by its version number.`
+    ? ` Candidate versions (the stored snapshots it could be): ${shown.join('; ')}${more ? '; more exist, not listed' : ''}. lex_get_document_version reads each by its version number.`
     : ' The API listed no candidate version; lex_document_versions lists the stored versions.';
-  return `LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which stored snapshot LexAPI held on the requested date, so it returns none. This is not a "document not found" answer.${candidates} This call is refunded in full. Retrying will not help.`;
+  return `LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which stored snapshot LexAPI held on the requested date, so it returns none. This is not a "document not found" answer.${candidates} This call is refunded in full. Retrying will not help. These are LexAPI's fetch snapshots, not the law in force on a date.`;
 }
 
 function beforeTracking(d: Record<string, unknown>): string {
@@ -462,7 +467,7 @@ export function describeError(err: unknown): string {
     }
     case 502:
       return err.retryAfterSeconds !== undefined
-        ? `${head} An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. A retry before then is likely to get the same error: retry after ${waitText(err.retryAfterSeconds)}.`
+        ? `${head} An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. ${namedWait(err.retryAfterSeconds)}`
         : `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;
     case 504:
       return `${head} The upstream fetch timed out. Retry-safe — retry once, or narrow the request (fewer pages, a smaller limit). Failed searches are refunded.`;
