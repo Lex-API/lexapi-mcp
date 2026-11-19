@@ -58,7 +58,7 @@ const EXPECTED: Record<string, Expected> = {
   },
   lex_document_versions: { ops: ['document_versions'], says: [`Cost: ${credits(w.document_versions)}.`] },
   lex_get_document_version: { ops: ['document_version_fetch'], says: [`Cost: ${credits(w.document_version_fetch)}.`] },
-  lex_semantic_legislation: { ops: ['semantic_legis', 'document_fetch'], says: [`Cost: ${credits(w.semantic_legis)}; with asOf, plus up to ${w.document_fetch} per in-force version fetched live`] },
+  lex_semantic_legislation: { ops: ['semantic_legis', 'document_fetch'], says: [`Cost: ${credits(w.semantic_legis)}; with asOf, plus up to ${w.document_fetch} per version fetched live`] },
   lex_semantic_case_law: { ops: ['semantic_case_law', 'semantic_case_law_hyde'], says: [`Cost: ${credits(w.semantic_case_law)}.`, `${credits(w.semantic_case_law_hyde)} instead of ${w.semantic_case_law}`, `refunded to ${w.semantic_case_law}`] },
   lex_national_coverage: FREE,
   lex_list_national_documents: { ops: ['national_documents_list'], says: [`Cost: ${credits(w.national_documents_list)} per call`] },
