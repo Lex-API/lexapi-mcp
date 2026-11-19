@@ -497,8 +497,25 @@ describe('lex_legislation_as_of: scope, read-only mode and texts', () => {
 
   it('the server instructions point at it for a known act', () => {
     expect(SERVER_INSTRUCTIONS).toContain('otherwise lex_legislation_as_of gives the version of a known act for a date, and asOf does so for search hits.');
-    expect(SERVER_INSTRUCTIONS).toContain('lex_semantic_legislation with asOf returns the law in force on a date');
+    expect(SERVER_INSTRUCTIONS).toContain('lex_semantic_legislation with asOf gives each hit the version listed for a date; a hit carries the text for that date only when asOfResolved is true, and does not say whether a provision applied on it.');
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(4_000);
+  });
+
+  it('asOf is described as the version listed for a date, not as the law in force on it', () => {
+    // "not the law in force on a date" (the fetch snapshots) and "in force today" stay allowed.
+    const inForceOnDate = /(?<!\bnot (the )?)\b(law|text) in force on\b|\bversion in force\b/i;
+    const texts: Array<[string, string]> = [['instructions', SERVER_INSTRUCTIONS]];
+    for (const t of tools) {
+      texts.push([t.name, t.description]);
+      const schema = z.toJSONSchema(z.object(t.inputSchema), { io: 'input' });
+      for (const d of JSON.stringify(schema).match(/"description":"(?:[^"\\]|\\.)*"/g) ?? []) texts.push([t.name, d]);
+    }
+    for (const [name, text] of texts) expect(text, name).not.toMatch(inForceOnDate);
+    expect(inForceOnDate.test('asOf returns the law in force on a date')).toBe(true);
+    expect(inForceOnDate.test('the text in force on 2019-06-01')).toBe(true);
+    expect(inForceOnDate.test('Hits carry the Version in force')).toBe(true);
+    expect(inForceOnDate.test("These are LexAPI's fetch snapshots, NOT the law in force on a date.")).toBe(false);
+    expect(inForceOnDate.test('For the text in force today, pass today\'s date')).toBe(false);
   });
 });
 

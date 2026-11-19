@@ -572,7 +572,7 @@ function asOfGroupOf(reason: string): AsOfGroup {
  *   - transient → retry shortly, or with a smaller limit;
  *   - credits → the pool could not pay for the fetch;
  *   - anything else (no text in that version, language, article missing…) →
- *     the version in force could not be read; don't quote it as of that date.
+ *     the version for the date could not be read; don't quote it as of that date.
  */
 export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
   const groups: Record<AsOfGroup, string[]> = { notInForce: [], retryable: [], needsCredits: [], unavailable: [] };
@@ -584,9 +584,9 @@ export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
   }
   const guidance: string[] = [];
   if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; their returned text is not the law on that date.`);
-  if (groups.retryable.length) guidance.push('retryable: the version in force could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
-  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version in force.');
-  if (groups.unavailable.length) guidance.push(`unavailable: the version in force on ${asOf} could not be read (see asOfReason); the returned text is not the law on that date.`);
+  if (groups.retryable.length) guidance.push('retryable: the version for that date could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
+  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version for that date.');
+  if (groups.unavailable.length) guidance.push(`unavailable: the version listed for ${asOf} could not be read (see asOfReason); the returned text is not the law on that date.`);
   if (!guidance.length) return undefined;
   return compact({
     note: `Unresolved hits carry the indexed text, not the text in force on ${asOf}.`,

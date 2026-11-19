@@ -122,9 +122,9 @@ describe('lex_national_semantic_legislation: asOf', () => {
     expect(text.indexOf('"asOfLabel"')).toBeLessThan(text.indexOf('"snippet"'));
   });
 
-  it('no national reason is grouped as "the version in force could not be read"', async () => {
+  it('no national reason is grouped as "the version listed for the date could not be read"', async () => {
     const { text } = await call('lex_national_semantic_legislation', { jurisdiction: 'at', query: 'Auskunft', asOf: '2020-06-01' }, () => ({ body }));
-    expect(text).not.toMatch(/version in force could not be read|unavailable:/);
+    expect(text).not.toMatch(/version listed for .* could not be read|unavailable:/);
   });
 
   it('a reason this version does not know: labelled, grouped as other', async () => {
@@ -479,7 +479,7 @@ describe('national asOf: an answer the API did not label', () => {
     expect(asOfCaveat([{ law_id: '32016R0679', article_ref: 'art_17', asOfResolved: false, asOfReason: 'not_in_language' }], '2019-06-01')).toEqual({
       note: 'Unresolved hits carry the indexed text, not the text in force on 2019-06-01.',
       unavailable: ['32016R0679 art_17 (not_in_language)'],
-      guidance: ['unavailable: the version in force on 2019-06-01 could not be read (see asOfReason); the returned text is not the law on that date.'],
+      guidance: ['unavailable: the version listed for 2019-06-01 could not be read (see asOfReason); the returned text is not the law on that date.'],
     });
   });
 });
