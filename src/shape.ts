@@ -547,7 +547,7 @@ export function shapeLegislation(res: LexResponse<Json>): Obj {
   });
 }
 
-// asOfReason classes (docs.md "asOf — the text in force on a date").
+// asOfReason classes (docs.md, asOf on POST /legislation/semantic).
 const AS_OF_NOT_IN_FORCE = new Set(['not_yet_adopted', 'not_yet_in_force', 'no_longer_in_force']);
 const AS_OF_RETRYABLE = new Set([
   'fetch_pending', 'fetch_capacity', 'fetch_budget_exhausted', 'request_deadline', 'fetch_timeout',
@@ -586,10 +586,10 @@ export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
   if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; their returned text is not the law on that date.`);
   if (groups.retryable.length) guidance.push('retryable: the version for that date could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
   if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version for that date.');
-  if (groups.unavailable.length) guidance.push(`unavailable: the version listed for ${asOf} could not be read (see asOfReason); the returned text is not the law on that date.`);
+  if (groups.unavailable.length) guidance.push(`unavailable: the version listed for ${asOf} could not be read (see asOfReason); the returned text is not established as the text for that date.`);
   if (!guidance.length) return undefined;
   return compact({
-    note: `Unresolved hits carry the indexed text, not the text in force on ${asOf}.`,
+    note: `Unresolved hits carry the indexed text, not established as the text for ${asOf}.`,
     ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
     guidance,
   });

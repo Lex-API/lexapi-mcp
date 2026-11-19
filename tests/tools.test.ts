@@ -101,7 +101,7 @@ describe('input validation', () => {
     const tool = byName.lex_semantic_legislation;
     const schema = z.toJSONSchema(z.object(tool.inputSchema)) as { properties: Record<string, { description?: string }> };
     const asOf = schema.properties.asOf.description ?? '';
-    const sentence = 'For the text in force today, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked.';
+    const sentence = 'For today\'s version, pass today\'s date (UTC) as asOf and use only hits with asOfResolved: true. Without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked.';
     expect(tool.description).toContain(sentence);
     expect(SERVER_INSTRUCTIONS).toContain(sentence);
     expect(asOf).toMatch(/Omitted: the indexed texts/);
@@ -430,7 +430,7 @@ describe('lex_semantic_legislation', () => {
     expect(c.retryable).toEqual(['32013R0575 art_1 (fetch_pending)']);
     expect(c.needsCredits).toEqual(['32016R0679 art_1 (insufficient_credits)']);
     expect(c.unavailable).toEqual(['32006R1907 art_1 (article_not_in_version)']);
-    expect(c.note).toBe('Unresolved hits carry the indexed text, not the text in force on 2019-06-01.');
+    expect(c.note).toBe('Unresolved hits carry the indexed text, not established as the text for 2019-06-01.');
     expect(c.guidance.join(' ')).toMatch(/not in force on 2019-06-01.*that is the answer/);
     expect(c.guidance.join(' ')).toMatch(/call again shortly/);
     expect(c.guidance.join(' ')).toMatch(/credit pool could not cover/);

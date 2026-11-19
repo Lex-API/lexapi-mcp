@@ -477,9 +477,9 @@ describe('national asOf: an answer the API did not label', () => {
 
   it('the EU caveat is unchanged', () => {
     expect(asOfCaveat([{ law_id: '32016R0679', article_ref: 'art_17', asOfResolved: false, asOfReason: 'not_in_language' }], '2019-06-01')).toEqual({
-      note: 'Unresolved hits carry the indexed text, not the text in force on 2019-06-01.',
+      note: 'Unresolved hits carry the indexed text, not established as the text for 2019-06-01.',
       unavailable: ['32016R0679 art_17 (not_in_language)'],
-      guidance: ['unavailable: the version listed for 2019-06-01 could not be read (see asOfReason); the returned text is not the law on that date.'],
+      guidance: ['unavailable: the version listed for 2019-06-01 could not be read (see asOfReason); the returned text is not established as the text for that date.'],
     });
   });
 });

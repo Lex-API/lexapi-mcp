@@ -11,7 +11,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { LexAPIClient } from '../src/client.js';
 import { expandScopeSet } from '../src/oauth/scope.js';
 import { createLexServer, runTool, SERVER_INSTRUCTIONS } from '../src/server.js';
-import { AS_OF_PROVISION_BUDGET, asOfLookupCaveat, shapeAsOfLookup } from '../src/shape.js';
+import { AS_OF_PROVISION_BUDGET, asOfCaveat, asOfLookupCaveat, shapeAsOfLookup } from '../src/shape.js';
 import { inputSchemaOf, selectTools, tools } from '../src/tools.js';
 import { clientWith, parseText, type Call } from './helpers.js';
 
@@ -497,25 +497,48 @@ describe('lex_legislation_as_of: scope, read-only mode and texts', () => {
 
   it('the server instructions point at it for a known act', () => {
     expect(SERVER_INSTRUCTIONS).toContain('otherwise lex_legislation_as_of gives the version of a known act for a date, and asOf does so for search hits.');
-    expect(SERVER_INSTRUCTIONS).toContain('lex_semantic_legislation with asOf gives each hit the version listed for a date; a hit carries the text for that date only when asOfResolved is true, and does not say whether a provision applied on it.');
+    expect(SERVER_INSTRUCTIONS).toContain('lex_semantic_legislation with asOf gives each hit the version listed for a date; a hit carries the text for that date only when asOfResolved is true; this does not say whether a provision applied on that date.');
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(4_000);
   });
 
   it('asOf is described as the version listed for a date, not as the law in force on it', () => {
-    // "not the law in force on a date" (the fetch snapshots) and "in force today" stay allowed.
-    const inForceOnDate = /(?<!\bnot (the )?)\b(law|text) in force on\b|\bversion in force\b/i;
+    const inForceOnDate = /\b(law|text|wording|provisions?) in force (on|at)\b|\blaw as in force\b|\bversion in force\b|\bin-force version\b|\btext in force today\b/i;
+    // The only negations allowed: the fetch-snapshot sentences of the version tools and the instructions.
+    const allowed = /NOT the law in force on (a|that) date|not the law in force on a date|not in-force law/g;
     const texts: Array<[string, string]> = [['instructions', SERVER_INSTRUCTIONS]];
     for (const t of tools) {
       texts.push([t.name, t.description]);
       const schema = z.toJSONSchema(z.object(t.inputSchema), { io: 'input' });
       for (const d of JSON.stringify(schema).match(/"description":"(?:[^"\\]|\\.)*"/g) ?? []) texts.push([t.name, d]);
     }
-    for (const [name, text] of texts) expect(text, name).not.toMatch(inForceOnDate);
-    expect(inForceOnDate.test('asOf returns the law in force on a date')).toBe(true);
-    expect(inForceOnDate.test('the text in force on 2019-06-01')).toBe(true);
-    expect(inForceOnDate.test('Hits carry the Version in force')).toBe(true);
-    expect(inForceOnDate.test("These are LexAPI's fetch snapshots, NOT the law in force on a date.")).toBe(false);
-    expect(inForceOnDate.test('For the text in force today, pass today\'s date')).toBe(false);
+    const hit = (law_id: string, asOfReason?: string) => ({ law_id, article_ref: 'art_1', asOfResolved: asOfReason === undefined, asOfReason });
+    expect(asOfCaveat([hit('A')], '2019-06-01')).toBeUndefined();
+    for (const reason of ['fetch_pending', 'insufficient_credits', 'not_in_language', 'no_longer_in_force']) {
+      texts.push([`asOfCaveat ${reason}`, JSON.stringify(asOfCaveat([hit('A'), hit('B', reason)], '2019-06-01'))]);
+    }
+    for (const [name, text] of texts) expect(text.replace(allowed, ''), name).not.toMatch(inForceOnDate);
+    for (const bad of ['asOf returns the law in force on a date', 'the text in force on 2019-06-01', 'Hits carry the Version in force',
+      'The law as in force on this date', 'the wording in force on it', 'provisions in force on the date', 'per in-force version', 'the law in force at that time',
+      'For the text in force today, pass', 'This is NOT the text in force on a date.']) {
+      expect(bad.replace(allowed, ''), bad).toMatch(inForceOnDate);
+    }
+  });
+
+  it('the asOf parameter and the asOfCaveat guidance say what is and is not established', () => {
+    const sem = tools.find((t) => t.name === 'lex_semantic_legislation')!;
+    const asOf = (z.toJSONSchema(z.object(sem.inputSchema)) as { properties: Record<string, { description?: string }> }).properties.asOf.description;
+    expect(asOf).toContain('carry the version listed for that date, which does not say whether a provision applied then.');
+    const c = asOfCaveat([
+      { law_id: 'A', asOfResolved: false, asOfReason: 'fetch_pending' },
+      { law_id: 'B', asOfResolved: false, asOfReason: 'insufficient_credits' },
+      { law_id: 'C', asOfResolved: false, asOfReason: 'not_in_language' },
+    ], '2019-06-01') as { note: string; guidance: string[] };
+    expect(c.note).toBe('Unresolved hits carry the indexed text, not established as the text for 2019-06-01.');
+    expect(c.guidance).toEqual([
+      'retryable: the version for that date could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.',
+      'needsCredits: the credit pool could not cover fetching the version for that date.',
+      'unavailable: the version listed for 2019-06-01 could not be read (see asOfReason); the returned text is not established as the text for that date.',
+    ]);
   });
 });
 
