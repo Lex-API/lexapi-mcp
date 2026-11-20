@@ -1,6 +1,6 @@
 # LexAPI MCP
 
-[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — EU law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, the typed citation graph, and semantic search (including **the version of an act listed for a date**). Works with Claude, Cursor, VS Code and any other MCP client.
+[Model Context Protocol](https://modelcontextprotocol.io) server for [LexAPI](https://lex-api.com/?ref=npm-mcp) — EU and national law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, member-state legislation and case law (in the countries that are live), the typed citation graph, and semantic search (including **the version of an act listed for a date**). Works with Claude, Cursor, VS Code and any other MCP client.
 
 Ask your assistant *"what does Article 17 GDPR require?"*, *"which acts amended REACH?"* or *"what were the own-funds requirements for banks in June 2019?"* — the model calls LexAPI and answers from the source text, with CELEX citations.
 
@@ -28,15 +28,7 @@ Any client that supports MCP authorization (OAuth 2.1) connects the same way: po
 
 ### Scopes
 
-A connection made by signing in carries OAuth scopes, and is offered the tools they cover. API keys are not subject to scopes.
-
-| Scope | Allows |
-|---|---|
-| `lex:read` | Every tool except the webhook tools. |
-| `lex:webhooks` | The webhook tools (`lex_list_webhooks`, `lex_get_webhook`, `lex_create_webhook`, `lex_update_webhook`, `lex_delete_webhook`, `lex_test_webhook`). |
-| `lex` | Both. Signing in grants `lex`. |
-
-A tool outside the connection's scopes is not listed. Calling it is answered `403` with a `WWW-Authenticate: Bearer error="insufficient_scope"` challenge whose `scope` names what to request.
+Signing in to the hosted server grants the `lex` scope, which covers every tool. API keys are not subject to scopes.
 
 ### With an API key instead
 
@@ -82,15 +74,17 @@ The npm package needs Node.js 20 or newer.
 
 Every call is billed from your LexAPI credit pool like the REST endpoint it wraps; each tool's description states its cost.
 
+Five tools write (`lex_extract_citations`, which adds to LexAPI's shared citation graph, and the webhook create / update / delete / test tools); `LEXAPI_MCP_READ_ONLY=true` hides them on the local server. The hosted server has no read-only switch for its users.
+
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 1–6 (+ 0–5 when an article is not matched) |
-| `lex_act_history` | The acts that amend, correct or repeal an EU act, with its in-force status today. | 2–6 (+ 1–5 per date read) |
-| `lex_research` | One query over EU legislation, EU case law and the national law of chosen live countries. | 5 per search |
-| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` gives each hit the version listed for a date. For today's version, pass today's date (UTC) as `asOf` and use only hits with `asOfResolved: true`. Without `asOf`, acts no longer in force are marked `inForce: false` where their status is known; since-amended or repealed provisions are not marked. | 5 (+ up to 5 per version fetch with `asOf`) |
+| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 0–6 (+ a second read, 1–5, when an article is not matched; at most 11) |
+| `lex_act_history` | The acts that amend, correct or repeal an EU act, with its in-force status today. | 2–6 (+ 1–5 per date read, up to 10 dates) |
+| `lex_research` | One query over EU legislation, EU case law and the national law of chosen live countries. | 5 per search: 10 by default, at most 80 |
+| `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` gives each hit the version listed for a date. | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
-| `lex_recent_documents` | What was published in the last N days. | 3 per 10 results |
+| `lex_recent_documents` | What was published in the last N days. | 3 per 10 results (default 20 → 6); unfiltered usually 3 |
 | `lex_resolve` | URL / ELI / ECLI → CELEX. | 1 |
 | `lex_get_document` | A document by CELEX: an outline for large acts, then an article or selected parts. | 1 corpus · 4 Cellar · 5 live |
 | `lex_get_documents_batch` | Up to 50 documents at once (plan-capped). | per document, as above |
@@ -117,6 +111,8 @@ Every call is billed from your LexAPI credit pool like the REST endpoint it wrap
 | `lex_create_webhook` · `lex_update_webhook` · `lex_delete_webhook` · `lex_test_webhook` | Webhooks for new documents and changes to watched acts (paid plans). | free |
 
 The first three tools are made of the calls the others make: a value the API did not return is reported as `unknown`, and a part that could not be fetched is named with the reason. Two values are computed by the tools from what the API returned: `onDate.status` (a date compared with the returned dates) and `celexYear` (the year in a CELEX number). The citation-graph tools accept national document ids and an `includeNational` option (BUSINESS+). Every national result carries `attribution` (the official source and its licence); LexAPI's Terms require it to be kept with republished content. Consolidated texts are labelled as not authentic; cite the act as published in the Official Journal.
+
+On `lex_semantic_legislation`, for today's version pass today's date (UTC) as `asOf` and use only hits with `asOfResolved: true`. Without `asOf`, acts no longer in force are marked `inForce: false` where their status is known; since-amended or repealed provisions are not marked.
 
 `lex_legislation_as_of` with `{ "document": "32016R0679", "asOf": "2019-06-01", "provision": "art_17" }` returns the version listed for 1 June 2019 (`02016R0679-20160504`) and Article 17 in it.
 The version and text are established only when `asOfResolved` is `true`; otherwise `asOfReason` says why and no text is returned.
@@ -153,7 +149,7 @@ npm test            # build + tests (mocked API, no network)
 npm run typecheck && npm run lint
 ```
 
-`tests/fixtures/operation-weights.json` holds the API's credit weights, which a test compares with the costs in the tool descriptions. After a weight changes in the API: `node scripts/refresh-operation-weights.mjs <path to the API's operation-weight module>`.
+`tests/fixtures/operation-weights.json` holds the API's credit weights, which a test compares with the costs in the tool descriptions and this README. The maintainers refresh it when a weight changes in the API.
 
 ## License
 

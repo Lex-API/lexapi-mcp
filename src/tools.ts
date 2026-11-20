@@ -411,7 +411,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Check a citation against the source',
     description:
-      'Look a citation up: whether the document exists, its canonical id, title and link, whether a given article is in its text, and whether the act is in force today. Takes a CELEX, EUR-Lex URL, ELI or ECLI, or a national document id. exists, inForce and article.found are "unknown" when the check could not be made, which does not mean that the document or article does not exist; notChecked lists what could not be checked and why. article.found: true shows that the article unit is in the text compared, not that the citation supports a claim. inForce does not cover amendments and is not recorded for many acts. The article is looked up in the identified text (the act as published, unless a consolidated CELEX is given). For an EU act (CELEX sector 3), latestConsolidated is "not_reported" unless the API has it, which does not mean none exists. A national result carries attribution, which must be kept with republished content (Terms). Cost: 1 credit to resolve a URL, ELI or ECLI (a CELEX is not resolved), plus one read: 1 credit from the corpus, 4 via the Publications Office, 5 live; an article that is not matched can cost a second read. A national id: 1 credit.',
+      'Look a citation up: whether the document exists, its canonical id, title and link, whether a given article is in its text, and whether the act is in force today. Takes a CELEX, EUR-Lex URL, ELI or ECLI, or a national document id. exists, inForce and article.found are "unknown" when the check could not be made, which does not mean that the document or article does not exist; notChecked lists what could not be checked and why. article.found: true shows that the article unit is in the text compared, not that the citation supports a claim. inForce does not cover amendments and is not recorded for many acts. The article is looked up in the identified text (the act as published, unless a consolidated CELEX is given). For an EU act (CELEX sector 3), latestConsolidated is "not_reported" unless the API has it, which does not mean none exists. A national result carries attribution, which must be kept with republished content (Terms). Cost: 1 credit to resolve a URL, ELI or ECLI (a CELEX is not resolved), plus one read: 1 credit from the corpus, 4 via the Publications Office, 5 live; an article that is not matched can cost a second read. A national id: 1 credit. At most 11 credits.',
     inputSchema: {
       identifier: z.string().trim().min(3).max(2000).describe('CELEX, EUR-Lex URL, ELI URI or ECLI, or a national document id such as "AT-NOR-12345".'),
       article: oneArticle('Also look this article up among the text\'s article units: "17", "Art. 17", "Article 17(1)" (a paragraph or point is not checked); for a national id, the unit number as the source writes it, e.g. "§ 17".'),
@@ -428,7 +428,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Changes to an EU act',
     description:
-      'The acts that amend, correct (corrigenda) or repeal an EU act, from LexAPI\'s citation graph, with the act\'s title, dates, in-force status today and end of validity. Limits of the data: a relation carries no date, so each entry has the year of its CELEX number (corrigenda have none) and a document date only where dates read it, and since filters on those; a partial repeal is recorded as an amendment; relations are as current as their last refresh (completeness); consolidated versions are shown only when the API reports them ("not_reported" otherwise), never as a full list. An empty list is not proof that nothing changed. Cost: 1 credit per page of relations, plus the act\'s metadata (1 credit from the corpus, 4 via the Publications Office, 5 live), plus the same for each date read.',
+      'The acts that amend, correct (corrigenda) or repeal an EU act, from LexAPI\'s citation graph, with the act\'s title, dates, in-force status today and end of validity. Limits of the data: a relation carries no date, so each entry has the year of its CELEX number (corrigenda have none) and a document date only where dates read it, and since filters on those; a partial repeal is recorded as an amendment; relations are as current as their last refresh (completeness); consolidated versions are shown only when the API reports them ("not_reported" otherwise), never as a full list. An empty list is not proof that nothing changed. Cost: 1 credit per page of relations, plus the act\'s metadata (1 credit from the corpus, 4 via the Publications Office, 5 live), plus the same for each date read (dates, default 0, at most 10): 2–6 credits without dates, at most 56.',
     inputSchema: {
       celexNumber: celex('CELEX number of the act').describe('CELEX number of the act, e.g. 32016R0679; a consolidated CELEX is read as its base act.'),
       since: isoDate('Keep changes from this date on (YYYY-MM-DD): by CELEX year, and by document date where one was read.').optional(),
@@ -446,10 +446,10 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Search EU and national law in one call',
     description:
-      'One query run as semantic searches over EU legislation, EU case law and the legislation and case law of chosen live countries, returned as one list. Each hit names its jurisdiction and kind and keeps its identifiers; a national hit keeps its attribution, which must be kept with republished content (Terms). Legislation hits carry inForce ("unknown" when no status is reported); an EU case-law hit has none, and a national decision carries inForce: false once its recorded end of validity has passed. sources lists every search as ok, failed or not_run with the reason (country not live, plan, national allowance, rate limit, credits): a search that did not run is not shown as empty, and none starts once credits or the rate limit run out. Scores come from separate indexes, so the order across sources is approximate. Cost: 5 credits per search run; searches = jurisdictions × kinds (default 2).',
+      'One query run as semantic searches over EU legislation, EU case law and the legislation and case law of chosen live countries, returned as one list. Each hit names its jurisdiction and kind and keeps its identifiers; a national hit keeps its attribution, which must be kept with republished content (Terms). Legislation hits carry inForce ("unknown" when no status is reported); an EU case-law hit has none, and a national decision carries inForce: false once its recorded end of validity has passed. sources lists every search as ok, failed or not_run with the reason (country not live, plan, national allowance, rate limit, credits): a search that did not run is not shown as empty, and none starts once credits or the rate limit run out. Scores come from separate indexes, so the order across sources is approximate. Cost: 5 credits per search; searches = jurisdictions × kinds: 2 by default, at most 16 (80 credits). Each national search also counts against the national-law allowance. For filters, asOf, hyde or paging use the single-index search tools.',
     inputSchema: {
       query: z.string().trim().min(3).max(1000).describe('Natural-language description of the provision or legal issue.'),
-      jurisdictions: codeList('Where to search: "eu" and/or national codes, e.g. ["eu","at","de"] (default ["eu"]; at most 8).', 8).optional(),
+      jurisdictions: codeList('Where to search: "eu" and/or national codes, e.g. ["eu","at","de"] (default ["eu"]; at most 8, "eu" included; each adds up to 10 credits).', 8).optional(),
       kinds: z.array(z.enum(['legislation', 'case_law'])).min(1).optional().describe('What to search in each jurisdiction (default both).'),
       limit: z.number().int().min(1).max(20).default(5).describe('Max hits per search (plan caps as on the semantic tools).'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor for every search (default ≈0.7).'),
@@ -494,7 +494,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Recently published EU documents',
     description:
-      'Documents published on EUR-Lex in the last N days (default 7), newest first, optionally filtered (e.g. what was published this week). Cost: 3 credits per 10 results of limit (clamped to the plan); an unfiltered request is answered from the Publications Office in one query for 3 credits.',
+      'Documents published on EUR-Lex in the last N days (default 7), newest first, optionally filtered (e.g. what was published this week). Cost: 3 credits per 10 results of limit (default 20 → 6; clamped to the plan); an unfiltered request is usually answered by one query for 3 credits.',
     inputSchema: {
       days: z.number().int().min(1).max(366).default(7).describe('Look-back window in days.'),
       documentType: z.enum(DOCUMENT_TYPES).optional().describe('Only this document type.'),
@@ -502,7 +502,7 @@ export const tools: ToolDef[] = [
       domain: z.enum(['EU_LAW', 'NATIONAL_LAW', 'ALL']).optional().describe(`EUR-Lex collection. ${NATIONAL_DOMAIN_NOTE}`),
       subdomain: z.enum(SUBDOMAINS).optional().describe('EUR-Lex sub-collection; the national case-law value is EUR-Lex\'s own collection, not the lex_national_* tools.'),
       language: lang('Keep documents available in this language (default en).').optional(),
-      limit: z.number().int().min(1).max(500).default(20).describe('Max results (each 10 cost 3 credits when filtered).'),
+      limit: z.number().int().min(1).max(500).default(20).describe('Max results.'),
     },
     annotations: { ...READ, idempotentHint: false },
     handler: async (a, client) => {
@@ -801,13 +801,13 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Semantic search over EU case law',
     description:
-      'Find CJEU / General Court judgments, orders and AG opinions by meaning. Returns cases with celex (the id works with lex_get_document), case number, ECLI, court, date, score and a summary. hyde: true rewrites short keyword-style queries for better recall (15 credits instead of 5, +1–3 s; refunded to 5 if it falls back). Cost: 5 credits.',
+      'Find CJEU / General Court judgments, orders and AG opinions by meaning. Returns cases with celex (the id works with lex_get_document), case number, ECLI, court, date, score and a summary. Cost: 5 credits (15 with hyde, refunded to 5 if it falls back). Leave hyde off unless a short keyword query returns little.',
     inputSchema: {
       query: z.string().trim().min(3).max(1000).describe('Natural-language question or description of the legal issue.'),
       limit: z.number().int().min(1).max(100).default(10).describe('Max cases (plan cap: FREE 10, STARTER 20, PROFESSIONAL 50, higher 100). One result per case.'),
       min_score: z.number().min(0).max(1).optional().describe('Similarity floor. Default ≈0.7 server-side; a lower value (e.g. 0.5) returns more hits, 0 disables it.'),
       language: z.enum(SEMANTIC_LANGUAGES).optional().describe('Preferred language (default en).'),
-      hyde: z.boolean().optional().describe('LLM query rewriting for terse queries (15 credits).'),
+      hyde: z.boolean().optional().describe('LLM rewriting of a terse keyword query for better recall (+1–3 s; 15 credits).'),
       include: z.array(z.literal('text')).optional().describe('["text"] returns each judgment\'s full text (large; bounded by maxChars).'),
       filters: z.object({
         court: z.string().optional().describe('Court name as indexed, e.g. "Court of Justice", "General Court".'),
@@ -1201,7 +1201,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Extract a document\'s citations',
     description:
-      'Read a document\'s EUR-Lex notice and add its outbound citations to the graph, so lex_cites / lex_related work for it. Idempotent: returns alreadyExtracted when done before. Cost: 5 credits (1 when already extracted).',
+      'Writes to LexAPI\'s shared citation graph: reads a document\'s EUR-Lex notice and adds its outbound citations to the graph, so lex_cites / lex_related work for it. Idempotent: returns alreadyExtracted when done before. Cost: 5 credits (1 when already extracted).',
     inputSchema: { celexNumber: celex() },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     // Writes to the shared citation graph and spends credits: hidden in read-only mode like the other writes.

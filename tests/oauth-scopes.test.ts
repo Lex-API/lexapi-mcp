@@ -401,7 +401,7 @@ describe('a 403 insufficient_scope from the API', () => {
     expect(e).toBeInstanceOf(UpstreamAuthError);
     expect(e).toMatchObject({ kind: 'insufficient_scope', httpStatus: 403, requiredScope: 'lex:webhooks', description: 'required scope: lex:webhooks' });
     expect(gate.failure).toBe(e);
-    expect(describeError(e)).toBe('This LexAPI connection is not permitted to do this (required scope: lex:webhooks). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not. An API key is not limited this way.');
+    expect(describeError(e)).toBe('This LexAPI connection is not permitted to do this (required scope: lex:webhooks). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not.');
   });
 
   it('an API key sees the ordinary 403', async () => {

@@ -9,7 +9,7 @@
 //     started;
 //   - all calls of one tool call share that call's deadline.
 
-import { describeError, isMarkedUnknownEndpoint, LexAPIError, LexAPITransportError } from './errors.js';
+import { describeError, isMarkedUnknownEndpoint, isUnknownEndpoint, LexAPIError, LexAPITransportError } from './errors.js';
 import {
   compact,
   consolidatedBaseOf,
@@ -53,6 +53,11 @@ const STOPS_ALL = new Set<FailureReason>(['credits_exhausted', 'rate_limited', '
  * about this one call (sign-in, a bad key, cancellation, a bug) are thrown:
  * they end the tool call.
  */
+/** A 404 for a route the API does not have, not an answer about a document (a boolean, so the caller's type is not narrowed). */
+function routeMissing(err: LexAPIError): boolean {
+  return isUnknownEndpoint(err);
+}
+
 function failureOf(err: unknown): Failure {
   if (err instanceof LexAPITransportError && !err.cancelled) {
     // LexAPI was reached and answered, with something that cannot be used; the next call is answered the same way.
@@ -67,6 +72,15 @@ function failureOf(err: unknown): Failure {
   // address in it is shown only after it was checked.
   if (err.status === 403 && err.code === 'PAYMENT_PAST_DUE') {
     return { reason: 'payment_past_due', error: describeError(err), cause: err };
+  }
+  // A route the API does not have (for example a LEXAPI_BASE_URL with the
+  // wrong path): the API's NOT_FOUND code, but not an answer about a document.
+  if (routeMissing(err)) {
+    return {
+      reason: 'unconfirmed_not_found',
+      error: `LexAPI error 404 (${err.code}): This LexAPI deployment does not offer this endpoint (check LEXAPI_BASE_URL). The same call is answered the same way, so it is not retryable`,
+      cause: err,
+    };
   }
   const d = isObj(err.details) ? err.details : {};
   const reason: FailureReason =
@@ -498,7 +512,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
     const type = guessType(identifier);
     if (r.failure) {
       if (!['not_found', 'unconfirmed_not_found', 'rejected'].includes(r.failure.reason)) throw asThrown(r.failure);
-      const why = r.failure.reason === 'unconfirmed_not_found' ? 'The 404 was not the API\'s own NOT_FOUND answer, so it says nothing about the identifier.'
+      const why = r.failure.reason === 'unconfirmed_not_found' ? 'The 404 was not the API\'s answer about this identifier (not its NOT_FOUND, or a route it does not have), so it says nothing about the identifier.'
         : type === 'ecli' ? 'LexAPI resolves an ECLI only for case law it holds, so this is not proof that the decision does not exist.'
           : type === 'eli' ? 'No CELEX was found for this ELI: the Publications Office register has no matching work, or the ELI is not in a form LexAPI reads.'
             : 'The identifier was not recognised as a CELEX, EUR-Lex URL, ELI or ECLI.';
@@ -559,7 +573,7 @@ export async function checkCitation(a: CheckArgs, client: LexAPIClient): Promise
         what,
         call,
         ...shown(read.failure),
-        note: read.failure.reason === 'unconfirmed_not_found' ? 'The 404 was not the API\'s own NOT_FOUND answer, so it does not show that the document does not exist.' : undefined,
+        note: read.failure.reason === 'unconfirmed_not_found' ? 'The 404 was not the API\'s answer about this document (not its NOT_FOUND, or a route it does not have), so it does not show that the document does not exist.' : undefined,
       })],
       ...calls.footer(),
     };
@@ -736,6 +750,9 @@ async function checkNational(id: string, a: CheckArgs, calls: Calls): Promise<Ob
         what: 'everything',
         call,
         ...shown(read.failure),
+        // A missing national route is a country that is not served, not a
+        // deployment without the endpoint: the API's own words are shown.
+        ...(routeMissing(err) ? { error: `LexAPI error 404 (${err.code}): ${err.message.trim().replace(/[.\s]+$/, '')}` } : {}),
         note: notLive ? `lex_national_coverage lists ${code} as not live, and the document read was answered 404, so the document could not be looked up.`
           : /Unknown API endpoint/i.test(err.message) || isMarkedUnknownEndpoint(err)
           ? `LexAPI has no route for ${code}: the country is not live (lex_national_coverage lists the live ones), or the prefix is not a country code.`
@@ -1083,6 +1100,15 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
       // The allowance, the terms and the plan hold for the account, not for one country.
       if (s.code !== 'eu' && NATIONAL_STOPS.has(r.failure.reason)) nationalStopped ??= r.failure;
       Object.assign(s.report, r.notRun ? { status: 'not_run', reason: r.failure.reason, error: r.failure.error } : { status: 'failed', ...shown(r.failure) });
+      // A /{jurisdiction}/ route the API does not have is a country it does
+      // not serve, not a deployment without the endpoint: its own words.
+      const cause = r.failure.cause;
+      if (s.code !== 'eu' && !r.notRun && cause instanceof LexAPIError && routeMissing(cause)) {
+        Object.assign(s.report, {
+          error: `LexAPI error 404 (${cause.code}): ${cause.message.trim().replace(/[.\s]+$/, '')}`,
+          note: `LexAPI has no route for ${s.code.toUpperCase()}: the country may not be live (lex_national_coverage lists the live ones).`,
+        });
+      }
       return;
     }
     const b = r.res.body;
