@@ -15,7 +15,7 @@ export const PACKAGE_NAME = 'lexapi-mcp';
  */
 export const SERVER_INSTRUCTIONS = `LexAPI: EU law from EUR-Lex, the CJEU and the Official Journal — legislation parsed to article level, case law, a typed citation graph and semantic search.
 
-Workflows: lex_check_citation, lex_act_history and lex_research each combine several of the calls below, at the same credit cost, and name any part they could not get.
+Workflows: lex_check_citation, lex_act_history and lex_research each make several of the calls below and cost the sum of them, and name any part they could not get.
 
 Finding and reading: lex_semantic_legislation / lex_semantic_case_law search by meaning, lex_search by title and filters, and lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers. lex_get_document reads a document; large documents return an outline first, and articleId returns one article. Amendments are lex_cited_by edges with citationType "amendment". lex_transposition lists the measures member states notified to the Commission for an EU act; these are notifications, not findings that a measure transposes the act (or does so completely).
 

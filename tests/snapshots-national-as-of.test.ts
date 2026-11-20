@@ -343,7 +343,8 @@ describe('a 404 from the snapshot on a date', () => {
     expect(missing).toBe('LexAPI error 404 (NOT_FOUND): No corpus entry for 32016R0679 (en). Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title). A not-found answer costs at most 1 credit.');
     const route = describeError(new LexAPIError(404, 'NOT_FOUND', 'Unknown API endpoint: GET /api/v1/x', { reason: 'unknown_endpoint' }));
     expect(route).not.toMatch(/boundary_unknown|before_tracking|holds this document/);
-    expect(route).toMatch(/route itself is wrong/);
+    expect(route).toMatch(/country is not live yet/);
+    expect(route).not.toMatch(/route itself is wrong/);
     // The reason counts only on the API's own NOT_FOUND code.
     expect(describeError(new LexAPIError(404, 'HTTP_404', 'x', { reason: 'boundary_unknown' }))).not.toMatch(/holds this document/);
   });
@@ -520,13 +521,14 @@ describe('Retry-After values', () => {
     expect(describeError(r.err)).toContain('The API names a wait of more than an hour;');
     expect(describeError(r.err)).not.toContain('86400');
     expect(describeError(new LexAPIError(429, 'RATE_LIMITED', 'x', undefined, 7200))).toContain('Wait more than an hour before calling again.');
+    expect(describeError(new LexAPIError(503, 'NATIONAL_SEMANTIC_UNAVAILABLE', 'x', { partialReason: 'SEARCH_INCOMPLETE' }, 7200))).toContain('Retry after more than an hour.');
     expect(describeError(new LexAPIError(500, 'INTERNAL', 'x', undefined, 3600))).toContain('The API names a wait of 3600 s;');
   });
 
   it('the generic 503 text carries the wait', async () => {
     const { text, calls } = await call('lex_get_metadata', { celexNumber: '32016R0679' }, () => ({ status: 503, headers: { 'retry-after': '30' }, body: { error: 'maintenance', message: 'down' } }));
     expect(calls).toHaveLength(1);
-    expect(text).toBe('LexAPI error 503 (maintenance): maintenance: down. LexAPI had a server error; server failures are refunded. The API names a wait of 30 s; a retry before it has passed is likely to get the same error. If it persists, status is at https://lex-api.com/status.');
+    expect(text).toBe('LexAPI error 503 (maintenance): down. LexAPI had a server error; server failures are refunded. The API names a wait of 30 s; a retry before it has passed is likely to get the same error. If it persists, status is at https://lex-api.com/status.');
   });
 
   it('a cancelled call stops waiting', async () => {

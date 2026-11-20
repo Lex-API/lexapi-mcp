@@ -130,7 +130,7 @@ describe('503 NATIONAL_SEMANTIC_UNAVAILABLE + SEARCH_INCOMPLETE', () => {
     expect(calls).toHaveLength(2);
     expect(text).toMatch(/LexAPI error 503 \(NATIONAL_SEMANTIC_UNAVAILABLE\)/);
     expect(text).toMatch(/NOT a "no matches" answer/);
-    expect(text).toMatch(/Retry in 10 s/);
+    expect(text).toMatch(/Retry after 10 s/);
     expect(text).not.toMatch(/rate limit/i);
   });
 
@@ -148,7 +148,7 @@ describe('503 NATIONAL_SEMANTIC_UNAVAILABLE + SEARCH_INCOMPLETE', () => {
     expect(result.isError).toBe(true);
     expect(calls).toHaveLength(1);
     expect(sleeps).toEqual([]);
-    expect(text).toMatch(/Retry in 30 s/);
+    expect(text).toMatch(/Retry after 30 s/);
   });
 
   it('is not retried when too little of the deadline would be left after the wait', async () => {
@@ -159,7 +159,7 @@ describe('503 NATIONAL_SEMANTIC_UNAVAILABLE + SEARCH_INCOMPLETE', () => {
     expect(err).toBeInstanceOf(LexAPIError);
     expect(calls).toHaveLength(1);
     expect(sleeps).toEqual([]);
-    expect(describeError(err)).toMatch(/Retry in 10 s/);
+    expect(describeError(err)).toMatch(/Retry after 10 s/);
 
     // With a longer deadline the same answer is retried once.
     const ok = clockedClient((_c, n) =>

@@ -104,7 +104,7 @@ describe('403 PAYMENT_PAST_DUE', () => {
     message: `Your subscription payment failed, so API requests are refused. Pay the open invoice or update your card at ${BILLING}; access returns when the payment succeeds.`,
     ...extra,
   });
-  const text = (ended?: string, billing?: string) => `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard${billing ? ` (${billing})` : ''}. Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.`;
+  const text = (ended?: string, billing?: string) => `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard (${billing ?? 'https://lex-api.com/dashboard?ref=mcp'}). Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.`;
   const BARE = text();
   /** The text for a body answered by an API at `baseUrl`. */
   async function textAt(baseUrl: string, reply: unknown): Promise<string> {
@@ -123,7 +123,7 @@ describe('403 PAYMENT_PAST_DUE', () => {
   });
 
   it('without either, and with one of them', async () => {
-    expect(await textFor(403, body())).toBe('LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard. Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.');
+    expect(await textFor(403, body())).toBe('LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard (https://lex-api.com/dashboard?ref=mcp). Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.');
     expect(await textFor(403, body({ billingUrl: BILLING }))).toBe(text(undefined, BILLING));
     expect(await textFor(403, body({ accessEndedAt: ENDED }))).toBe(text(ENDED));
   });
@@ -253,19 +253,23 @@ describe('other 403s read as before', () => {
 
   it('bodies without a code', async () => {
     expect(await textFor(403, { error: 'Subscription inactive', message: 'Please activate your subscription or downgrade to the FREE tier' }))
-      .toBe(`LexAPI error 403 (Subscription inactive): Subscription inactive: Please activate your subscription or downgrade to the FREE tier.${GENERIC}`);
+      .toBe(`LexAPI error 403 (Subscription inactive): Please activate your subscription or downgrade to the FREE tier.${GENERIC}`);
     expect(await textFor(403, { error: 'No subscription found', message: 'Please subscribe to a plan' }))
-      .toBe(`LexAPI error 403 (No subscription found): No subscription found: Please subscribe to a plan.${GENERIC}`);
+      .toBe(`LexAPI error 403 (No subscription found): Please subscribe to a plan.${GENERIC}`);
+    // The slug that stands in for the code is printed once.
+    expect(await textFor(403, { error: 'Upgrade required', message: 'Upgrade required: this plan has no access' }))
+      .toBe(`LexAPI error 403 (Upgrade required): this plan has no access.${GENERIC}`);
+    expect(await textFor(403, { error: 'Upgrade required' })).toBe(`LexAPI error 403 (Upgrade required).${GENERIC}`);
     // A billingUrl on another 403 changes nothing.
     expect(await textFor(403, { error: 'Subscription inactive', message: 'Please activate your subscription or downgrade to the FREE tier', billingUrl: 'https://api.example.test/dashboard#billing', accessEndedAt: '2026-11-25T09:14:03.000Z' }))
-      .toBe(`LexAPI error 403 (Subscription inactive): Subscription inactive: Please activate your subscription or downgrade to the FREE tier.${GENERIC}`);
+      .toBe(`LexAPI error 403 (Subscription inactive): Please activate your subscription or downgrade to the FREE tier.${GENERIC}`);
   });
 
   it('insufficient_scope and the national terms', async () => {
     expect(await textFor(403, { error: 'insufficient_scope', message: 'The token lacks the required scope' }))
-      .toBe(`LexAPI error 403 (insufficient_scope): insufficient_scope: The token lacks the required scope.${GENERIC}`);
+      .toBe(`LexAPI error 403 (insufficient_scope): The token lacks the required scope.${GENERIC}`);
     expect(describeError(new UpstreamAuthError('insufficient_scope', 403, 'required scope: lex:webhooks', undefined, 'lex:webhooks')))
-      .toBe('This LexAPI connection is not permitted to do this (required scope: lex:webhooks). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not. An API key is not limited this way.');
+      .toBe('This LexAPI connection is not permitted to do this (required scope: lex:webhooks). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not.');
     expect(await textFor(403, { success: false, code: 'NATIONAL_TERMS_NOT_ACCEPTED', error: 'National terms not accepted', acceptUrl: 'https://lex-api.com/dashboard#national-terms' }))
       .toBe('LexAPI error 403 (NATIONAL_TERMS_NOT_ACCEPTED): National terms not accepted. The account must accept the national-source terms once in the LexAPI dashboard (https://lex-api.com/dashboard#national-terms) before national documents are served; retrying before that does not help. Nothing was charged.');
   });
@@ -274,7 +278,7 @@ describe('other 403s read as before', () => {
 describe('isUnknownEndpoint', () => {
   const typed = (message: string, details?: unknown) => ({ success: false, error: { code: 'NOT_FOUND', message, ...(details === undefined ? {} : { details }) } });
   const UNKNOWN = 'Unknown API endpoint: GET /api/v1/serach. See https://lex-api.com/docs for the endpoint reference.';
-  const ROUTE_TEXT = /the country is not live yet .* or the route itself is wrong/;
+  const ROUTE_TEXT = /the country is not live yet .* or the id is wrong .*\. A not-found answer/;
   const DOCUMENT_TEXT = /Check the identifier \(lex_resolve/;
 
   it('the API marks the route 404 with details.reason', async () => {

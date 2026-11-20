@@ -306,7 +306,7 @@ export function describeError(err: unknown): string {
       case 'invalid_token':
         return `LexAPI sign-in expired or was revoked (${err.description}). Reconnecting LexAPI in the MCP client (signing in again) restores access; retrying with the same sign-in does not.`;
       case 'insufficient_scope':
-        return `This LexAPI connection is not permitted to do this (${err.description}). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not. An API key is not limited this way.`;
+        return `This LexAPI connection is not permitted to do this (${err.description}). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not.`;
       case 'rate_limited':
         return `LexAPI sign-in is rate limited right now.${err.retryAfterSeconds !== undefined ? ` Wait ${err.retryAfterSeconds} s before calling again.` : ' Wait a little before calling again.'}`;
       case 'upstream':
@@ -322,7 +322,12 @@ export function describeError(err: unknown): string {
     return `Tool execution failed: ${message}`;
   }
 
-  const head = `LexAPI error ${err.status} (${err.code}): ${err.message.trim().replace(/[.\s]+$/, '')}.`;
+  // A legacy body without a code repeats its `error` slug as the code
+  // ("Upgrade required: Upgrade required: …"): it is printed once.
+  let shownMessage = err.message.trim().replace(/[.\s]+$/, '');
+  while (shownMessage.startsWith(`${err.code}: `)) shownMessage = shownMessage.slice(err.code.length + 2).trim();
+  if (shownMessage === err.code) shownMessage = '';
+  const head = shownMessage ? `LexAPI error ${err.status} (${err.code}): ${shownMessage}.` : `LexAPI error ${err.status} (${err.code}).`;
   const d = (err.details && typeof err.details === 'object' && !Array.isArray(err.details))
     ? err.details as Record<string, unknown>
     : undefined;
@@ -363,7 +368,7 @@ export function describeError(err: unknown): string {
       if (err.code === 'PAYMENT_PAST_DUE') {
         const ended = isoInstant(err.pastDue?.accessEndedAt);
         const billing = billingLink(err.pastDue?.billingUrl, err.pastDue?.siteHost);
-        return `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard${billing ? ` (${billing})` : ''}. Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.`;
+        return `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard (${billing ?? DASHBOARD_URL}). Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.`;
       }
       return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
@@ -389,7 +394,7 @@ export function describeError(err: unknown): string {
         // not only an unlaunched country — these tools only ever build
         // known routes, so that's the near-certain cause here, but the
         // hedge keeps the message honest if that ever changes.
-        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents) — or the route itself is wrong. A not-found answer costs at most 1 credit.`;
+        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents). A not-found answer costs at most 1 credit.`;
       }
       return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title). A not-found answer costs at most 1 credit.`;
     }
@@ -411,7 +416,7 @@ export function describeError(err: unknown): string {
         if (d && d.partialReason === 'SEARCH_INCOMPLETE') {
           const wait = err.retryAfterSeconds;
           return wait !== undefined
-            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry in ${waitText(wait)}.`
+            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry after ${waitText(wait)}.`
             : `${head} ${jur}'s national semantic index has repeatedly been unable to complete this search — this is NOT a "no matches" answer; nothing was charged. An immediate retry is unlikely to help; try again later, or rephrase or narrow the query.`;
         }
         return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;

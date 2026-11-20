@@ -440,7 +440,7 @@ describe('lex_check_citation', () => {
       expect(result.isError).toBeFalsy();
       expect(data).toMatchObject({ celex: '32016R0679', exists: 'unknown', inForce: 'unknown' });
       expect(data.notChecked[0]).toMatchObject({ call: 'lex_get_metadata', reason: 'unconfirmed_not_found' });
-      expect(data.notChecked[0].note).toMatch(/not the API's own NOT_FOUND answer/);
+      expect(data.notChecked[0].note).toMatch(/not the API's answer about this document \(not its NOT_FOUND/);
       const national = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, () => reply);
       expect(national.data).toMatchObject({ exists: 'unknown' });
       const eli = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }, () => reply);
@@ -450,6 +450,39 @@ describe('lex_check_citation', () => {
     // The legacy shape carries the code at the top level.
     const legacy = await call('lex_check_citation', { identifier: '32016R0697' }, () => ({ status: 404, body: { success: false, code: 'NOT_FOUND', error: 'No document found with CELEX number: 32016R0697' } }));
     expect(legacy.data.exists).toBe(false);
+  });
+
+  it('a 404 for a route the API does not have is unknown, never "does not exist"', async () => {
+    const routeMissing: Reply[] = [
+      { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'Unknown API endpoint: POST /api/v2/documents/metadata', details: { reason: 'unknown_endpoint' } } } },
+      // An API older than 2.27.0: the message alone.
+      { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'Unknown API endpoint: POST /api/v2/documents/metadata' } } },
+    ];
+    for (const reply of routeMissing) {
+      const label = JSON.stringify(reply);
+      const check = await call('lex_check_citation', { identifier: '32016R0679' }, () => reply);
+      expect(check.data, label).toMatchObject({ celex: '32016R0679', exists: 'unknown', inForce: 'unknown' });
+      expect(check.data.notChecked[0], label).toMatchObject({ call: 'lex_get_metadata', reason: 'unconfirmed_not_found' });
+      expect(check.data.notChecked[0].error, label).toMatch(/does not offer this endpoint/);
+      expect(check.text).not.toMatch(/"exists":false/);
+
+      const withArticle = await call('lex_check_citation', { identifier: '32016R0679', article: '17' }, () => reply);
+      expect(withArticle.data, label).toMatchObject({ exists: 'unknown' });
+
+      const eli = await call('lex_check_citation', { identifier: 'http://data.europa.eu/eli/reg/2016/679/oj' }, () => reply);
+      expect(eli.data, label).toMatchObject({ exists: 'unknown' });
+      expect(eli.data.notChecked[0], label).toMatchObject({ call: 'lex_resolve', reason: 'unconfirmed_not_found' });
+      expect(eli.data.notChecked[0].note, label).not.toMatch(/No CELEX was found/);
+
+      const history = await call('lex_act_history', { celexNumber: '32016R0679' }, () => reply);
+      expect(history.result.isError, label).toBeFalsy();
+      expect(history.data.exists, label).toBe('unknown');
+      expect(history.text).not.toMatch(/"exists":false/);
+    }
+    // A real document NOT_FOUND still answers exists: false on both tools.
+    const missing = notFound('No document found with CELEX number: 32016R0697');
+    expect((await call('lex_check_citation', { identifier: '32016R0697' }, () => missing)).data.exists).toBe(false);
+    expect((await call('lex_act_history', { celexNumber: '32016R0697' }, (c) => (c.url.pathname.includes('cited-by') ? { body: { success: true, citedBy: [] } } : missing))).data.exists).toBe(false);
   });
 
   it('a date before a consolidated version\'s own date says nothing about the act', async () => {
@@ -568,7 +601,7 @@ describe('lex_check_citation', () => {
     const notLive = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { status: 404, body: { success: false, error: { code: 'NOT_FOUND', message: 'Unknown API endpoint' } } }));
     expect(notLive.paths).toEqual(['/national/coverage', '/fr/documents/FR-LEGI-1']);
     expect(notLive.data).toMatchObject({ id: 'FR-LEGI-1', exists: 'unknown', inForce: 'unknown' });
-    expect(notLive.data.notChecked[0]).toMatchObject({ call: 'lex_get_national_document', reason: 'not_found' });
+    expect(notLive.data.notChecked[0]).toMatchObject({ call: 'lex_get_national_document', reason: 'unconfirmed_not_found' });
     expect(notLive.data.notChecked[0].note).toBe('lex_national_coverage lists FR as not live, and the document read was answered 404, so the document could not be looked up.');
     // An account that may read a country before it is live gets the document.
     const preview = await call('lex_check_citation', { identifier: 'FR-LEGI-1' }, (c) => (isCoverage(c) ? { body: AT_LIVE } : { body: nationalDoc({ id: 'FR-LEGI-1', jurisdiction: 'FR' }) }));
@@ -879,7 +912,7 @@ describe('lex_check_citation', () => {
   it('the route 404 of a country that is not served is recognised by details.reason, only on the API\'s own NOT_FOUND', async () => {
     const reply = (body: unknown) => (c: Call) => (isCoverage(c) ? { body: AT_LIVE } : { status: 404, body });
     const marked = await call('lex_check_citation', { identifier: 'AT-NOR-1' }, reply({ success: false, error: { code: 'NOT_FOUND', message: 'No such route.', details: { reason: 'unknown_endpoint' } } }));
-    expect(marked.data.notChecked[0]).toMatchObject({ reason: 'not_found' });
+    expect(marked.data.notChecked[0]).toMatchObject({ reason: 'unconfirmed_not_found', error: 'LexAPI error 404 (NOT_FOUND): No such route' });
     expect(marked.data.notChecked[0].note).toMatch(/no route for AT.*not live/);
     // The same mark on a 404 that is not the API's typed answer, another reason, and a proxy page.
     for (const body of [
