@@ -96,10 +96,54 @@ describe('MCP protocol (in-memory)', () => {
     // each filter's values listed once, in its enum) and the title
     // `language` on the seven citation tools that take it: measured 55.4k.
     // v0.5.1 adds annotations.title to every tool: measured 57.4k.
-    expect(listJson.length).toBeLessThan(58_500);
+    // v0.6.0 describes every parameter, types the webhook update criteria
+    // and says what holds for several tools once, in the server
+    // instructions; the tools that return attribution say it must be kept:
+    // every webhook criteria field may be null, as in the API: measured 58.4k.
+    // The three workflow tools (lex_check_citation, lex_act_history,
+    // lex_research) add ~6.4k: measured 64.8k. Whole-number parameters
+    // without an upper bound no longer publish a maximum: measured 64.5k.
+    // lex_legislation_as_of adds ~2.0k: measured 66.54k. asOf on
+    // lex_national_semantic_legislation and the snapshot fields on the two
+    // version tools add ~1.0k: measured 67.50k; 67.54k with the asOf wording.
+    // 2026-11-20, release review of 0.6.0: the workflow tools state their
+    // maximum cost, lex_extract_citations says it writes to the shared
+    // graph, the hyde and recent-documents costs are stated once each:
+    // measured 67.81k after trimming the repeated cost texts. Limit raised
+    // deliberately to 68.3k.
+    expect(listJson.length).toBeLessThan(68_300);
+    expect(listJson).not.toContain(String(Number.MAX_SAFE_INTEGER));
+    // [tool, parameter, minimum], as a client receives them.
+    const whole: Array<[string, string, number]> = [
+      ['lex_get_document', 'offset', 0], ['lex_get_document_by_url', 'offset', 0], ['lex_get_document_version', 'offset', 0],
+      ['lex_get_document_version', 'version', 1], ['lex_list_national_documents', 'page', 1], ['lex_get_national_document', 'offset', 0],
+      ['lex_act_history', 'offset', 0], ['lex_cited_by', 'offset', 0], ['lex_cites', 'offset', 0], ['lex_citation_network', 'offset', 0],
+      ['lex_transposition', 'offset', 0], ['lex_counterparts', 'offset', 0], ['lex_get_webhook', 'deliveriesOffset', 0],
+    ];
+    for (const [tool, param, minimum] of whole) {
+      const property = (listed.find((t) => t.name === tool)!.inputSchema.properties as Record<string, Record<string, unknown>>)[param];
+      expect(property, `${tool}.${param}`).toMatchObject({ type: 'integer', minimum });
+      expect(property, `${tool}.${param}`).not.toHaveProperty('maximum');
+    }
+    // The instructions are in every client's context too: measured 3.3k;
+    // 3.7k with the workflow tools and the in-force label; 3.77k with
+    // lex_legislation_as_of; 3.93k with the national asOf sentence; 3.99k
+    // with the asOf wording; 3.98k with the workflow cost sentence (0.6.0).
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(4_000);
+
+    // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools,
+    // 59.25k with lex_legislation_as_of, 60.22k with national asOf, 60.25k with the asOf wording;
+    // 60.49k with the 0.6.0 release-review cost texts (2026-11-20; limit raised deliberately).
+    const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
+    const [ra, rb] = InMemoryTransport.createLinkedPair();
+    await roServer.connect(ra);
+    const roClient = new Client({ name: 'test', version: '1.0.0' });
+    await roClient.connect(rb);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(61_000);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);
+    expect(client.getInstructions()).toContain('otherwise lex_legislation_as_of gives the version of a known act for a date, and asOf does so for search hits.');
 
     // Invalid arguments are rejected by the SDK before any HTTP call.
     const before = seen.length;

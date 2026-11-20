@@ -41,7 +41,7 @@ function round3(v: unknown): number | undefined {
   return n === undefined ? undefined : Math.round(n * 1000) / 1000;
 }
 
-function truncate(s: string | undefined, max: number): string | undefined {
+export function truncate(s: string | undefined, max: number): string | undefined {
   if (!s) return s;
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
@@ -101,6 +101,18 @@ export function consolidatedLabel(celex: unknown): Obj | undefined {
   };
 }
 
+// ── In-force label ─────────────────────────────────────────────────
+// Whether an act is in force today, on EU legislation (API 2.19.0). All
+// four fields are absent when the status is unknown; nothing is derived here.
+export const IN_FORCE_KEYS = ['inForce', 'notInForceReason', 'endOfValidity', 'entryIntoForce'] as const;
+
+/** The in-force fields an API object carries, as they are ({} when it has none). */
+export function inForceFields(o: Obj): Obj {
+  const out: Obj = {};
+  for (const k of IN_FORCE_KEYS) if (o[k] !== undefined && o[k] !== null) out[k] = o[k];
+  return out;
+}
+
 // ── Document metadata ──────────────────────────────────────────────
 const META_KEYS = [
   'title', 'titleLanguage', 'documentType', 'documentTypeCode', 'author',
@@ -108,6 +120,7 @@ const META_KEYS = [
   'ecli', 'eli', 'caseNumber', 'parties', 'subject',
   'language', 'languageRequested', 'languageFallback', 'version', 'fetchedAt',
   'latestConsolidated', 'upcomingConsolidated', 'newestConsolidated',
+  ...IN_FORCE_KEYS,
 ] as const;
 
 export function shapeMetadata(doc: Obj, headers: LexResponse['headers'] = {}): Obj {
@@ -118,6 +131,9 @@ export function shapeMetadata(doc: Obj, headers: LexResponse['headers'] = {}): O
   if (Array.isArray(doc.keywords)) out.keywords = (doc.keywords as unknown[]).slice(0, 20);
   const urls = isObj(doc.urls) ? doc.urls : undefined;
   if (urls) out.url = urls.html ?? urls.metadata;
+  // The publisher's URL of the text (provenance), when it is not that link.
+  const sourceUrl = sourceUrlOf(doc.provenance);
+  if (sourceUrl && sourceUrl !== out.url) out.sourceUrl = sourceUrl;
   if (headers['x-source']) out.source = headers['x-source'];
   // A text-availability block that just says "available" is noise; any
   // other state (no text, why, which languages, consolidated pointers) is
@@ -466,6 +482,7 @@ export function shapeCaseLawHit(r: unknown): Obj {
     summary: r.summary,
     snippet: r.summary ? undefined : r.snippet,
     text: r.text,
+    sourceUrl: sourceUrlOf(r.provenance),
   };
   for (const k of CASE_ANALYTICS) out[k] = r[k];
   return compact(out);
@@ -494,18 +511,21 @@ export function shapeLegislationHit(r: unknown): Obj {
     language: r.language,
     snippet: r.snippet,
     text: r.text,
-    // Consolidated-text labelling (#284 §6) — kept verbatim.
+    // Consolidated-text labelling — kept verbatim.
     consolidated: r.consolidated,
     consolidatedAsOf: r.consolidatedAsOf,
     baseCelex: r.baseCelex,
     consolidatedNote: r.consolidatedNote,
     baseAct: isObj(r.baseAct) ? compact({ ...r.baseAct, score: round3(r.baseAct.score) }) : undefined,
-    // asOf resolution (#284 §7).
+    // asOf resolution.
     asOf: r.asOf,
     asOfResolved: r.asOfResolved,
     asOfReason: r.asOfReason,
     asOfVersion: r.asOfVersion,
     matchedVersion: r.matchedVersion,
+    // The act's in-force status today; absent when unknown.
+    ...inForceFields(r),
+    sourceUrl: sourceUrlOf(r.provenance),
   });
 }
 
@@ -527,7 +547,7 @@ export function shapeLegislation(res: LexResponse<Json>): Obj {
   });
 }
 
-// asOfReason classes (docs.md "asOf — the text in force on a date").
+// asOfReason classes (docs.md, asOf on POST /legislation/semantic).
 const AS_OF_NOT_IN_FORCE = new Set(['not_yet_adopted', 'not_yet_in_force', 'no_longer_in_force']);
 const AS_OF_RETRYABLE = new Set([
   'fetch_pending', 'fetch_capacity', 'fetch_budget_exhausted', 'request_deadline', 'fetch_timeout',
@@ -535,36 +555,183 @@ const AS_OF_RETRYABLE = new Set([
 ]);
 const AS_OF_USER_ACTION = new Set(['insufficient_credits']);
 
+type AsOfGroup = 'notInForce' | 'retryable' | 'needsCredits' | 'unavailable';
+
+/** The class of an asOfReason; a reason not listed above is `unavailable`. */
+function asOfGroupOf(reason: string): AsOfGroup {
+  if (AS_OF_NOT_IN_FORCE.has(reason)) return 'notInForce';
+  if (AS_OF_RETRYABLE.has(reason)) return 'retryable';
+  if (AS_OF_USER_ACTION.has(reason)) return 'needsCredits';
+  return 'unavailable';
+}
+
 /**
  * One instruction per class of unresolved hit present. Every unresolved
- * hit carries the LATEST text; what the model should do differs:
+ * hit carries the indexed text; what the model should do differs:
  *   - not in force on the date → that IS the answer (say so);
  *   - transient → retry shortly, or with a smaller limit;
  *   - credits → the pool could not pay for the fetch;
  *   - anything else (no text in that version, language, article missing…) →
- *     the version in force could not be read; don't quote it as of that date.
+ *     the version for the date could not be read; don't quote it as of that date.
  */
 export function asOfCaveat(results: Obj[], asOf: string): Obj | undefined {
-  const groups: Record<string, string[]> = { notInForce: [], retryable: [], needsCredits: [], unavailable: [] };
+  const groups: Record<AsOfGroup, string[]> = { notInForce: [], retryable: [], needsCredits: [], unavailable: [] };
   for (const r of results) {
     if (r.asOfResolved !== false) continue;
     const reason = String(r.asOfReason ?? 'unknown');
     const id = `${String(r.law_id ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''} (${reason})`;
-    if (AS_OF_NOT_IN_FORCE.has(reason)) groups.notInForce.push(id);
-    else if (AS_OF_RETRYABLE.has(reason)) groups.retryable.push(id);
-    else if (AS_OF_USER_ACTION.has(reason)) groups.needsCredits.push(id);
-    else groups.unavailable.push(id);
+    groups[asOfGroupOf(reason)].push(id);
   }
   const guidance: string[] = [];
   if (groups.notInForce.length) guidance.push(`notInForce: these acts were not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for them; their returned text is not the law on that date.`);
-  if (groups.retryable.length) guidance.push('retryable: the version in force could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
-  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version in force.');
-  if (groups.unavailable.length) guidance.push(`unavailable: the version in force on ${asOf} could not be read (see asOfReason); the returned text is not the law on that date.`);
+  if (groups.retryable.length) guidance.push('retryable: the version for that date could not be fetched in this call (busy, time or fetch limits) — call again shortly, or with a smaller limit.');
+  if (groups.needsCredits.length) guidance.push('needsCredits: the credit pool could not cover fetching the version for that date.');
+  if (groups.unavailable.length) guidance.push(`unavailable: the version listed for ${asOf} could not be read (see asOfReason); the returned text is not established as the text for that date.`);
   if (!guidance.length) return undefined;
   return compact({
-    note: `Unresolved hits carry the LATEST text, not the text in force on ${asOf}.`,
+    note: `Unresolved hits carry the indexed text, not established as the text for ${asOf}.`,
     ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
     guidance,
+  });
+}
+
+// ── The version of an act for a date (POST /legislation/as-of) ─────
+// What each asOfReason of the lookup means (API reference, "Unresolved").
+const DATE_OUTSIDE = 'The date is outside the act\'s dates.';
+const NOT_FETCHED = 'The text could not be fetched now.';
+const NOT_PAID = 'The fetch was not paid for, so it was not made.';
+const AS_OF_LOOKUP_MEANING: Record<string, string> = {
+  not_yet_adopted: DATE_OUTSIDE,
+  not_yet_in_force: DATE_OUTSIDE,
+  no_longer_in_force: DATE_OUTSIDE,
+  in_force_dates_unknown: 'The act\'s dates do not establish whether it was in force on the date, or could not be read.',
+  act_type_not_supported: 'The act is not a regulation, directive, decision or other act of the institutions (CELEX sector 3), for example a treaty or an international agreement; the lookup does not cover it.',
+  version_list_unavailable: 'The list of versions, or of the acts amending the act, could not be read.',
+  version_lookup_cap: 'A lookup limit was reached.',
+  not_in_language: 'The version for the date has no text in the requested language.',
+  amendment_not_consolidated: 'An act amending this act may have applied by the date, and no listed version is known to include it.',
+  text_unavailable: 'The version has no text at the source.',
+  article_not_in_version: 'The version has no such article, annex or recital.',
+  provision_ambiguous: 'More than one part of the text answers to the requested provision.',
+  version_not_parsed: 'The text is not split into identifiable parts of the requested kind.',
+  fetch_budget_exhausted: NOT_FETCHED,
+  fetch_pending: NOT_FETCHED,
+  fetch_capacity: NOT_FETCHED,
+  fetch_failed: NOT_FETCHED,
+  fetch_timeout: NOT_FETCHED,
+  request_deadline: NOT_FETCHED,
+  insufficient_credits: NOT_PAID,
+  credit_check_failed: NOT_PAID,
+};
+
+/** The caveat of an unresolved lookup: the reason's class (as in asOfCaveat), what the reason means, and what follows. */
+export function asOfLookupCaveat(reason: string, asOf: string, versionEstablished: boolean): Obj {
+  const group = asOfGroupOf(reason);
+  const guidance: Record<AsOfGroup, string> = {
+    notInForce: `notInForce: the act was not in force on ${asOf} (not yet adopted / not yet in force / no longer in force) — that is the answer for this date.`,
+    retryable: 'retryable: the version or its text could not be read in this call (busy, time or lookup limits) — calling again shortly may resolve it.',
+    needsCredits: 'needsCredits: the credit pool could not cover fetching the text. A fetch reserves 5 credits, so a pool holding fewer than 5 gets insufficient_credits even for an answer that would cost 4.',
+    unavailable: `unavailable: the text for ${asOf} was not established (see meaning).`,
+  };
+  return compact({
+    note: versionEstablished
+      ? `Unresolved: no text is returned for ${asOf}. asOfVersion is the version listed for that date; the requested provision of it was not established.`
+      : `Unresolved: no version and no text are returned for ${asOf}.`,
+    group,
+    meaning: Object.hasOwn(AS_OF_LOOKUP_MEANING, reason) ? AS_OF_LOOKUP_MEANING[reason] : undefined,
+    guidance: guidance[group],
+  });
+}
+
+const AS_OF_VERSION_KEYS = ['celex', 'kind', 'date', 'validUntil', 'checkedAt'] as const;
+const AS_OF_ACT_KEYS = ['celex', 'dateOfDocument', 'entryIntoForce', 'endOfValidity', 'inForceToday'] as const;
+const PROVENANCE_KEYS = ['publisher', 'sourceUrl', 'sourceIdentifier', 'retrievedAt', 'contentHash', 'versionIdentifier', 'language', 'licence'] as const;
+/** Characters of a provision's text returned by lex_legislation_as_of (the default budget of the document tools). */
+export const AS_OF_PROVISION_BUDGET = 40_000;
+/** Longest value of a field that is an id, a date, a link or a one-line label. */
+const AS_OF_FIELD_MAX = 500;
+/** Longest heading (number, title) of a provision. */
+const AS_OF_HEADING_MAX = 300;
+
+/** A non-empty string no longer than `max`; anything else (an object, a list, a number) is undefined. */
+function label(v: unknown, max = AS_OF_FIELD_MAX): string | undefined {
+  return typeof v === 'string' && v.trim() && v.length <= max ? v : undefined;
+}
+
+/** The listed keys of an API object whose value is a label (a boolean for `flags`); undefined when it is not an object or has none. */
+function pick(o: unknown, keys: readonly string[], flags: readonly string[] = []): Obj | undefined {
+  if (!isObj(o)) return undefined;
+  const out: Obj = {};
+  for (const k of keys) {
+    const v = flags.includes(k) ? (typeof o[k] === 'boolean' ? o[k] : undefined) : label(o[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** `text` cut to at most `max` UTF-16 units, never between the two halves of a surrogate pair. */
+function cutText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
+/**
+ * A POST /legislation/as-of answer → compact form. Only an answer with
+ * `asOfResolved: true` keeps a provision text and the consolidated labels;
+ * any other answer carries `asOfResolved: false`, the reason and a caveat,
+ * and never a text. A field is copied only when it has the expected type.
+ */
+export function shapeAsOfLookup(body: unknown, budget = AS_OF_PROVISION_BUDGET): Obj {
+  const b = isObj(body) ? body : {};
+  const resolved = b.asOfResolved === true;
+  const asOfVersion = pick(b.asOfVersion, AS_OF_VERSION_KEYS);
+  const language = label(b.language);
+  const asOf = label(b.asOf);
+  const head = {
+    document: label(b.document),
+    language,
+    asOf,
+    asOfResolved: resolved,
+  };
+  const tail = { act: pick(b.act, AS_OF_ACT_KEYS, ['inForceToday']), provenance: pick(b.provenance, PROVENANCE_KEYS) };
+  if (!resolved) {
+    const reason = label(b.asOfReason);
+    return compact({
+      ...head,
+      asOfReason: reason,
+      asOfVersion,
+      ...tail,
+      asOfCaveat: asOfLookupCaveat(reason ?? 'unknown', asOf ?? 'the date', asOfVersion !== undefined),
+    });
+  }
+  const p = isObj(b.provision) && typeof b.provision.text === 'string' && b.provision.text.trim() ? b.provision : undefined;
+  let provision: Obj | undefined;
+  let note: string | undefined;
+  if (p) {
+    const full = p.text as string;
+    const kept = cutText(full, budget);
+    provision = compact({
+      id: label(p.id),
+      number: typeof p.number === 'string' ? truncate(p.number, AS_OF_HEADING_MAX) : undefined,
+      title: typeof p.title === 'string' ? truncate(p.title, AS_OF_HEADING_MAX) : undefined,
+      text: kept.length < full.length ? `${kept} …[truncated: ${full.length - kept.length} more characters]` : full,
+    });
+    if (kept.length < full.length) {
+      const celex = label(asOfVersion?.celex);
+      note = `provision.text is cut to ${kept.length} of ${full.length} characters. The whole text is read with lex_get_document${celex ? ` for ${celex}` : ''}${celex && language ? `, language ${language}` : ''} (articleId or include, with offset).`;
+    }
+  }
+  return compact({
+    ...head,
+    asOfVersion,
+    ...tail,
+    provision,
+    consolidated: b.consolidated === true ? true : undefined,
+    consolidatedAsOf: label(b.consolidatedAsOf),
+    baseCelex: label(b.baseCelex),
+    consolidatedNote: label(b.consolidatedNote),
+    note,
   });
 }
 
@@ -902,6 +1069,7 @@ export function shapeNationalDocument(doc: unknown, opts: ContentOptions): Obj {
     ...nationalDecisionFields(doc.decision),
     ...compact({
       textBasis: doc.textBasis,
+      sourceUrl: sourceUrlOf(doc.provenance),
       // Required legal attribution for the source (RIS, gesetze-im-internet.de,
       // Normattiva, Légifrance/Judilibre, the Rechtspraak open data, …): always
       // kept, never dropped by compacting elsewhere.
@@ -966,6 +1134,7 @@ export function shapeNationalCaseLawHit(r: unknown): Obj {
     text: r.text,
     validTo: r.validTo ?? d.validTo,
     inForce: r.inForce ?? d.inForce,
+    sourceUrl: sourceUrlOf(d.provenance),
     // Required legal attribution for the source — always kept.
     attribution: r.attribution,
   };
@@ -985,10 +1154,6 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
     // results may be missing better matches (the hint says what may help).
     partial: b.partial,
     partialReason: b.partialReason,
-    // The national index never rewrites (the response always answers
-    // hyde: false) — the request's hyde was accepted but did not cost the
-    // HyDE premium.
-    hyde: b.hyde,
     attribution: b.attribution,
   });
 }
@@ -999,7 +1164,7 @@ export function shapeNationalCaseLaw(res: LexResponse<Json>): Obj {
  * the index has nothing (compacted away here); `documentKind`, `title` and
  * the act's validity come from the hit's `document` summary.
  */
-export function shapeNationalLegislationHit(r: unknown): Obj {
+export function shapeNationalLegislationHit(r: unknown, asOf?: string, labelled = true): Obj {
   if (!isObj(r)) return {};
   const d = isObj(r.document) ? r.document : {};
   return compact({
@@ -1014,6 +1179,8 @@ export function shapeNationalLegislationHit(r: unknown): Obj {
     chapter: r.chapter,
     score: round3(r.score),
     language: r.language,
+    // With asOf, the label comes before the text it qualifies.
+    ...(asOf ? nationalAsOfFields(r, asOf, labelled) : {}),
     snippet: r.snippet,
     text: r.text,
     // From the index (as of today), or our row's confirmed-repeal override
@@ -1022,23 +1189,138 @@ export function shapeNationalLegislationHit(r: unknown): Obj {
     valid_from: r.valid_from,
     valid_to: r.valid_to,
     law_type: r.law_type,
+    sourceUrl: sourceUrlOf(d.provenance),
     // Required legal attribution for the source — always kept.
     attribution: r.attribution,
   });
 }
 
-export function shapeNationalLegislation(res: LexResponse<Json>): Obj {
+// ── National asOf labels (API 2.29.0) ──────────────────────────────
+// A national hit is always today's wording; asOf says only whether that
+// wording already applied on the date. Unlike the EU reasons, none of
+// these means that an earlier version could not be read: LexAPI holds no
+// earlier wording at all.
+const NATIONAL_AS_OF_MEANING: Record<string, string> = {
+  provision_amended_since: 'the publisher dates today\'s wording from after that date (amended or added since, or the publisher\'s record of it starts later); LexAPI holds no earlier wording',
+  no_longer_in_force: 'per the publisher\'s dates, the provision or its act was no longer in force on that date',
+  provision_dates_unknown: 'whether today\'s wording applied on that date could not be established from the publisher\'s dates; the hit\'s valid_from alone does not establish it',
+  asof_not_available: 'LexAPI holds no per-provision dates for this country',
+};
+const NATIONAL_AS_OF_GROUP: Record<string, string> = {
+  provision_amended_since: 'amendedSince',
+  no_longer_in_force: 'notInForce',
+  provision_dates_unknown: 'datesUnknown',
+  asof_not_available: 'notAvailable',
+};
+const NATIONAL_AS_OF_VERSION_KEYS = ['kind', 'validFrom', 'validTo', 'sourceId', 'checkedAt'] as const;
+
+function nationalAsOfMeaning(reason: string | undefined): string {
+  return reason && Object.hasOwn(NATIONAL_AS_OF_MEANING, reason)
+    ? NATIONAL_AS_OF_MEANING[reason]
+    : 'whether it applied on that date was not established';
+}
+
+/**
+ * The asOf fields of a national hit. Only `asOfResolved: true` counts as
+ * resolved; every other hit is labelled unresolved, and its `asOfLabel`
+ * says that the text shown is today's wording, not established as the text
+ * for the date. `asOfVersion.validTo: null` (an open end) is kept.
+ */
+function nationalAsOfFields(r: Obj, asOf: string, labelled: boolean): Obj {
+  if (!labelled) {
+    // The API did not label this answer: nothing it carries counts.
+    return { asOf, asOfResolved: false, asOfLabel: `Today's wording, not established as the text on ${asOf}: ${nationalAsOfMeaning(undefined)}.` };
+  }
+  if (r.asOfResolved === true) {
+    const v = isObj(r.asOfVersion) ? r.asOfVersion : {};
+    const version: Obj = {};
+    for (const k of NATIONAL_AS_OF_VERSION_KEYS) {
+      if (typeof v[k] === 'string' && (v[k] as string).length <= 200) version[k] = v[k];
+      else if (k === 'validTo' && v[k] === null) version[k] = null;
+    }
+    return { asOf, asOfResolved: true, asOfVersion: Object.keys(version).length ? version : undefined };
+  }
+  const reason = typeof r.asOfReason === 'string' && r.asOfReason.length <= 100 ? r.asOfReason : undefined;
+  return {
+    asOf,
+    asOfResolved: false,
+    asOfReason: reason,
+    asOfLabel: `Today's wording, not established as the text on ${asOf}: ${nationalAsOfMeaning(reason)}.`,
+  };
+}
+
+/** One line per class of unresolved national hit present, as asOfCaveat does for EU hits. */
+export function nationalAsOfCaveat(results: Obj[], asOf: string, labelled = true): Obj | undefined {
+  const groups: Record<string, string[]> = { amendedSince: [], notInForce: [], datesUnknown: [], notAvailable: [], other: [] };
+  for (const r of results) {
+    if (r.asOfResolved === true) continue;
+    const reason = typeof r.asOfReason === 'string' ? r.asOfReason : 'unknown';
+    const id = `${String(r.law_id ?? r.documentId ?? '?')}${r.article_ref ? ` ${String(r.article_ref)}` : ''}${labelled ? ` (${reason})` : ''}`;
+    groups[Object.hasOwn(NATIONAL_AS_OF_GROUP, reason) ? NATIONAL_AS_OF_GROUP[reason] : 'other'].push(id);
+  }
+  const guidance: string[] = [];
+  if (groups.amendedSince.length) guidance.push(`amendedSince: the publisher dates today's wording from after ${asOf} (amended or added since, or its record starts later); LexAPI holds no earlier wording.`);
+  if (groups.notInForce.length) guidance.push(`notInForce: per the publisher's dates, no longer in force on ${asOf}.`);
+  if (groups.datesUnknown.length) guidance.push(`datesUnknown: whether today's wording applied on ${asOf} could not be established (for instance: no usable date, the provision could not be matched, LexAPI's copy of the act may be out of date on that date, or the dates could not be read); valid_from alone does not establish it.`);
+  if (groups.notAvailable.length) guidance.push('notAvailable: LexAPI holds no per-provision dates for this country.');
+  if (groups.other.length) guidance.push(labelled
+    ? `other: whether today's wording applied on ${asOf} was not established (see asOfReason).`
+    : `other: whether today's wording applied on ${asOf} was not established.`);
+  if (!guidance.length) return undefined;
+  return compact({
+    note: `Unresolved hits carry today's wording, which is not established as the text on ${asOf}. asOf never returns earlier wording.`,
+    ...Object.fromEntries(Object.entries(groups).filter(([, v]) => v.length)),
+    guidance,
+  });
+}
+
+/** A calendar date written YYYY-MM-DD. */
+function isCalendarDate(v: unknown): v is string {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+}
+
+/**
+ * `requestedAsOf`: the asOf the tool sent. The API's per-hit labels are
+ * used only when it echoes exactly that date. A missing, invalid or
+ * different echo (an API before LexAPI API 2.29.0 echoes none) puts every
+ * hit under the requested date as unresolved, whatever it carries, so no
+ * text reads as established for a date. Without a requested asOf, any echo
+ * and any per-hit as-of field are ignored.
+ */
+export function shapeNationalLegislation(res: LexResponse<Json>, requestedAsOf?: string): Obj {
   const b = res.body;
-  const results = Array.isArray(b.results) ? b.results.map(shapeNationalLegislationHit) : [];
+  const asOf = requestedAsOf;
+  const echo = isCalendarDate(b.asOf) ? b.asOf : undefined;
+  const labelled = asOf !== undefined && echo === asOf;
+  const results = Array.isArray(b.results) ? b.results.map((r) => shapeNationalLegislationHit(r, asOf, labelled)) : [];
+  let asOfNote: string | undefined;
+  if (asOf && !labelled) {
+    asOfNote = echo
+      ? `The API answered for ${echo}, not the requested ${asOf}; its per-hit labels are not used and no hit counts as resolved.`
+      : 'The API\'s answer did not echo the requested asOf as a date; its per-hit labels are not used.';
+  }
   return compact({
     jurisdiction: b.jurisdiction,
+    asOf,
+    asOfSummary: labelled && isObj(b.asOfSummary) ? compact({ unresolved: num(b.asOfSummary.unresolved) }) : undefined,
     resultCount: results.length,
     results,
     hint: b.hint,
     partial: b.partial,
     partialReason: b.partialReason,
     attribution: b.attribution,
+    asOfCaveat: asOf ? nationalAsOfCaveat(results, asOf, labelled) : undefined,
+    asOfNote,
   });
+}
+
+/** `provenance.sourceUrl` when it is an http(s) link; undefined otherwise. */
+export function sourceUrlOf(provenance: unknown): string | undefined {
+  if (!isObj(provenance)) return undefined;
+  const u = provenance.sourceUrl;
+  return typeof u === 'string' && u.length <= 2000 && /^https?:\/\/\S+$/.test(u) ? u : undefined;
 }
 
 export function stripEnvelope(body: unknown, drop: string[] = []): Obj {

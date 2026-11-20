@@ -1,0 +1,31 @@
+{
+  "weights": {
+    "citation_cited_by": 1,
+    "citation_cites": 1,
+    "citation_counterparts": 20,
+    "citation_extract": 5,
+    "citation_network": 20,
+    "citation_path": 20,
+    "citation_related": 20,
+    "citation_stats": 20,
+    "citation_transposition": 5,
+    "document_batch": 5,
+    "document_fetch": 5,
+    "document_metadata": 5,
+    "document_url": 5,
+    "document_version_fetch": 1,
+    "document_versions": 1,
+    "export_per_row": 1,
+    "info": 0,
+    "legislation_as_of": 1,
+    "national_documents_list": 3,
+    "recent_documents": 3,
+    "resolve": 1,
+    "search_keyword": 3,
+    "semantic_case_law": 5,
+    "semantic_case_law_hyde": 15,
+    "semantic_legis": 5
+  },
+  "corpusHit": 1,
+  "cellarHit": 4
+}

@@ -45,13 +45,15 @@ export function signJwt(header: Record<string, unknown>, payload: Record<string,
   return `${input}.${sig}`;
 }
 
-interface Grant { sub: string; revoked: boolean }
+interface Grant { sub: string; revoked: boolean; /** The connection's scope (default `lex`). */ scope?: string }
 
 export interface Seen {
   path: string;
   method: string;
   authorization?: string;
   apiKey?: string;
+  /** The X-LexAPI-Client header. */
+  client?: string;
   body: string;
 }
 
@@ -108,6 +110,16 @@ function decodeJwt(token: string): { header: any; payload: any; input: string; s
   }
 }
 
+/** The API scopes a scope string permits (`lex` = both). */
+function apiScopes(scope: unknown): Set<string> {
+  const out = new Set<string>();
+  for (const n of typeof scope === 'string' ? scope.split(/\s+/) : []) {
+    if (n === 'lex') { out.add('lex:read'); out.add('lex:webhooks'); }
+    else if (n === 'lex:read' || n === 'lex:webhooks') out.add(n);
+  }
+  return out;
+}
+
 /** Verifies an API-audience token from this mock. Realm `lexapi` everywhere. */
 function verifyOurs(as: MockAs, token: string, audience: string): { ok: true; claims: any } | { ok: false; why: string } {
   const d = decodeJwt(token);
@@ -146,6 +158,7 @@ export async function startMockAs(): Promise<MockAs> {
       method: req.method ?? '',
       authorization: req.headers.authorization,
       apiKey: req.headers['x-api-key'] as string | undefined,
+      client: req.headers['x-lexapi-client'] as string | undefined,
       body,
     });
     const json = (status: number, v: unknown, headers: Record<string, string> = {}) => {
@@ -213,8 +226,17 @@ export async function startMockAs(): Promise<MockAs> {
         if (v.claims.act?.sub !== CLIENT_ID) return bad('access token was not issued for this API');
         const g = as.grants.get(v.claims.gid);
         if (!g || g.revoked) return bad('the connection behind this token has been revoked');
+        // Scopes, as the API applies them: token scope ∩ connection scope.
+        const needs = path === '/api/v1/webhooks' || path.startsWith('/api/v1/webhooks/') ? 'lex:webhooks' : 'lex:read';
+        const fromGrant = apiScopes(g.scope ?? 'lex');
+        if (![...apiScopes(v.claims.scope)].some((n) => n === needs && fromGrant.has(n))) {
+          return json(403, { success: false, error: { code: 'TIER_FORBIDDEN', message: `This connection is not permitted to use this endpoint (required scope: ${needs}).` } }, {
+            'www-authenticate': `Bearer realm="lexapi", error="insufficient_scope", scope="${needs === 'lex:read' ? needs : 'lex:read lex:webhooks'}", error_description="The access token does not permit this request"`,
+          });
+        }
         identity = `user:${v.claims.sub}`;
       }
+      if (path === '/api/v1/webhooks' && req.method === 'GET') return json(200, { success: true, webhooks: [] });
       if (path === '/api/v1/info') return json(200, { service: identity, version: 'mock' });
       if (path === '/api/v1/documentContent') {
         return json(200, { success: true, document: { celex: '32016R0679', title: `doc for ${identity}`, textAvailability: { available: true }, content: { articles: [{ id: 'art_1', number: 'Article 1', content: 'x' }] } } }, { 'x-source': 'corpus' });

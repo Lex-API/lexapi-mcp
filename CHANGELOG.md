@@ -2,7 +2,48 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
-## 0.5.1 — unreleased
+## 0.6.0 — 2026-11-22
+
+Four new tools (37 in all, 32 read-only); none removed or renamed. Released with LexAPI API 3.0.0, which lex-api.com serves from this date: nothing to change on the API side.
+
+### Breaking: what to change when upgrading from 0.5.1
+- `lex_get_document_version`: read `snapshotDate` instead of `asOf` in the result (same value; it is the date a snapshot was looked up for, not an in-force date).
+- `lex_semantic_case_law.filters`: only `court`, `date_from`, `date_to`, `case_number`, `ecli`, `language`. Any other key is now a validation error (0.5.1 forwarded it): send `date_from` / `date_to`, not `dateFrom` / `dateTo`. `language` must be one of the 10 indexed lowercase codes (`en`, `fr`, `de`, `es`, `it`, `sl`, `el`, `nl`, `pt`, `pl`); 0.5.1 forwarded any value.
+- `lex_semantic_legislation.filters`: only `language` (the same 10 codes). Remove every other key.
+- `lex_update_webhook.searchCriteria`: same fields and types as on `lex_create_webhook`; an unknown key or a mistyped value is now refused instead of forwarded.
+- `lex_national_semantic_case_law`: `hyde` is gone from the schema and the result. 0.5.1 forwarded it; the national index never rewrites queries and the API charged the flat 5 credits either way, so a call that still sends it is accepted, the value is not forwarded, and results and cost are the same.
+
+### Behaviour changes: nothing to do
+- A redirect from the API to another host is not followed (0.5.1 followed it and sent the API key); the call fails and names the host.
+- A `500`/`502`/`503` with `Retry-After` is retried once after that wait when it is at most 10 s and fits in the call's deadline; otherwise the error names the wait.
+- Error texts changed: a failed subscription payment (`403 PAYMENT_PAST_DUE`) and the snapshot 404s (`boundary_unknown`, `before_tracking`) have their own text; other 403 and 404 texts say what was charged; an error body without a code no longer repeats its message prefix; a wait of more than an hour reads "more than an hour"; the `semantics` text of the version tools is reworded. Do not match on error wording.
+- Tool descriptions and the server instructions now tell the model, for today's law, to pass today's date as `asOf` on `lex_semantic_legislation` and to use only hits with `asOfResolved: true`; without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked. Agents that follow this pass `asOf` on more searches; each such call can cost up to 15 more credits (at most 3 live version fetches × 5). The instructions also name the three workflow tools, which cost the sum of the calls they make.
+
+### Added
+- **`lex_check_citation`** (read-only): whether a CELEX, EUR-Lex URL, ELI, ECLI or national id exists, its title and link, whether an article is in its text and whether the act is in force today; `"unknown"` means not checked, not absent.
+  At most 11 credits: 1 to resolve a URL, ELI or ECLI, one read (1 / 4 / 5), a second read when the article is not matched; a national id costs 1, or nothing when LexAPI does not list its country.
+- **`lex_act_history`** (read-only): the acts that amend, correct or repeal an EU act, with its status today; the list may be incomplete.
+  Cost: 1 + the act's metadata (1 / 4 / 5) + the same per date read, up to 10 dates: at most 56.
+- **`lex_research`** (read-only): one query as semantic searches over EU legislation, EU case law and chosen live countries, merged; `sources` reports each search.
+  5 credits per search: 2 searches by default, at most 16 (80 credits); national searches also count against the national-law allowance; no search starts once credits or the rate limit run out.
+- **`lex_legislation_as_of`** (read-only): the version of an EU act listed for a date and, optionally, one provision of it; a text only when `asOfResolved` is `true`; it does not say whether a provision applied on the date.
+  1 credit, or 4 / 5 when a provision's text is fetched. Needs nothing from the user: the API serves it.
+- **`lex_national_semantic_legislation`: `asOf`**: labels whether today's wording already applied on a date (Austria and Spain at present); it never returns earlier wording.
+  No extra cost.
+- Hosted server: signing in grants the `lex` scope, which covers every tool; API keys are not subject to scopes. A token limited to `lex:read` or `lex:webhooks`, refused in 0.5.1, is now accepted and offered only the tools of its scopes.
+- Every API request carries an `X-LexAPI-Client` header (server version, `hosted` or `stdio`, the tool, and in stdio mode the MCP client's name); the `User-Agent` is unchanged.
+- The API's in-force label (`inForce`, `notInForceReason`, `endOfValidity`, `entryIntoForce`) on the document and metadata tools and on `lex_semantic_legislation` hits, when the API sends it.
+- `sourceUrl` (http or https only) on the EU document tools, `lex_get_national_document` and the semantic search hits.
+- Snapshot fields: `lex_get_document_version` returns `kind`, `observedFrom`, `observedUntil` and, for a future date, `dateInFuture` and `warning`, and points to `lex_legislation_as_of` when the API names the in-force lookup; `lex_document_versions` returns `observedFrom`.
+
+### Changed
+- Webhook `searchCriteria` on create and update accept what the API accepts: any 4-digit `year` (number or string), `domain` in any case, and `null` for any field (0.5.1 refused a `year` given as a string, alone or in a list, a `year` outside 1950–2100, a lower-case `domain` and `null`; a list of number years was accepted then too).
+- The citation tools and `lex_counterparts` accept national ids with letters outside ASCII and `:` or `+`; national ids and `lex_list_national_documents.q` typed with combining marks are sent composed (NFC).
+- CELEX and date patterns and the upper bound of whole-number parameters are no longer published in the schema; the same values are accepted and refused as before.
+- `lex_export` results on credit plans carry a `billing` line.
+- Descriptions: every parameter is described; plan limits are read from `lex_info` (`maxPages`, `maxBatchSize`, `maxWebhooks`); what holds for every national tool is said once, in the server instructions; `asOfCaveat` and national partial-result notes are reworded; with `LEXAPI_MCP_READ_ONLY` the descriptions do not name the hidden tools.
+
+## 0.5.1 — 2026-11-16
 
 ### Changed
 - Every tool carries `annotations.title`. `lex_update_webhook` is annotated `destructiveHint: true` (it replaces the watch list and can remove search criteria).
@@ -52,7 +93,7 @@ Adds national-law support (member-state legislation and case law alongside EUR-L
 - A connection that is revoked while in use is answered with `401 invalid_token` where possible, or with a tool error asking to reconnect.
 - `/health` reports whether sign-in is enabled.
 ### Changed
-- `409 NATIONAL_SEMANTIC_NOT_ENABLED` and `503 NATIONAL_SEMANTIC_UNAVAILABLE` get their own `describeError` messages (point at the right country/tools, not the account); the 404 branch detects a national miss and stops pointing at `lex_resolve`/`lex_search`. `lex_national_semantic_legislation`'s `query` has a minimum length of 3 characters, matching case law. Both national semantic tools' `language` accepts the full ISO 639-1 range rather than the 10-language EU enum (national lanes are single-language and not all are in that list). `lex_get_national_document`'s cost note is "5 reserved, settles at 1" (a pool under 5 credits still 402s). `lex_list_national_documents`' `documentType` accepts up to 200 characters.
+- `409 NATIONAL_SEMANTIC_NOT_ENABLED` and `503 NATIONAL_SEMANTIC_UNAVAILABLE` get their own `describeError` messages (point at the right country/tools, not the account); the 404 branch detects a national miss and stops pointing at `lex_resolve`/`lex_search`. `lex_national_semantic_legislation`'s `query` has a minimum length of 3 characters, matching case law. Both national semantic tools' `language` accepts the 24 official EU language codes rather than the 10 languages of the EU semantic index (a national index holds one language, and not all are in that list). `lex_get_national_document`'s cost note is "5 reserved, settles at 1" (a pool under 5 credits still 402s). `lex_list_national_documents`' `documentType` accepts up to 200 characters.
 - `lex_get_national_document`'s outline reading hint points at `view "full"` + `offset` (that tool has no `articleId`/`include` parameter).
 - README: how to connect from claude.ai / Claude Desktop (custom connector), Claude Code (`claude mcp add --transport http lexapi https://mcp.lex-api.com/v1`, then `/mcp` → *Authenticate*) and other MCP clients; the API-key option remains documented. The FREE-plan note now points to the pricing page instead of quoting an allowance.
 - `server.json`: the remote's `Authorization` header is now optional (sign-in is discovered from the server's 401); version 0.4.0.

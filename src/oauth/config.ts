@@ -7,8 +7,9 @@
 // OAuth on but lost the secret must fail loudly, not run with sign-in off).
 
 import { DEFAULT_BASE_URL } from '../client.js';
+import { expandScopeSet, KNOWN_SCOPES, SCOPE_ALL, SCOPE_READ, stepUpScopes, TOOL_SCOPES, type ToolScope } from './scope.js';
 
-export const OAUTH_SCOPE = 'lex';
+export const OAUTH_SCOPE = SCOPE_ALL;
 export const DEFAULT_ISSUER = 'https://lex-api.com';
 export const DEFAULT_RESOURCE = 'https://mcp.lex-api.com/v1';
 export const DEFAULT_CLIENT_ID = 'lexapi-mcp-server';
@@ -40,13 +41,21 @@ export interface OAuthConfig {
   trustProxyHops: number;
   /** New token exchanges per user per minute (LEXAPI_MCP_EXCHANGES_PER_USER_PER_MIN, default 20). */
   exchangesPerUserPerMin: number;
+  /**
+   * The scopes the authorization server accepts (LEXAPI_OAUTH_SCOPES, default
+   * `lex`): `scopes_supported` of the metadata, and the only names a
+   * challenge may ask a client for.
+   */
+  scopesSupported: string[];
+  /** The scope the 401 challenge asks for (LEXAPI_OAUTH_DEFAULT_SCOPE, default `lex`). */
+  defaultScope: string;
 }
 
 /** Default per-user cap on new token exchanges a minute; one per connection every ~4.5 min is normal. */
 export const DEFAULT_EXCHANGES_PER_USER_PER_MIN = 20;
 
 /** Variables that only mean something with OAuth on. */
-const OAUTH_ONLY_VARS = ['LEXAPI_OAUTH_ISSUER', 'LEXAPI_OAUTH_RESOURCE', 'LEXAPI_OAUTH_CLIENT_ID', 'LEXAPI_API_BASE'] as const;
+const OAUTH_ONLY_VARS = ['LEXAPI_OAUTH_ISSUER', 'LEXAPI_OAUTH_RESOURCE', 'LEXAPI_OAUTH_CLIENT_ID', 'LEXAPI_OAUTH_SCOPES', 'LEXAPI_OAUTH_DEFAULT_SCOPE', 'LEXAPI_API_BASE'] as const;
 
 export class OAuthConfigError extends Error {
   constructor(message: string) {
@@ -71,6 +80,16 @@ function parseUrl(name: string, raw: string): URL {
     throw new OAuthConfigError(`${name} must be an https URL`);
   }
   return u;
+}
+
+/** A list of known scope names (spaces or commas), in the canonical order, without repeats. */
+function parseScopeList(name: string, raw: string): string[] {
+  const names = raw.split(/[\s,]+/).filter(Boolean);
+  const unknown = names.find((n) => !(KNOWN_SCOPES as readonly string[]).includes(n));
+  if (unknown !== undefined || names.length === 0) {
+    throw new OAuthConfigError(`${name} must list one or more of: ${KNOWN_SCOPES.join(', ')}`);
+  }
+  return KNOWN_SCOPES.filter((n) => names.includes(n));
 }
 
 /** Trailing slashes dropped — LexAPI canonicalises issuer / resource the same way. */
@@ -149,6 +168,26 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OAuthC
     throw new OAuthConfigError('LEXAPI_MCP_EXCHANGES_PER_USER_PER_MIN must be a whole number from 1 to 1000');
   }
 
+  const scopesRaw = (env.LEXAPI_OAUTH_SCOPES ?? '').trim();
+  const scopesSupported = scopesRaw ? parseScopeList('LEXAPI_OAUTH_SCOPES', scopesRaw) : [OAUTH_SCOPE];
+  // Every tool must be reachable with the scopes a client can be asked for:
+  // otherwise a challenge could name nothing that permits the call.
+  const covered = expandScopeSet(scopesSupported);
+  if (!TOOL_SCOPES.every((n) => covered.has(n))) {
+    throw new OAuthConfigError(`LEXAPI_OAUTH_SCOPES must cover every tool: list ${OAUTH_SCOPE}, or both ${TOOL_SCOPES.join(' and ')}`);
+  }
+  const defaultRaw = (env.LEXAPI_OAUTH_DEFAULT_SCOPE ?? '').trim();
+  const defaultScopes = defaultRaw
+    ? parseScopeList('LEXAPI_OAUTH_DEFAULT_SCOPE', defaultRaw)
+    : scopesSupported.includes(OAUTH_SCOPE) ? [OAUTH_SCOPE] : scopesSupported;
+  if (!defaultScopes.every((n) => scopesSupported.includes(n))) {
+    throw new OAuthConfigError('LEXAPI_OAUTH_DEFAULT_SCOPE may only name scopes listed in LEXAPI_OAUTH_SCOPES');
+  }
+  // The scope a new connection is asked for must include the read tools.
+  if (!expandScopeSet(defaultScopes).has(SCOPE_READ)) {
+    throw new OAuthConfigError(`LEXAPI_OAUTH_DEFAULT_SCOPE must include ${OAUTH_SCOPE} or ${SCOPE_READ}`);
+  }
+
   return {
     issuer,
     resource,
@@ -162,6 +201,8 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv = process.env): OAuthC
     apiBase,
     trustProxyHops,
     exchangesPerUserPerMin,
+    scopesSupported,
+    defaultScope: defaultScopes.join(' '),
   };
 }
 
@@ -170,7 +211,7 @@ export function protectedResourceMetadata(cfg: OAuthConfig) {
   return {
     resource: cfg.resource,
     authorization_servers: [cfg.issuer],
-    scopes_supported: [OAUTH_SCOPE],
+    scopes_supported: [...cfg.scopesSupported],
     bearer_methods_supported: ['header'],
     resource_name: 'LexAPI MCP server',
     resource_documentation: 'https://lex-api.com/docs#mcp-oauth',
@@ -184,6 +225,23 @@ export function authParam(value: string): string {
 
 /** The RFC 6750 / MCP authorization challenge; `error` is set when a Bearer token was presented and refused. */
 export function bearerChallenge(cfg: OAuthConfig, error?: { code: 'invalid_token'; description: string }): string {
-  const base = `Bearer realm="lexapi", resource_metadata="${cfg.resourceMetadataUrl}", scope="${OAUTH_SCOPE}"`;
+  const base = `Bearer realm="lexapi", resource_metadata="${cfg.resourceMetadataUrl}", scope="${cfg.defaultScope}"`;
   return error ? `${base}, error="${error.code}", error_description="${authParam(error.description)}"` : base;
+}
+
+/**
+ * The scope a client is asked for when its token lacks `required`: the
+ * scopes the connection already has plus the ones the call needs, so a new
+ * token loses nothing. When the authorization server does not accept all of
+ * those names (LEXAPI_OAUTH_SCOPES), `lex`, which covers them. Always a
+ * non-empty string of accepted names that permits the call.
+ */
+export function stepUpScope(cfg: OAuthConfig, required: ToolScope, granted: Iterable<ToolScope> = []): string {
+  const wanted = stepUpScopes(required, granted);
+  return wanted.every((n) => cfg.scopesSupported.includes(n)) ? wanted.join(' ') : OAUTH_SCOPE;
+}
+
+/** The `403 insufficient_scope` challenge (RFC 6750 §3.1): a valid token that does not permit the request. */
+export function insufficientScopeChallenge(cfg: OAuthConfig, description: string, required: ToolScope, granted: Iterable<ToolScope> = []): string {
+  return `Bearer realm="lexapi", resource_metadata="${cfg.resourceMetadataUrl}", scope="${stepUpScope(cfg, required, granted)}", error="insufficient_scope", error_description="${authParam(description)}"`;
 }
