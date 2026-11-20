@@ -1253,8 +1253,42 @@ describe('lex_research', () => {
     jurisdictions: rows.map(([code, live]) => ({ code, name: code, live, semanticSearch: { legislation: true, caseLaw: true } })),
   });
   const kindOf = (c: Call) => (c.url.pathname.endsWith('/legislation/semantic') ? 'legislation' : 'case_law');
+  const isCoverageCall = (c: Call) => c.url.pathname.endsWith('/national/coverage');
   const codeOf = (c: Call) => { const m = /\/api\/v1\/([a-z]{2})\//.exec(c.url.pathname); return m ? m[1] : 'eu'; };
   const allowance = { 'x-national-limit': '30', 'x-national-remaining': '27', 'x-national-reset': '2026-12-01T00:00:00.000Z' };
+
+  it('a national route the API does not have keeps the API\'s words and the live-country note; an EU one names the base URL', async () => {
+    const routeMissing = (c: Call) => ({
+      status: 404,
+      body: { success: false, error: { code: 'NOT_FOUND', message: `Unknown API endpoint: POST ${c.url.pathname}`, details: { reason: 'unknown_endpoint' } } },
+    });
+    const forbidden = { status: 403, body: { success: false, code: 'TIER_FORBIDDEN', error: 'Coverage is not included in your plan' } };
+    const nationalChecks: Array<[string, (c: Call) => Reply]> = [
+      ['coverage refused', (c) => (isCoverageCall(c) ? forbidden : routeMissing(c))],
+      ['coverage lists ES as live', (c) => (isCoverageCall(c) ? { body: coverage([['ES', true]]) } : routeMissing(c))],
+    ];
+    for (const [label, reply] of nationalChecks) {
+      const { data } = await call('lex_research', { query: 'protección de datos', jurisdictions: ['es'] }, reply);
+      expect(data.sources, label).toHaveLength(2);
+      for (const s of data.sources) {
+        expect(s, label).toMatchObject({ jurisdiction: 'ES', status: 'failed', reason: 'unconfirmed_not_found' });
+        expect(s.error, label).toMatch(/^LexAPI error 404 \(NOT_FOUND\): Unknown API endpoint: POST \/api\/v1\/es\//);
+        expect(s.error, label).not.toMatch(/LEXAPI_BASE_URL|does not offer this endpoint/);
+        expect(s.note, label).toBe('LexAPI has no route for ES: the country may not be live (lex_national_coverage lists the live ones).');
+      }
+    }
+    // Listed as not live: not run, as before.
+    const notLive = await call('lex_research', { query: 'protección de datos', jurisdictions: ['es'] }, (c) => (isCoverageCall(c) ? { body: coverage([['ES', false]]) } : routeMissing(c)));
+    expect(notLive.paths).toEqual(['/national/coverage']);
+    for (const s of notLive.data.sources) expect(s).toMatchObject({ status: 'not_run', reason: 'not_live' });
+    // An EU route: the deployment text.
+    const eu = await call('lex_research', { query: 'right to erasure' }, routeMissing);
+    for (const s of eu.data.sources) {
+      expect(s).toMatchObject({ jurisdiction: 'EU', status: 'failed', reason: 'unconfirmed_not_found' });
+      expect(s.error).toMatch(/does not offer this endpoint \(check LEXAPI_BASE_URL\)/);
+      expect(s.note).toBeUndefined();
+    }
+  });
 
   it('default: EU legislation and EU case law, merged by score, with in-force labels', async () => {
     const { data, calls, paths } = await call('lex_research', { query: 'right to erasure' }, (c) => (kindOf(c) === 'legislation'

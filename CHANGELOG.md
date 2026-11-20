@@ -16,12 +16,12 @@ Four new tools (37 in all, 32 read-only); none removed or renamed. Released with
 ### Behaviour changes: nothing to do
 - A redirect from the API to another host is not followed (0.5.1 followed it and sent the API key); the call fails and names the host.
 - A `500`/`502`/`503` with `Retry-After` is retried once after that wait when it is at most 10 s and fits in the call's deadline; otherwise the error names the wait.
-- Error texts changed: a failed subscription payment (`403 PAYMENT_PAST_DUE`) and the snapshot 404s (`boundary_unknown`, `before_tracking`) have their own text; other 403 and 404 texts say what was charged; an error body without a code no longer repeats its message prefix. Do not match on error wording.
+- Error texts changed: a failed subscription payment (`403 PAYMENT_PAST_DUE`) and the snapshot 404s (`boundary_unknown`, `before_tracking`) have their own text; other 403 and 404 texts say what was charged; an error body without a code no longer repeats its message prefix; a wait of more than an hour reads "more than an hour"; the `semantics` text of the version tools is reworded. Do not match on error wording.
 - Tool descriptions and the server instructions now tell the model, for today's law, to pass today's date as `asOf` on `lex_semantic_legislation` and to use only hits with `asOfResolved: true`; without asOf, acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked. Agents that follow this pass `asOf` on more searches; each such call can cost up to 15 more credits (at most 3 live version fetches × 5). The instructions also name the three workflow tools, which cost the sum of the calls they make.
 
 ### Added
 - **`lex_check_citation`** (read-only): whether a CELEX, EUR-Lex URL, ELI, ECLI or national id exists, its title and link, whether an article is in its text and whether the act is in force today; `"unknown"` means not checked, not absent.
-  Cost 1–11 credits: 1 to resolve a URL, ELI or ECLI, one read (1 / 4 / 5), a second read when the article is not matched; a national id costs 1.
+  At most 11 credits: 1 to resolve a URL, ELI or ECLI, one read (1 / 4 / 5), a second read when the article is not matched; a national id costs 1, or nothing when LexAPI does not list its country.
 - **`lex_act_history`** (read-only): the acts that amend, correct or repeal an EU act, with its status today; the list may be incomplete.
   Cost: 1 + the act's metadata (1 / 4 / 5) + the same per date read, up to 10 dates: at most 56.
 - **`lex_research`** (read-only): one query as semantic searches over EU legislation, EU case law and chosen live countries, merged; `sources` reports each search.
@@ -37,7 +37,7 @@ Four new tools (37 in all, 32 read-only); none removed or renamed. Released with
 - Snapshot fields: `lex_get_document_version` returns `kind`, `observedFrom`, `observedUntil` and, for a future date, `dateInFuture` and `warning`, and points to `lex_legislation_as_of` when the API names the in-force lookup; `lex_document_versions` returns `observedFrom`.
 
 ### Changed
-- Webhook `searchCriteria` on create and update accept what the API accepts: any 4-digit `year` (number or string), `domain` in any case, and `null` for any field (0.5.1 refused a `year` outside 1950–2100 and a lower-case `domain`).
+- Webhook `searchCriteria` on create and update accept what the API accepts: any 4-digit `year` (number or string), `domain` in any case, and `null` for any field (0.5.1 refused a `year` given as a string, alone or in a list, a `year` outside 1950–2100, a lower-case `domain` and `null`; a list of number years was accepted then too).
 - The citation tools and `lex_counterparts` accept national ids with letters outside ASCII and `:` or `+`; national ids and `lex_list_national_documents.q` typed with combining marks are sent composed (NFC).
 - CELEX and date patterns and the upper bound of whole-number parameters are no longer published in the schema; the same values are accepted and refused as before.
 - `lex_export` results on credit plans carry a `billing` line.

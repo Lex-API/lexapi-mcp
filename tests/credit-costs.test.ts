@@ -30,6 +30,8 @@ interface Expected {
   says: string[];
   /** Totals the description states, computed from the weights. */
   totals?: number[];
+  /** Text a parameter description must contain, built from the weights. */
+  paramSays?: string[];
 }
 // The bounds of the workflow tools, from the weights and their input limits.
 const MAX_DATES = 10;
@@ -59,9 +61,11 @@ const EXPECTED: Record<string, Expected> = {
     ops: ['semantic_legis', 'semantic_case_law'],
     says: [`Cost: ${credits(w.semantic_legis)} per search;`, `2 by default, at most ${MAX_SEARCHES} (${credits(MAX_SEARCHES * w.semantic_legis)})`],
     totals: [MAX_SEARCHES * w.semantic_legis, 2 * w.semantic_legis],
+    // One jurisdiction runs both kinds of search.
+    paramSays: [`each adds up to ${credits(2 * w.semantic_legis)}`],
   },
   lex_search: { ops: ['search_keyword'], says: [`Cost: ${credits(w.search_keyword)} per result page`] },
-  lex_recent_documents: { ops: ['recent_documents'], says: [`with a filter, ${credits(w.recent_documents)} per 10 results of limit (default 20 → ${RECENT_DEFAULT};`, `without filters, ${credits(w.recent_documents)} in all`] },
+  lex_recent_documents: { ops: ['recent_documents'], says: [`Cost: ${credits(w.recent_documents)} per 10 results of limit (default 20 → ${RECENT_DEFAULT}; clamped to the plan)`, `an unfiltered request is usually answered by one query for ${credits(w.recent_documents)}.`] },
   lex_resolve: { ops: ['resolve'], says: [`Cost: ${credits(w.resolve)}.`] },
   lex_get_document: { ops: ['document_fetch'], settles: true, says: [bySourceLong(w.document_fetch)] },
   lex_get_documents_batch: { ops: ['document_batch'], settles: true, says: [`(${bySource(w.document_batch)})`] },
@@ -149,6 +153,7 @@ describe('credit costs in descriptions match the API operation weights', () => {
       for (const text of [tool.description, ...params]) {
         for (const n of creditAmounts(text)) expect([...allowed], `"${text}"`).toContain(n);
       }
+      for (const phrase of e.paramSays ?? []) expect(params.join('\n')).toContain(phrase);
     });
   }
 });
@@ -205,13 +210,13 @@ describe('credit costs outside the descriptions match the weights too', () => {
     }
     const doc = `${fx.corpusHit} · ${fx.cellarHit} · ${w.document_fetch}`;
     expect(column).toEqual({
-      '`lex_check_citation`': `${fx.corpusHit}–${w.resolve + w.document_fetch} (+ a second read, ${fx.corpusHit}–${w.document_fetch}, when an article is not matched)`,
+      '`lex_check_citation`': `0–${w.resolve + w.document_fetch} (+ a second read, ${fx.corpusHit}–${w.document_fetch}, when an article is not matched; at most ${CHECK_MAX})`,
       '`lex_act_history`': `${HISTORY_MIN}–${HISTORY_NO_DATES} (+ ${fx.corpusHit}–${w.document_metadata} per date read, up to ${MAX_DATES} dates)`,
       '`lex_research`': `${w.semantic_legis} per search: ${2 * w.semantic_legis} by default, at most ${MAX_SEARCHES * w.semantic_legis}`,
       '`lex_semantic_legislation`': `${w.semantic_legis} (+ up to ${w.document_fetch} per version fetch with \`asOf\`)`,
       '`lex_semantic_case_law`': `${w.semantic_case_law} (${w.semantic_case_law_hyde} with \`hyde\`)`,
       '`lex_search`': `${w.search_keyword} per page`,
-      '`lex_recent_documents`': `${w.recent_documents} per 10 results (default 20 → ${RECENT_DEFAULT})`,
+      '`lex_recent_documents`': `${w.recent_documents} per 10 results (default 20 → ${RECENT_DEFAULT}); unfiltered usually ${w.recent_documents}`,
       '`lex_resolve`': `${w.resolve}`,
       '`lex_get_document`': `${fx.corpusHit} corpus · ${fx.cellarHit} Cellar · ${w.document_fetch} live`,
       '`lex_get_documents_batch`': 'per document, as above',

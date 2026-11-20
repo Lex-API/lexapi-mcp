@@ -494,7 +494,7 @@ export const tools: ToolDef[] = [
     scope: SCOPE_READ,
     title: 'Recently published EU documents',
     description:
-      'Documents published on EUR-Lex in the last N days (default 7), newest first, optionally filtered (e.g. what was published this week). Cost: with a filter, 3 credits per 10 results of limit (default 20 → 6; clamped to the plan); without filters, 3 credits in all.',
+      'Documents published on EUR-Lex in the last N days (default 7), newest first, optionally filtered (e.g. what was published this week). Cost: 3 credits per 10 results of limit (default 20 → 6; clamped to the plan); an unfiltered request is usually answered by one query for 3 credits.',
     inputSchema: {
       days: z.number().int().min(1).max(366).default(7).describe('Look-back window in days.'),
       documentType: z.enum(DOCUMENT_TYPES).optional().describe('Only this document type.'),

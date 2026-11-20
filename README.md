@@ -78,13 +78,13 @@ Five tools write (`lex_extract_citations`, which adds to LexAPI's shared citatio
 
 | Tool | What it does | Credits |
 |---|---|---|
-| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 1–6 (+ a second read, 1–5, when an article is not matched) |
+| `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 0–6 (+ a second read, 1–5, when an article is not matched; at most 11) |
 | `lex_act_history` | The acts that amend, correct or repeal an EU act, with its in-force status today. | 2–6 (+ 1–5 per date read, up to 10 dates) |
 | `lex_research` | One query over EU legislation, EU case law and the national law of chosen live countries. | 5 per search: 10 by default, at most 80 |
 | `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` gives each hit the version listed for a date. | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
 | `lex_search` | Structured EUR-Lex search: text, dates, type, author, procedure, collection. | 3 per page |
-| `lex_recent_documents` | What was published in the last N days. | 3 per 10 results (default 20 → 6) |
+| `lex_recent_documents` | What was published in the last N days. | 3 per 10 results (default 20 → 6); unfiltered usually 3 |
 | `lex_resolve` | URL / ELI / ECLI → CELEX. | 1 |
 | `lex_get_document` | A document by CELEX: an outline for large acts, then an article or selected parts. | 1 corpus · 4 Cellar · 5 live |
 | `lex_get_documents_batch` | Up to 50 documents at once (plan-capped). | per document, as above |

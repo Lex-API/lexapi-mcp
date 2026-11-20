@@ -1100,6 +1100,15 @@ export async function research(a: ResearchArgs, client: LexAPIClient): Promise<O
       // The allowance, the terms and the plan hold for the account, not for one country.
       if (s.code !== 'eu' && NATIONAL_STOPS.has(r.failure.reason)) nationalStopped ??= r.failure;
       Object.assign(s.report, r.notRun ? { status: 'not_run', reason: r.failure.reason, error: r.failure.error } : { status: 'failed', ...shown(r.failure) });
+      // A /{jurisdiction}/ route the API does not have is a country it does
+      // not serve, not a deployment without the endpoint: its own words.
+      const cause = r.failure.cause;
+      if (s.code !== 'eu' && !r.notRun && cause instanceof LexAPIError && routeMissing(cause)) {
+        Object.assign(s.report, {
+          error: `LexAPI error 404 (${cause.code}): ${cause.message.trim().replace(/[.\s]+$/, '')}`,
+          note: `LexAPI has no route for ${s.code.toUpperCase()}: the country may not be live (lex_national_coverage lists the live ones).`,
+        });
+      }
       return;
     }
     const b = r.res.body;
