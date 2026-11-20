@@ -96,7 +96,7 @@ describe('MCP protocol (in-memory)', () => {
     // each filter's values listed once, in its enum) and the title
     // `language` on the seven citation tools that take it: measured 55.4k.
     // v0.5.1 adds annotations.title to every tool: measured 57.4k.
-    // v0.5.2 describes every parameter, types the webhook update criteria
+    // v0.6.0 describes every parameter, types the webhook update criteria
     // and says what holds for several tools once, in the server
     // instructions; the tools that return attribution say it must be kept:
     // every webhook criteria field may be null, as in the API: measured 58.4k.
