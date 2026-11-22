@@ -137,12 +137,13 @@ describe('MCP protocol (in-memory)', () => {
     // Read-only mode lists fewer tools: measured 51.1k, 57.5k with the workflow tools,
     // 59.25k with lex_legislation_as_of, 60.22k with national asOf, 60.25k with the asOf wording;
     // 60.49k with the 0.6.0 release-review cost texts (2026-11-20; limit raised deliberately).
+    // 61.27k with destructiveHint: false stated on the 32 read-only tools; limit 61.8k.
     const roServer = createLexServer(new LexAPIClient({ apiKey: 'lex_good', baseUrl: apiUrl }), { readOnly: true });
     const [ra, rb] = InMemoryTransport.createLinkedPair();
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(61_000);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(61_800);
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);
