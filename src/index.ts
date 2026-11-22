@@ -17,7 +17,7 @@ if (!apiKey) {
 const readOnly = readOnlyFromEnv();
 let client;
 try {
-  client = clientFromEnv(apiKey);
+  client = clientFromEnv(apiKey, process.env, 'stdio');
 } catch (err) {
   // The message never contains the key (see LexAPIClient).
   console.error(`[${PACKAGE_NAME}] ${err instanceof Error ? err.message : 'invalid configuration'} (LEXAPI_API_KEY)`);

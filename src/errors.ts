@@ -5,12 +5,25 @@
 //   legacy: { error: "slug or sentence", message?, details?, retryAfter?, upgradeUrl?, usage? }
 //           — newer servers also send a top-level `code` (e.g. RATE_LIMITED,
 //           QUOTA_EXHAUSTED) and, on quota 429s, a top-level `resetsAt`.
+//           — the 403 PAYMENT_PAST_DUE body adds `billingUrl` and `accessEndedAt`.
 // We normalise both, then turn the status into a message that says what
 // happened AND what to do next — the model relays it to the user, so it has
 // to be actionable without the model knowing LexAPI's billing rules.
 
 const DASHBOARD_URL = 'https://lex-api.com/dashboard?ref=mcp';
 const PRICING_URL = 'https://lex-api.com/pricing?ref=mcp';
+
+/**
+ * What a 403 PAYMENT_PAST_DUE body says about the account, as received:
+ * strings of bounded length, not yet checked for what they hold.
+ * describeError shows a value only after checking it.
+ */
+export interface PastDueInfo {
+  billingUrl?: string;
+  accessEndedAt?: string;
+  /** Hostname of the API base URL the answer came from; `billingUrl` is shown only on this host. */
+  siteHost?: string;
+}
 
 export class LexAPIError extends Error {
   constructor(
@@ -23,6 +36,8 @@ export class LexAPIError extends Error {
     public readonly retryAfterSeconds?: number,
     /** When an exhausted legacy quota refills (`resetsAt`, else `usage.resetsAt`). */
     public readonly resetsAt?: string,
+    /** 403 PAYMENT_PAST_DUE only. */
+    public readonly pastDue?: PastDueInfo,
   ) {
     super(message);
     this.name = 'LexAPIError';
@@ -31,7 +46,13 @@ export class LexAPIError extends Error {
 
 /** Raised for network failures / timeouts before any HTTP status arrived. */
 export class LexAPITransportError extends Error {
-  constructor(message: string, public readonly timedOut: boolean, public readonly cancelled = false) {
+  constructor(
+    message: string,
+    public readonly timedOut: boolean,
+    public readonly cancelled = false,
+    /** The API answered with a redirect that is not followed: the same call is answered the same way. */
+    public readonly redirectRefused = false,
+  ) {
     super(message);
     this.name = 'LexAPITransportError';
   }
@@ -44,7 +65,7 @@ export class LexAPITransportError extends Error {
  * response is still uncommitted (src/oauth/upstream.ts); otherwise the
  * model sees describeError's text as a tool error.
  */
-export type UpstreamAuthKind = 'invalid_token' | 'config' | 'client_auth' | 'unavailable' | 'rate_limited' | 'upstream' | 'api_rejected';
+export type UpstreamAuthKind = 'invalid_token' | 'insufficient_scope' | 'config' | 'client_auth' | 'unavailable' | 'rate_limited' | 'upstream' | 'api_rejected';
 
 export class UpstreamAuthError extends Error {
   constructor(
@@ -53,17 +74,103 @@ export class UpstreamAuthError extends Error {
     /** Token-free reason. */
     public readonly description: string,
     public readonly retryAfterSeconds?: number,
+    /** `insufficient_scope` only: the scope the refused call needs. */
+    public readonly requiredScope?: 'lex:read' | 'lex:webhooks',
   ) {
     super(description);
     this.name = 'UpstreamAuthError';
   }
 }
 
+/** Code of the error a tool raises when the API has no such route: the deployment is older than the endpoint. */
+export const ENDPOINT_NOT_AVAILABLE = 'ENDPOINT_NOT_AVAILABLE';
+
+/** `error.details.reason` of the API's 404 for a route it does not have (LexAPI API 2.27.0 or later). */
+const UNKNOWN_ENDPOINT_REASON = 'unknown_endpoint';
+
+function hasUnknownEndpointReason(details: unknown): boolean {
+  return !!details && typeof details === 'object' && !Array.isArray(details)
+    && (details as Record<string, unknown>).reason === UNKNOWN_ENDPOINT_REASON;
+}
+
+/**
+ * Whether a 404 is about the route, not about a document. The API answers
+ * an unmatched route with the same code as an unknown document (NOT_FOUND)
+ * and marks it with `details.reason: "unknown_endpoint"`; no other 404
+ * carries that value. An API older than 2.27.0 sends no such field, so the
+ * message prefix is still accepted. A 404 without the typed code did not
+ * come from an endpoint either.
+ */
+export function isUnknownEndpoint(err: unknown): err is LexAPIError {
+  return err instanceof LexAPIError && err.status === 404
+    && (hasUnknownEndpointReason(err.details)
+      || err.code !== 'NOT_FOUND'
+      || /^Unknown API endpoint\b/i.test(err.message.trim()));
+}
+
+/**
+ * The API's own typed 404 for a route it does not have, by its mark alone.
+ * Narrower than isUnknownEndpoint: a 404 from a proxy or another server is
+ * not one.
+ */
+export function isMarkedUnknownEndpoint(err: unknown): err is LexAPIError {
+  return err instanceof LexAPIError && err.status === 404 && err.code === 'NOT_FOUND' && hasUnknownEndpointReason(err.details);
+}
+
+const MAX_BILLING_URL_LENGTH = 300;
+const MAX_TIMESTAMP_LENGTH = 40;
+
+/** A domain name: not an IP literal, and no punycode label. */
+function isPlainDomain(host: string): boolean {
+  return /^[a-z0-9.-]+$/.test(host) && !/^[0-9.]+$/.test(host) && !/(^|\.)xn--/.test(host);
+}
+
+/**
+ * An absolute https URL in printable ASCII, without credentials, on the
+ * host the API was called on (`siteHost`, a domain name); anything else is
+ * not shown.
+ */
+function billingLink(value: unknown, siteHost: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > MAX_BILLING_URL_LENGTH) return undefined;
+  if (!/^https:\/\/[!-~]+$/.test(value) || /[<>"'`\\()]/.test(value)) return undefined;
+  if (typeof siteHost !== 'string' || !isPlainDomain(siteHost)) return undefined;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' && !u.username && !u.password && u.hostname === siteHost ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A UTC instant as the API writes it (`2026-11-25T09:14:03.000Z`; the
+ * fraction may be shorter or absent) that names a real date and time;
+ * anything else is not shown.
+ */
+function isoInstant(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > MAX_TIMESTAMP_LENGTH) return undefined;
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,3}))?Z$/.exec(value);
+  if (!m) return undefined;
+  const normalised = `${m[1]}.${(m[2] ?? '').padEnd(3, '0')}Z`;
+  const t = Date.parse(normalised);
+  return !Number.isNaN(t) && new Date(t).toISOString() === normalised ? value : undefined;
+}
+
+/** `billingUrl` / `accessEndedAt` of one object, kept only as strings of bounded length. */
+function pastDueFields(o: unknown): PastDueInfo | undefined {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+  const r = o as Record<string, unknown>;
+  const out: PastDueInfo = {};
+  if (typeof r.billingUrl === 'string' && r.billingUrl.length <= MAX_BILLING_URL_LENGTH) out.billingUrl = r.billingUrl;
+  if (typeof r.accessEndedAt === 'string' && r.accessEndedAt.length <= MAX_TIMESTAMP_LENGTH) out.accessEndedAt = r.accessEndedAt;
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function parseErrorBody(
   json: unknown,
   rawText: string,
   status: number,
-): { code: string; message: string; details?: unknown; retryAfter?: number; resetsAt?: string } {
+): { code: string; message: string; details?: unknown; retryAfter?: number; resetsAt?: string; pastDue?: PastDueInfo } {
   const fallback = { code: `HTTP_${status}`, message: rawText.trim().slice(0, 300) || `HTTP ${status}` };
   if (!json || typeof json !== 'object' || Array.isArray(json)) return fallback;
   const j = json as Record<string, unknown>;
@@ -97,7 +204,9 @@ export function parseErrorBody(
   const e = j.error;
   if (e && typeof e === 'object' && !Array.isArray(e)) {
     const eo = e as Record<string, unknown>;
+    const pastDue = pastDueFields(j) ?? pastDueFields(eo.details);
     return {
+      ...(pastDue ? { pastDue } : {}),
       code: typeof eo.code === 'string' ? eo.code : (topCode ?? fallback.code),
       message:
         typeof eo.message === 'string' ? eo.message
@@ -111,7 +220,11 @@ export function parseErrorBody(
   // Legacy: `error` is a short sentence ("Invalid API key"), `message` the detail.
   const errStr = typeof e === 'string' ? e : undefined;
   const msg = typeof j.message === 'string' ? j.message : undefined;
+  // 403 PAYMENT_PAST_DUE: where the invoice is paid and when access ended,
+  // read at the top level whatever else the body carries.
+  const pastDue = pastDueFields(j);
   return {
+    ...(pastDue ? { pastDue } : {}),
     code: topCode ?? errStr ?? fallback.code,
     message: errStr && msg ? `${errStr}: ${msg}` : (msg ?? errStr ?? fallback.message),
     details: j.details ?? j.usage ?? jurisdictionFallback,
@@ -130,6 +243,50 @@ function detailsLine(details: unknown): string {
   return ` Details: ${String(details)}.`;
 }
 
+/** A wait in seconds as shown to a model: more than an hour is not spelt out. */
+function waitText(seconds: number): string {
+  return seconds > 3600 ? 'more than an hour' : `${seconds} s`;
+}
+
+/** The Retry-After of a 5xx, as a model reads it. */
+function namedWait(seconds: number): string {
+  return `The API names a wait of ${waitText(seconds)}; a retry before it has passed is likely to get the same error.`;
+}
+
+/** A 5xx other than the ones with their own text; a Retry-After the API sent is named. */
+function serverError(head: string, wait: number | undefined): string {
+  return wait !== undefined
+    ? `${head} LexAPI had a server error; server failures are refunded. ${namedWait(wait)} If it persists, status is at https://lex-api.com/status.`
+    : `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
+}
+
+/** Candidate versions listed in a boundary_unknown 404. */
+const MAX_CANDIDATES = 10;
+
+function boundaryUnknown(d: Record<string, unknown>): string {
+  const listed = Array.isArray(d.candidates) ? d.candidates : [];
+  const shown = listed
+    .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object' && !Array.isArray(c) && Number.isSafeInteger(c.version) && (c.version as number) >= 1)
+    .slice(0, MAX_CANDIDATES)
+    .map((c) => {
+      const from = isoInstant(c.observedFrom);
+      return `version ${c.version as number} (${from ? `observedFrom ${from}` : 'start not recorded'})`;
+    });
+  const more = d.candidatesTruncated === true || listed.length > shown.length;
+  const candidates = shown.length
+    ? ` Candidate versions (the stored snapshots it could be): ${shown.join('; ')}${more ? '; more exist, not listed' : ''}. lex_get_document_version reads each by its version number.`
+    : ' The API listed no candidate version; lex_document_versions lists the stored versions.';
+  return `LexAPI error 404 (NOT_FOUND, boundary_unknown): LexAPI holds this document, but cannot establish which stored snapshot LexAPI held on the requested date, so it returns none. This is not a "document not found" answer.${candidates} This call is refunded in full. Retrying will not help. These are LexAPI's fetch snapshots, not the law in force on a date.`;
+}
+
+function beforeTracking(d: Record<string, unknown>): string {
+  const since = isoInstant(d.trackedSince);
+  const lookup = d.inForceLookup && typeof d.inForceLookup === 'object'
+    ? ' For the version of the EU act for a date, lex_legislation_as_of answers.'
+    : '';
+  return `LexAPI error 404 (NOT_FOUND, before_tracking): LexAPI's history of this document starts ${since ? `at ${since}` : 'after the requested date'}; it holds no snapshot from before then. The document itself is held: lex_document_versions lists its snapshots.${lookup} These snapshots are LexAPI's fetch history, not the law in force on a date. This answer costs 1 credit.`;
+}
+
 /**
  * The tool-result text for a failed call. Never includes the API key: the
  * key only travels in a request header and is never part of any message.
@@ -137,6 +294,9 @@ function detailsLine(details: unknown): string {
 export function describeError(err: unknown): string {
   if (err instanceof LexAPITransportError) {
     if (err.cancelled) return 'Cancelled: the client cancelled this request before LexAPI answered.';
+    if (err.redirectRefused) {
+      return `Redirect not followed: ${err.message}. The same call is answered the same way, so it is not retryable. Where this server is run with LEXAPI_BASE_URL set, that value must be the API's own address (default https://lex-api.com/api/v1).`;
+    }
     return err.timedOut
       ? `LexAPI did not answer in time (${err.message}). Live EUR-Lex fetches can take longer than an MCP client waits; the call is safe to retry once, and a repeat may be served from the LexAPI corpus. If it keeps timing out, narrow the request (fewer pages, a smaller limit) or raise the client's tool timeout (Claude Code: MCP_TOOL_TIMEOUT) and LEXAPI_TIMEOUT_MS.`
       : `Could not reach LexAPI (${err.message}). Check network access to lex-api.com (or LEXAPI_BASE_URL) and retry.`;
@@ -145,6 +305,8 @@ export function describeError(err: unknown): string {
     switch (err.kind) {
       case 'invalid_token':
         return `LexAPI sign-in expired or was revoked (${err.description}). Reconnecting LexAPI in the MCP client (signing in again) restores access; retrying with the same sign-in does not.`;
+      case 'insufficient_scope':
+        return `This LexAPI connection is not permitted to do this (${err.description}). Reconnecting LexAPI in the MCP client and allowing that access adds it; retrying with the same sign-in does not.`;
       case 'rate_limited':
         return `LexAPI sign-in is rate limited right now.${err.retryAfterSeconds !== undefined ? ` Wait ${err.retryAfterSeconds} s before calling again.` : ' Wait a little before calling again.'}`;
       case 'upstream':
@@ -160,7 +322,12 @@ export function describeError(err: unknown): string {
     return `Tool execution failed: ${message}`;
   }
 
-  const head = `LexAPI error ${err.status} (${err.code}): ${err.message.trim().replace(/[.\s]+$/, '')}.`;
+  // A legacy body without a code repeats its `error` slug as the code
+  // ("Upgrade required: Upgrade required: …"): it is printed once.
+  let shownMessage = err.message.trim().replace(/[.\s]+$/, '');
+  while (shownMessage.startsWith(`${err.code}: `)) shownMessage = shownMessage.slice(err.code.length + 2).trim();
+  if (shownMessage === err.code) shownMessage = '';
+  const head = shownMessage ? `LexAPI error ${err.status} (${err.code}): ${shownMessage}.` : `LexAPI error ${err.status} (${err.code}).`;
   const d = (err.details && typeof err.details === 'object' && !Array.isArray(err.details))
     ? err.details as Record<string, unknown>
     : undefined;
@@ -195,8 +362,21 @@ export function describeError(err: unknown): string {
         const url = d && typeof d.acceptUrl === 'string' ? ` (${d.acceptUrl})` : '';
         return `${head} The account must accept the national-source terms once in the LexAPI dashboard${url} before national documents are served; retrying before that does not help. Nothing was charged.`;
       }
-      return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). Plans are compared at ${PRICING_URL}.`;
+      // A failed subscription payment that was not completed in time: every
+      // request is refused until it succeeds. Not a plan question, so no
+      // pricing pointer; the API's own sentence is not repeated.
+      if (err.code === 'PAYMENT_PAST_DUE') {
+        const ended = isoInstant(err.pastDue?.accessEndedAt);
+        const billing = billingLink(err.pastDue?.billingUrl, err.pastDue?.siteHost);
+        return `LexAPI error 403 (PAYMENT_PAST_DUE): Payment past due. A subscription payment for this account failed, so LexAPI refuses every API request from it until the payment succeeds${ended ? ` (access ended at ${ended})` : ''}; no LexAPI content was returned. Access returns when the open invoice is paid: the account holder pays it, or updates the card, in the LexAPI dashboard (${billing ?? DASHBOARD_URL}). Not retryable until then, with this or any other LexAPI tool; no credits were charged for this call.`;
+      }
+      return `${head} The account's plan or subscription does not allow this call (not a temporary error; not retryable). No credits were charged. Plans are compared at ${PRICING_URL}.`;
     case 404: {
+      if (err.code === ENDPOINT_NOT_AVAILABLE) return `${head} The same call is answered the same way until the API is updated, so it is not retryable.`;
+      // The snapshot-on-a-date route (LexAPI API 2.28.0): the document is
+      // held, but no snapshot answers the date. Not a missing document.
+      if (err.code === 'NOT_FOUND' && d?.reason === 'boundary_unknown') return boundaryUnknown(d);
+      if (err.code === 'NOT_FOUND' && d?.reason === 'before_tracking') return beforeTracking(d);
       // National 404s take three shapes, none of which point at lex_resolve
       // or lex_search (both EU-only): the typed document-id miss (`details:
       // {id, jurisdiction}`, via the jurisdiction fallback above), the
@@ -207,19 +387,18 @@ export function describeError(err: unknown): string {
       // matched, which for a country code can only mean it is unlaunched).
       const isNational = (d && typeof d.jurisdiction === 'string')
         || /^Document not found:/i.test(err.message)
-        || /Unknown API endpoint/i.test(err.message);
+        || /Unknown API endpoint/i.test(err.message)
+        || hasUnknownEndpointReason(d);
       if (isNational) {
-        // "Unknown API endpoint" is the generic 404 for ANY unmatched route,
-        // not only an unlaunched country — these tools only ever build
-        // known routes, so that's the near-certain cause here, but the
-        // hedge keeps the message honest if that ever changes.
-        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents) — or the route itself is wrong.`;
+        // "Unknown API endpoint" is the generic 404 for any unmatched route;
+        // these tools only build known routes, so it is read as a country
+        // that is not live (or a wrong id).
+        return `${head} Not retryable as-is. Likely either the country is not live yet (call lex_national_coverage to check) or the id is wrong (call lex_list_national_documents). A not-found answer costs at most 1 credit.`;
       }
-      return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title).`;
+      return `${head} Not retryable as-is. Check the identifier (lex_resolve turns URLs, ELIs and ECLIs into CELEX numbers; lex_search finds documents by title). A not-found answer costs at most 1 credit.`;
     }
     case 409:
-      // National semantic search not yet enabled for a live country
-      // (nationalSemanticController.js unavailableError): a different
+      // National semantic search not yet enabled for a live country: a different
       // country, not account state — do not say "tell the user to retry
       // their account", point at the right tools instead.
       if (err.code === 'NATIONAL_SEMANTIC_NOT_ENABLED') {
@@ -236,7 +415,7 @@ export function describeError(err: unknown): string {
         if (d && d.partialReason === 'SEARCH_INCOMPLETE') {
           const wait = err.retryAfterSeconds;
           return wait !== undefined
-            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry in ${wait} s.`
+            ? `${head} ${jur}'s national semantic index could not complete this search and had nothing to return — this is NOT a "no matches" answer; nothing was charged. Retry after ${waitText(wait)}.`
             : `${head} ${jur}'s national semantic index has repeatedly been unable to complete this search — this is NOT a "no matches" answer; nothing was charged. An immediate retry is unlikely to help; try again later, or rephrase or narrow the query.`;
         }
         return `${head} ${jur}'s national semantic index is temporarily unavailable; nothing was charged. Retry later, with backoff.`;
@@ -245,7 +424,7 @@ export function describeError(err: unknown): string {
       if (err.code === 'TIMEOUT') {
         return `${head} The lookup ran out of its server-side time budget; nothing was charged. Narrow it with jurisdictions, or retry later.`;
       }
-      return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
+      return serverError(head, err.retryAfterSeconds);
     case 422:
       // The national index cannot search this slice completely and had
       // nothing left to return; the same request gets the same answer.
@@ -270,7 +449,7 @@ export function describeError(err: unknown): string {
             : 'a usage quota of this plan';
         return `${head} This is ${which}, not a per-minute limit: it is exhausted${resetsAt ? ` until ${resetsAt}` : ''} — not retryable until then. Moving to a credit plan (${PRICING_URL}) removes the quota.`;
       }
-      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${wait} s before calling again.` : ' Wait about a minute before calling again.'} Parallel calls count against the same limit; a higher plan raises the per-minute limit (${PRICING_URL}).`;
+      return `${head} Per-minute rate limit of the API key reached.${wait !== undefined ? ` Wait ${waitText(wait)} before calling again.` : ' Wait about a minute before calling again.'} Parallel calls count against the same limit; a higher plan raises the per-minute limit (${PRICING_URL}).`;
     }
     case 410: {
       // A national document its source withdrew — a
@@ -291,13 +470,13 @@ export function describeError(err: unknown): string {
       return `${head} Gone. Not retryable; nothing was charged.`;
     }
     case 502:
-      return `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;
+      return err.retryAfterSeconds !== undefined
+        ? `${head} An upstream service (EUR-Lex or the semantic index) returned an error; failed calls are refunded. ${namedWait(err.retryAfterSeconds)}`
+        : `${head} An upstream service (EUR-Lex or the semantic index) returned an error. Retry later; failed calls are refunded.`;
     case 504:
       return `${head} The upstream fetch timed out. Retry-safe — retry once, or narrow the request (fewer pages, a smaller limit). Failed searches are refunded.`;
     default:
-      if (err.status >= 500) {
-        return `${head} LexAPI had a server error; server failures are refunded. Retry once; if it persists, status is at https://lex-api.com/status.`;
-      }
+      if (err.status >= 500) return serverError(head, err.retryAfterSeconds);
       return `${head}${detailsLine(err.details)}`;
   }
 }

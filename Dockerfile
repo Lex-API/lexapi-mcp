@@ -1,5 +1,5 @@
 # Multi-stage build for the hosted HTTP transport.
-# Exposes port 3000; health check on /health. See README "Hosting the HTTP server".
+# Exposes port 3000; health check on /health. See README "Configuration" (`npm run start:http`).
 
 FROM node:22-alpine AS builder
 WORKDIR /app

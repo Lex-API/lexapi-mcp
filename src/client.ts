@@ -1,3 +1,4 @@
+import { CLIENT_HEADER, clientHeaderValue, type ClientApp, type ClientMode } from './clientHeader.js';
 import { LexAPIError, LexAPITransportError, parseErrorBody } from './errors.js';
 import { PACKAGE_VERSION } from './version.js';
 
@@ -31,6 +32,10 @@ const MAX_RETRY_AFTER_SLEEP_S = 10;
  * complete needs a full attempt, not the minimum one.
  */
 const MIN_INCOMPLETE_RETRY_REMAINING_MS = 15_000;
+
+/** Redirects followed for one attempt; one more is an error. */
+const MAX_REDIRECTS = 5;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /** Response headers worth surfacing to a model; everything else is dropped. */
 const KEPT_HEADERS = [
@@ -74,6 +79,8 @@ export interface UpstreamAuth {
    * fresh headers, an Error to fail with it, or undefined for the normal 401.
    */
   onUnauthorized?(info: { wwwAuthenticate: string | null; body: string }): Promise<'retry' | Error | undefined> | 'retry' | Error | undefined;
+  /** The API answered 403. Return an Error to fail with it, or undefined for the normal 403. */
+  onForbidden?(info: { wwwAuthenticate: string | null; path: string }): Error | undefined;
 }
 
 export interface LexAPIClientOptions {
@@ -93,6 +100,12 @@ export interface LexAPIClientOptions {
   signal?: AbortSignal;
   /** Injected for tests (the per-call deadline clock). */
   now?: () => number;
+  /** How the server is run; sent in the X-LexAPI-Client header. */
+  mode?: ClientMode;
+  /** The MCP tool these requests are made for; sent in the X-LexAPI-Client header. */
+  tool?: string;
+  /** The MCP client's clientInfo; sent in the X-LexAPI-Client header in stdio mode only. */
+  app?: ClientApp;
 }
 
 /** No retry or 429 sleep is started unless at least this much of the call's deadline would remain. */
@@ -117,6 +130,8 @@ function apiKeyAuth(key: string): UpstreamAuth {
 export class LexAPIClient {
   private readonly auth: UpstreamAuth;
   private readonly baseUrl: string;
+  /** The only origin requests and credentials are sent to; undefined when the base URL is not a URL. */
+  private readonly baseOrigin: URL | undefined;
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
@@ -124,6 +139,8 @@ export class LexAPIClient {
   private readonly signal?: AbortSignal;
   private readonly now: () => number;
   private readonly opts: LexAPIClientOptions;
+  /** Fixed for the lifetime of this client: one tool call has its own client (forCall). */
+  private readonly clientHeader: string | undefined;
 
   constructor(opts: LexAPIClientOptions) {
     if (opts.auth) {
@@ -139,18 +156,28 @@ export class LexAPIClient {
     this.signal = opts.signal;
     this.now = opts.now ?? Date.now;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    try { this.baseOrigin = new URL(this.baseUrl); } catch { this.baseOrigin = undefined; }
     this.maxRetries = opts.maxRetries ?? 1;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.fetchImpl = opts.fetch ?? fetch;
-    this.sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    // The default sleep ends early when the call is cancelled; the loop then
+    // reports the cancellation before any further request.
+    this.sleep = opts.sleep ?? ((ms) => abortableSleep(ms, this.signal));
+    this.clientHeader = clientHeaderValue({ mode: opts.mode, tool: opts.tool, app: opts.app });
   }
 
-  /** A client for one MCP request: its cancellation signal and timeout. */
-  forCall(call: { signal?: AbortSignal; timeoutMs?: number }): LexAPIClient {
+  /**
+   * A client for one MCP request: its cancellation signal and timeout, the
+   * tool it executes and the MCP client that asked. A client made from this
+   * one (a workflow tool's calls) keeps the tool and the MCP client.
+   */
+  forCall(call: { signal?: AbortSignal; timeoutMs?: number; tool?: string; app?: ClientApp }): LexAPIClient {
     return new LexAPIClient({
       ...this.opts,
       ...(call.signal ? { signal: call.signal } : {}),
       ...(call.timeoutMs ? { timeoutMs: call.timeoutMs } : {}),
+      ...(call.tool ? { tool: call.tool } : {}),
+      ...(call.app ? { app: call.app } : {}),
     });
   }
 
@@ -166,6 +193,76 @@ export class LexAPIClient {
       if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
       throw err;
     });
+  }
+
+  /** A redirect target is followed only on the API's own origin, or on its host when http is upgraded to https. */
+  private sameApi(target: URL): boolean {
+    const base = this.baseOrigin;
+    if (!base) return false;
+    if (target.origin === base.origin) return true;
+    return base.protocol === 'http:' && target.protocol === 'https:' && target.hostname === base.hostname
+      && base.port === '' && target.port === '';
+  }
+
+  /**
+   * One attempt: the request and the redirects it is answered with. Redirects
+   * are handled here, not by fetch, which would send the API key to whatever
+   * host a redirect names. One to another host, to a target that is not http
+   * or https, or to one that carries a user name or password is not followed:
+   * no request is made to it, and the error names its origin or scheme only.
+   */
+  private async send(
+    url: URL,
+    method: string,
+    headers: Record<string, string>,
+    body: string | undefined,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    let target = url;
+    let sentMethod = method;
+    let sentHeaders = headers;
+    let sentBody = body;
+    for (let followed = 0; ; followed++) {
+      const res = await this.fetchImpl(target, {
+        method: sentMethod,
+        headers: sentHeaders,
+        ...(sentBody !== undefined ? { body: sentBody } : {}),
+        signal,
+        redirect: 'manual',
+      });
+      const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
+      if (!location) return res;
+      await discard(res);
+      const refused = (what: string) => new LexAPITransportError(`the API answered with ${what}`, false, false, true);
+      let next: URL;
+      try {
+        next = new URL(location, target);
+      } catch {
+        throw refused('a redirect that has no usable target');
+      }
+      // Only the scheme is named: the rest of such a target is not an address.
+      if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+        throw refused(`a redirect to a target that is not http or https (${next.protocol.replace(/[^a-z0-9+.:-]/gi, '').slice(0, 32)}), which is not followed`);
+      }
+      if (!this.sameApi(next)) {
+        throw refused(`a redirect to another host (${next.origin}), which is not followed`);
+      }
+      // fetch refuses a URL with a user name or password, on every attempt.
+      if (next.username || next.password) {
+        throw refused(`a redirect whose target carries a user name or password (${next.origin}), which is not followed`);
+      }
+      if (followed >= MAX_REDIRECTS) {
+        throw refused(`more than ${MAX_REDIRECTS} redirects in a row`);
+      }
+      // 303 turns anything but GET into a GET; 301 and 302 do so for POST
+      // (as fetch does); 307 and 308 repeat the request as it was.
+      if ((res.status === 303 && sentMethod !== 'GET') || ((res.status === 301 || res.status === 302) && sentMethod === 'POST')) {
+        sentMethod = 'GET';
+        sentBody = undefined;
+        sentHeaders = Object.fromEntries(Object.entries(sentHeaders).filter(([k]) => k !== 'content-type'));
+      }
+      target = next;
+    }
   }
 
   /** Low-level request. Throws LexAPIError (HTTP error) or LexAPITransportError. */
@@ -188,6 +285,7 @@ export class LexAPIClient {
       accept: opts.ndjson ? 'application/x-ndjson, application/json' : 'application/json',
       'user-agent': `lexapi-mcp/${PACKAGE_VERSION}`,
     };
+    if (this.clientHeader) baseHeaders[CLIENT_HEADER] = this.clientHeader;
     if (opts.body !== undefined) baseHeaders['content-type'] = 'application/json';
 
     const canRetry = opts.retry !== false;
@@ -214,15 +312,12 @@ export class LexAPIClient {
       let res: Response;
       const attemptSignal = combineSignals(this.signal, AbortSignal.timeout(Math.max(1, remaining())));
       try {
-        res = await this.fetchImpl(url, {
-          method,
-          headers,
-          ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
-          signal: attemptSignal.signal,
-        });
+        res = await this.send(url, method, headers, opts.body !== undefined ? JSON.stringify(opts.body) : undefined, attemptSignal.signal);
       } catch (err) {
         attemptSignal.dispose();
         if (this.signal?.aborted) throw new LexAPITransportError('the request was cancelled by the client', false, true);
+        // A refused redirect: the same request would be answered the same way.
+        if (err instanceof LexAPITransportError) throw err;
         const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
         const backoff = 500 * 2 ** (attempt + 1);
         if (!timedOut && canRetry && attempt < this.maxRetries && canWait(backoff)) {
@@ -260,10 +355,18 @@ export class LexAPIClient {
           throw verdict;
         }
       }
+      if (res.status === 403 && this.auth.onForbidden) {
+        const verdict = this.auth.onForbidden({ wwwAuthenticate: res.headers.get('www-authenticate'), path });
+        if (verdict) {
+          attemptSignal.dispose();
+          await discard(res);
+          throw verdict;
+        }
+      }
       // A used-up legacy quota (QUOTA_EXHAUSTED) cannot succeed
       // before it refills, whatever its Retry-After says: never retried.
       if (res.status === 429 && canRetry && attempt < this.maxRetries && !(await isQuotaExhausted(res))) {
-        const wait = retryAfterSeconds(res);
+        const wait = retryAfterSeconds(res, this.now());
         const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
         if (wait !== undefined && wait <= MAX_RETRY_AFTER_SLEEP_S && canWait(waitMs)) {
           attemptSignal.dispose();
@@ -280,7 +383,7 @@ export class LexAPIClient {
       // search has repeatedly come back incomplete, so it is not retried.
       const incomplete = res.status === 503 ? await incompleteSearch(res) : undefined;
       if (incomplete) {
-        const wait = retryAfterSeconds(res) ?? incomplete.retryAfter;
+        const wait = retryAfterSeconds(res, this.now()) ?? incomplete.retryAfter;
         const waitMs = wait === undefined ? Infinity : Math.max(1, wait) * 1000;
         if (canRetry && !incompleteRetried && attempt < this.maxRetries && wait !== undefined
           && wait <= MAX_RETRY_AFTER_SLEEP_S && remaining() - waitMs >= MIN_INCOMPLETE_RETRY_REMAINING_MS) {
@@ -296,13 +399,22 @@ export class LexAPIClient {
         // 504 is NOT retried: it already means a 90 s upstream budget ran out.
         // Nor is a 503 TIMEOUT: a server-side time budget ran out, and the
         // same request would run out of it again.
+        // A Retry-After on these (a document 502 names the cooldown before
+        // LexAPI asks the source again; an earlier retry gets the same 502)
+        // replaces the backoff. A wait longer than MAX_RETRY_AFTER_SLEEP_S,
+        // or one that would leave too little of the deadline, is not slept
+        // on: the error is returned with the wait in it.
+        const transient = res.status === 500 || res.status === 502 || res.status === 503;
+        const named = transient ? retryAfterSeconds(res, this.now()) : undefined;
         const backoff = 500 * 2 ** (attempt + 1);
-        if ((res.status === 500 || res.status === 502 || res.status === 503) && canRetry && attempt < this.maxRetries && canWait(backoff)
-          && !(res.status === 503 && await isServerTimeout(res))) {
+        // Never shorter than the backoff (Retry-After: 0 included).
+        const waitMs = named === undefined ? backoff : Math.max(backoff, named * 1000);
+        if (transient && canRetry && attempt < this.maxRetries && (named === undefined || named <= MAX_RETRY_AFTER_SLEEP_S)
+          && canWait(waitMs) && !(res.status === 503 && await isServerTimeout(res))) {
           attemptSignal.dispose();
           await discard(res);
           attempt++;
-          await this.sleep(backoff);
+          await this.sleep(waitMs);
           continue;
         }
       }
@@ -332,8 +444,9 @@ export class LexAPIClient {
           parsed.message,
           parsed.details,
           // A quota 429 has no meaningful retry-after.
-          quota ? undefined : (retryAfterSeconds(res) ?? parsed.retryAfter),
+          quota ? undefined : (retryAfterSeconds(res, this.now()) ?? parsed.retryAfter),
           parsed.resetsAt,
+          parsed.pastDue && { ...parsed.pastDue, siteHost: this.baseOrigin?.hostname },
         );
       }
 
@@ -363,6 +476,7 @@ export class LexAPIClient {
   getDocumentByUrl(body: Json) { return this.request('POST', '/documents/url', { body }); }
   recentDocuments(query: Query) { return this.request('GET', '/documents/recent', { query }); }
   resolve(body: Json) { return this.request('POST', '/resolve', { body }); }
+  legislationAsOf(body: Json) { return this.request('POST', '/legislation/as-of', { body }); }
 
   // ── Version history (observation snapshots) ──────────────────────
   listVersions(celex: string, query: Query) {
@@ -519,14 +633,35 @@ async function isServerTimeout(res: Response): Promise<boolean> {
   }
 }
 
-function retryAfterSeconds(res: Response): number | undefined {
-  const raw = res.headers.get('retry-after');
+/** Retry-After: whole seconds, or an IMF-fixdate HTTP-date (RFC 9110). */
+const RETRY_AFTER_SECONDS_RE = /^\d{1,10}$/;
+const HTTP_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/**
+ * Seconds to wait from a Retry-After header: a non-negative whole number of
+ * seconds, or an HTTP-date measured against `now`. Any other value is ignored.
+ */
+export function retryAfterSeconds(res: Response, now: number): number | undefined {
+  const raw = res.headers.get('retry-after')?.trim();
   if (!raw) return undefined;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n >= 0) return Math.ceil(n);
+  if (RETRY_AFTER_SECONDS_RE.test(raw)) return Number(raw);
+  if (!HTTP_DATE_RE.test(raw)) return undefined;
   const date = Date.parse(raw);
-  if (!Number.isNaN(date)) return Math.max(0, Math.ceil((date - Date.now()) / 1000));
-  return undefined;
+  return Number.isNaN(date) ? undefined : Math.max(0, Math.ceil((date - now) / 1000));
+}
+
+/** A sleep that resolves early when `signal` aborts. */
+function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 function safeJson(text: string): unknown {
