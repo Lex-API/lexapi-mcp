@@ -5,7 +5,11 @@ All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.or
 ## 0.6.1 — unreleased
 
 ### Added
-- Hosted server: with `LEXAPI_MCP_OPENAI_CHALLENGE` set, `GET` / `HEAD /.well-known/openai-apps-challenge` returns that value as plain text (OpenAI domain verification); unset or empty, the path is a 404 as before.
+- Hosted server: with `LEXAPI_MCP_OPENAI_CHALLENGE` set, `GET` / `HEAD /.well-known/openai-apps-challenge` returns that value as plain text (OpenAI domain verification); unset or empty, the path is not served.
+
+### Changed
+- The 32 read-only tools state `destructiveHint: false` (it was left unset), so every tool carries `readOnlyHint`, `destructiveHint` and `openWorldHint` as booleans.
+- `lex_test_webhook` is marked destructive (it sends a request that cannot be recalled); the `secret` argument of `lex_create_webhook` says to leave it out unless the user supplied one.
 
 ## 0.6.0 — 2026-11-22
 
