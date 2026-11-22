@@ -75,7 +75,9 @@ describe('tool catalogue', () => {
     for (const t of tools) {
       expect(t.title, t.name).toBeTruthy();
       expect(t.name.length, t.name).toBeLessThanOrEqual(64);
-      if (!t.annotations.readOnlyHint) expect(typeof t.annotations.destructiveHint, t.name).toBe('boolean');
+      expect(typeof t.annotations.destructiveHint, t.name).toBe('boolean');
+      // A read-only tool is never destructive.
+      if (t.annotations.readOnlyHint) expect(t.annotations.destructiveHint, t.name).toBe(false);
     }
   });
 
