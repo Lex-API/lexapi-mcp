@@ -2,7 +2,7 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
-## 0.6.1 — unreleased
+## 0.6.1 — 2026-11-22
 
 ### Added
 - Hosted server: with `LEXAPI_MCP_OPENAI_CHALLENGE` set, `GET` / `HEAD /.well-known/openai-apps-challenge` returns that value as plain text (OpenAI domain verification); unset or empty, the path is not served.

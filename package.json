@@ -1,6 +1,6 @@
 {
   "name": "@lexapi/mcp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "mcpName": "io.github.Lex-API/lexapi-mcp",
   "description": "Model Context Protocol server for LexAPI — EU and national law for AI assistants: EUR-Lex legislation parsed to article level, CJEU case law, member-state legislation and case law (in the countries that are live), the typed citation graph and semantic search. For Claude, Cursor and other MCP clients.",
   "type": "module",
