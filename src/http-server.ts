@@ -216,6 +216,9 @@ function isOperator(req: IncomingMessage, token: string | undefined): boolean {
 
 export const MIN_HEALTH_TOKEN_LENGTH = 32;
 
+/** Where OpenAI's plugin portal reads the domain-verification token (LEXAPI_MCP_OPENAI_CHALLENGE). */
+export const OPENAI_CHALLENGE_PATH = '/.well-known/openai-apps-challenge';
+
 function methodNotAllowed(res: ServerResponse): void {
   jsonRpcError(res, 405, -32000, 'Method not allowed: this server is stateless; send JSON-RPC requests with POST.', { Allow: 'POST, OPTIONS' });
 }
@@ -618,10 +621,23 @@ export function createHttpServer(opts: HttpServerOptions = {}): HttpServer & { o
     ? new Set([`/.well-known/oauth-protected-resource${cfg.resourcePath}`, '/.well-known/oauth-protected-resource'])
     : new Set<string>();
   const mcpPath = cfg ? cfg.resourcePath : MCP_PATH;
+  const openaiChallenge = (env.LEXAPI_MCP_OPENAI_CHALLENGE ?? '').trim();
 
   const server = createServer(async (req, res) => {
     try {
       const path = (req.url ?? '/').split('?')[0];
+
+      // OpenAI domain verification: the token alone, as plain text. Not
+      // served (404 below) while the variable is unset or empty.
+      if (openaiChallenge && path === OPENAI_CHALLENGE_PATH && (req.method === 'GET' || req.method === 'HEAD')) {
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Content-Length': Buffer.byteLength(openaiChallenge),
+        });
+        res.end(req.method === 'HEAD' ? undefined : openaiChallenge);
+        return;
+      }
 
       // Protected Resource Metadata is public and must be readable by
       // browser-based clients from any origin: served before the Origin check.

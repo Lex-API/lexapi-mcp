@@ -75,7 +75,9 @@ describe('tool catalogue', () => {
     for (const t of tools) {
       expect(t.title, t.name).toBeTruthy();
       expect(t.name.length, t.name).toBeLessThanOrEqual(64);
-      if (!t.annotations.readOnlyHint) expect(typeof t.annotations.destructiveHint, t.name).toBe('boolean');
+      expect(typeof t.annotations.destructiveHint, t.name).toBe('boolean');
+      // A read-only tool is never destructive.
+      if (t.annotations.readOnlyHint) expect(t.annotations.destructiveHint, t.name).toBe(false);
     }
   });
 
@@ -107,10 +109,10 @@ describe('input validation', () => {
     expect(asOf).toMatch(/Omitted: the indexed texts/);
     // asOf = today is not "current law": consolidated texts are not authentic and some hits stay unresolved.
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
-    const unreleased = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/^## /m)[1];
+    const release = readFileSync(join(root, 'CHANGELOG.md'), 'utf8').split(/^## /m).find((s) => s.startsWith('0.6.0 ')) ?? '';
     expect(readme).toMatch(/since-amended or repealed provisions are not marked/);
-    expect(unreleased).toMatch(/acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked/);
-    for (const text of [tool.description, asOf, SERVER_INSTRUCTIONS, readme, unreleased]) {
+    expect(release).toMatch(/acts no longer in force are marked inForce: false where their status is known; since-amended or repealed provisions are not marked/);
+    for (const text of [tool.description, asOf, SERVER_INSTRUCTIONS, readme, release]) {
       expect(text).not.toMatch(/current law/i);
       expect(text).not.toMatch(/repealed or amended/);
     }

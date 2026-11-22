@@ -262,7 +262,8 @@ export function normCelex(v: string): string {
 // ── Tool plumbing ─────────────────────────────────────────────────────
 export interface ToolAnnotations {
   readOnlyHint: boolean;
-  destructiveHint?: boolean;
+  /** Always stated, also on read-only tools (false): some hosts require the three hints to be explicit. */
+  destructiveHint: boolean;
   idempotentHint?: boolean;
   openWorldHint: boolean;
 }
@@ -290,7 +291,7 @@ export interface ToolDef {
   handler: (args: any, client: LexAPIClient) => Promise<unknown>;
 }
 
-const READ: ToolAnnotations = { readOnlyHint: true, idempotentHint: true, openWorldHint: true };
+const READ: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
 /**
  * For `.catch()`: a 402 on a call that reserves more credits than it costs
@@ -1364,7 +1365,7 @@ export const tools: ToolDef[] = [
       url: webhookUrl('Must be a public https URL (port 443 or 8443, a public domain name or address); it receives the POSTs.'),
       searchCriteria: webhookCriteria(true).optional().describe('Filters for documents.new, in the lex_search vocabulary.'),
       watchCelex: z.array(celex('Base-act CELEX')).max(5000).optional().describe('Base acts to watch (not consolidated versions or corrigenda).'),
-      secret: z.string().min(16).max(256).optional().describe('Own signing secret; generated when omitted.'),
+      secret: z.string().min(16).max(256).optional().describe('Leave out: LexAPI generates the signing secret. Pass a value only when the user has supplied one unprompted; do not ask for one or make one up.'),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     write: true,
@@ -1429,9 +1430,9 @@ export const tools: ToolDef[] = [
     name: 'lex_test_webhook',
     scope: SCOPE_WEBHOOKS,
     title: 'Send a test delivery',
-    description: 'POST a signed webhook.test payload to the webhook URL now and report the endpoint\'s response, showing whether the endpoint is reachable and whether it accepts the signed payload. Free.',
+    description: 'Sends one signed webhook.test POST to the webhook\'s URL now; a request that was sent cannot be recalled. Reports the endpoint\'s response, showing whether the endpoint is reachable and whether it accepts the signed payload. Free.',
     inputSchema: { id: webhookId },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     write: true,
     handler: async (a, client) => {
       const res = await client.testWebhook(a.id);
