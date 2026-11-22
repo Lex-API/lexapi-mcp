@@ -84,6 +84,7 @@ describe('MCP protocol (in-memory)', () => {
     }
     expect(listed.find((t) => t.name === 'lex_update_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     expect(listed.find((t) => t.name === 'lex_delete_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(listed.find((t) => t.name === 'lex_test_webhook')!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
 
     // N10: tools/list stays compact (v0.3.0 first cut was ~39.6k characters).
     const listJson = JSON.stringify(listed);
@@ -114,6 +115,8 @@ describe('MCP protocol (in-memory)', () => {
     // measured 67.81k after trimming the repeated cost texts. Limit raised
     // deliberately to 68.3k. destructiveHint: false stated on the 32
     // read-only tools (24 characters each): measured 68.60k; limit 69.1k.
+    // lex_test_webhook says its request cannot be recalled and the secret
+    // argument of lex_create_webhook says to leave it out: measured 68.74k.
     expect(listJson.length).toBeLessThan(69_100);
     expect(listJson).not.toContain(String(Number.MAX_SAFE_INTEGER));
     // [tool, parameter, minimum], as a client receives them.
