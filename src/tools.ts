@@ -262,7 +262,8 @@ export function normCelex(v: string): string {
 // ── Tool plumbing ─────────────────────────────────────────────────────
 export interface ToolAnnotations {
   readOnlyHint: boolean;
-  destructiveHint?: boolean;
+  /** Always stated, also on read-only tools (false): some hosts require the three hints to be explicit. */
+  destructiveHint: boolean;
   idempotentHint?: boolean;
   openWorldHint: boolean;
 }
@@ -290,7 +291,7 @@ export interface ToolDef {
   handler: (args: any, client: LexAPIClient) => Promise<unknown>;
 }
 
-const READ: ToolAnnotations = { readOnlyHint: true, idempotentHint: true, openWorldHint: true };
+const READ: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
 /**
  * For `.catch()`: a 402 on a call that reserves more credits than it costs
