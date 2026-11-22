@@ -126,7 +126,7 @@ The version and text are established only when `asOfResolved` is `true`; otherwi
 | `LEXAPI_MCP_READ_ONLY` | off | `true` hides every tool that is not read-only (webhook writes, `lex_extract_citations`). |
 | `LEXAPI_TIMEOUT_MS` | `55000` | Deadline per tool call, retries included. Raise it only together with your MCP client's tool timeout. |
 
-`npm run start:http` (or the `Dockerfile`) runs the Streamable HTTP transport (`POST /v1`, `GET /health`, `PORT` default 3000). A self-hosted copy accepts API keys only; sign in with LexAPI is a feature of the hosted server.
+`npm run start:http` (or the `Dockerfile`) runs the Streamable HTTP transport (`POST /v1`, `GET /health`, `PORT` default 3000). With `LEXAPI_MCP_OPENAI_CHALLENGE` set, it also serves that value as plain text at `/.well-known/openai-apps-challenge` (OpenAI domain verification); unset, the path is a 404. A self-hosted copy accepts API keys only; sign in with LexAPI is a feature of the hosted server.
 
 Error messages state what to do (a 402 gives the credits needed and the reset date, a 429 how long to wait). Full API reference: [lex-api.com/docs](https://lex-api.com/docs?ref=npm-mcp).
 
