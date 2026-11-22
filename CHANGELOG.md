@@ -2,6 +2,11 @@
 
 All notable changes to `@lexapi/mcp`. Versions follow [semver](https://semver.org); while the package is 0.x, a minor bump can change behaviour.
 
+## 0.6.1 — unreleased
+
+### Added
+- Hosted server: with `LEXAPI_MCP_OPENAI_CHALLENGE` set, `GET` / `HEAD /.well-known/openai-apps-challenge` returns that value as plain text (OpenAI domain verification); unset or empty, the path is a 404 as before.
+
 ## 0.6.0 — 2026-11-22
 
 Four new tools (37 in all, 32 read-only); none removed or renamed. Released with LexAPI API 3.0.0, which lex-api.com serves from this date: nothing to change on the API side.

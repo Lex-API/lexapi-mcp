@@ -28,6 +28,8 @@ server.listen(port, () => {
   }
   const healthToken = Boolean(process.env.LEXAPI_MCP_HEALTH_TOKEN?.trim());
   console.error(`[lexapi-mcp] /health operator view: ${!healthToken ? 'off (set LEXAPI_MCP_HEALTH_TOKEN to enable)' : o ? 'on (LEXAPI_MCP_HEALTH_TOKEN)' : 'nothing to show (LEXAPI_MCP_HEALTH_TOKEN set, OAuth off)'}`);
+  const challenge = (process.env.LEXAPI_MCP_OPENAI_CHALLENGE ?? '').trim();
+  console.error(`[lexapi-mcp] OpenAI domain verification: ${challenge ? `on (GET /.well-known/openai-apps-challenge, ${challenge.length} characters)` : 'off (LEXAPI_MCP_OPENAI_CHALLENGE not set)'}`);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
