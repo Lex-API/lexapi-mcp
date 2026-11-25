@@ -22,9 +22,10 @@ function happy(c: Call) {
   }
   if (p.startsWith('/citations/cited-by/')) {
     return { body: { success: true, citedBy: [
-      { celex: '32010L0001', types: ['amendment'], title: 'old' },
-      { celex: '32024L0002', types: ['amendment'], title: 'new' },
-      { celex: '32019L1152R(01)', types: ['corrigendum'] },
+      // The API's shape: one group per citing document, its edges under citations.
+      { celexNumber: '32010L0001', title: 'old', citations: [{ citationType: 'amendment' }] },
+      { celexNumber: '32024L0002', title: 'new', citations: [{ citationType: 'amendment' }] },
+      { celexNumber: '32019L1152R(01)', citations: [{ citationType: 'corrigendum' }] },
     ], relationSync: { status: 'refreshed' } } };
   }
   if (p === '/si/legislation/semantic') {

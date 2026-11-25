@@ -6,7 +6,7 @@
 // with its reason, and nothing is assessed. Which acts and searches make up a
 // topic is the only thing this file decides (TOPICS).
 
-import { compact, isObj, shapeNationalLegislationHit, truncate } from './shape.js';
+import { compact, isObj, shapeCitedBy, shapeNationalLegislationHit, truncate } from './shape.js';
 import { Calls, shown, type Failure } from './workflows.js';
 
 import type { LexAPIClient } from './client.js';
@@ -189,8 +189,9 @@ export async function complianceChecklist(a: ChecklistArgs, client: LexAPIClient
       const r = await calls.runList('citedBy', (c) => c.citedBy(act.celex, { citationType: ['amendment', 'repeal', 'corrigendum'], limit: 100 }));
       if (r.failure) { Object.assign(src.report, r.notRun ? { status: 'not_run', reason: r.failure.reason, error: r.failure.error } : { status: 'failed', ...shown(r.failure) }); return; }
       const b = r.res.body;
-      const edges = (b.citedBy as unknown[]).filter(isObj).map((e) => ({
-        celex: e.celex ?? e.celexNumber,
+      // Shaped as lex_cited_by shapes them: one group per citing document, its edge types in types.
+      const edges = (shapeCitedBy(r.res).citedBy as Obj[]).map((e) => ({
+        celex: e.celex,
         title: typeof e.title === 'string' ? truncate(e.title, 240) : undefined,
         types: e.types,
       })).filter((e) => typeof e.celex === 'string');
