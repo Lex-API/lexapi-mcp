@@ -35,7 +35,7 @@ export type FailureReason =
   | 'search_incomplete' | 'timeout' | 'upstream_error' | 'network' | 'rejected'
   | 'not_live' | 'not_listed' | 'unconfirmed_not_found' | 'unreadable_response' | 'different_document';
 
-interface Failure {
+export interface Failure {
   reason: FailureReason;
   error: string;
   retryAfterSeconds?: number;
@@ -104,7 +104,7 @@ function failureOf(err: unknown): Failure {
 }
 
 /** The part of a failure shown in a result. */
-function shown(f: Failure): Obj {
+export function shown(f: Failure): Obj {
   return compact({ reason: f.reason, error: f.error, retryAfterSeconds: f.retryAfterSeconds });
 }
 
@@ -114,7 +114,7 @@ const MIN_CALL_MS = 3000;
 
 type Outcome = { res: LexResponse<Json>; failure?: undefined } | { res?: undefined; failure: Failure; notRun?: boolean };
 
-class Calls {
+export class Calls {
   private readonly end: number;
   /** Set once the credit pool or the rate limit is exhausted, a payment is past due, or a redirect was not followed. */
   stopped?: Failure;

@@ -64,6 +64,10 @@ const EXPECTED: Record<string, Expected> = {
     // One jurisdiction runs both kinds of search.
     paramSays: [`each adds up to ${credits(2 * w.semantic_legis)}`],
   },
+  lex_compliance_checklist: {
+    ops: ['citation_transposition', 'citation_cited_by', 'semantic_legis'],
+    says: [`Cost: per EU act ${credits(w.citation_transposition)} for its notified measures and ${credits(w.citation_cited_by)} for its recorded changes, + ${w.semantic_legis} per national search: employment_contract ${5 * (w.citation_transposition + w.citation_cited_by) + 6 * w.semantic_legis}, gdpr ${2 * (w.citation_transposition + w.citation_cited_by) + 6 * w.semantic_legis}, nis2 ${2 * (w.citation_transposition + w.citation_cited_by) + 6 * w.semantic_legis}, +${w.semantic_legis} with focus.`],
+  },
   lex_search: { ops: ['search_keyword'], says: [`Cost: ${credits(w.search_keyword)} per result page`] },
   lex_recent_documents: { ops: ['recent_documents'], says: [`Cost: ${credits(w.recent_documents)} per 10 results of limit (default 20 → ${RECENT_DEFAULT}; clamped to the plan)`, `an unfiltered request is usually answered by one query for ${credits(w.recent_documents)}.`] },
   lex_resolve: { ops: ['resolve'], says: [`Cost: ${credits(w.resolve)}.`] },
@@ -213,6 +217,7 @@ describe('credit costs outside the descriptions match the weights too', () => {
       '`lex_check_citation`': `0–${w.resolve + w.document_fetch} (+ a second read, ${fx.corpusHit}–${w.document_fetch}, when an article is not matched; at most ${CHECK_MAX})`,
       '`lex_act_history`': `${HISTORY_MIN}–${HISTORY_NO_DATES} (+ ${fx.corpusHit}–${w.document_metadata} per date read, up to ${MAX_DATES} dates)`,
       '`lex_research`': `${w.semantic_legis} per search: ${2 * w.semantic_legis} by default, at most ${MAX_SEARCHES * w.semantic_legis}`,
+      '`lex_compliance_checklist`': `${w.citation_transposition + w.citation_cited_by} per EU act + ${w.semantic_legis} per national search: 42–60 by topic`,
       '`lex_semantic_legislation`': `${w.semantic_legis} (+ up to ${w.document_fetch} per version fetch with \`asOf\`)`,
       '`lex_semantic_case_law`': `${w.semantic_case_law} (${w.semantic_case_law_hyde} with \`hyde\`)`,
       '`lex_search`': `${w.search_keyword} per page`,

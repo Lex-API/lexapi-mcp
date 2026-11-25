@@ -3,7 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { DEFAULT_TIMEOUT_MS, LexAPIClient } from './client.js';
 import type { ClientApp, ClientMode } from './clientHeader.js';
 import { describeError } from './errors.js';
-import { TOOL_SCOPES, type ToolScope } from './oauth/scope.js';
+import { registerPrompts } from './prompts.js';
+import { SCOPE_READ, TOOL_SCOPES, type ToolScope } from './oauth/scope.js';
 import { inputSchemaOf, selectTools, type ToolDef } from './tools.js';
 import { PACKAGE_VERSION } from './version.js';
 
@@ -45,12 +46,14 @@ export function createLexServer(client: LexAPIClient, opts: CreateServerOptions 
       websiteUrl: 'https://lex-api.com',
     },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, prompts: {} },
       instructions: narrowed(opts.scopes) ? `${SERVER_INSTRUCTIONS}\n\n${NARROWED_INSTRUCTIONS}` : SERVER_INSTRUCTIONS,
     },
   );
 
   for (const tool of selectTools(opts)) registerTool(server, tool, client);
+  // The prompts run on the read tools: a connection without them gets none.
+  if (!opts.scopes || opts.scopes.has(SCOPE_READ)) registerPrompts(server);
   return server;
 }
 

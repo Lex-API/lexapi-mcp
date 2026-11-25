@@ -97,6 +97,7 @@ const SAMPLES: Record<string, Array<Record<string, unknown>>> = {
   ],
   lex_act_history: [{ celexNumber: '32016R0679', dates: true }],
   lex_research: [{ query: 'data protection', jurisdictions: ['eu', 'at'] }],
+  lex_compliance_checklist: [{ topic: 'gdpr', jurisdiction: 'at' }],
   lex_search: [{ query: 'data protection' }],
   lex_recent_documents: [{}],
   lex_resolve: [{ identifier: 'ECLI:EU:C:2014:317' }],

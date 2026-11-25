@@ -478,8 +478,8 @@ describe('lex_legislation_as_of: scope, read-only mode and texts', () => {
     expect(tool.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true, openWorldHint: true });
     expect(names(undefined, true)).toContain(NAME);
     expect(names('lex:read', true)).toContain(NAME);
-    expect(tools).toHaveLength(37);
-    expect(names(undefined, true)).toHaveLength(32);
+    expect(tools).toHaveLength(38);
+    expect(names(undefined, true)).toHaveLength(33);
   });
 
   it('the description says what the answer is and is not', () => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ENDPOINT_NOT_AVAILABLE, isUnknownEndpoint, LexAPIError } from './errors.js';
 import { SCOPE_READ, SCOPE_WEBHOOKS, type ToolScope } from './oauth/scope.js';
 import { webhookUrlProblem } from './webhookUrl.js';
+import { complianceChecklist, TOPIC_NAMES } from './compliance.js';
 import { actHistory, checkCitation, isNationalId, NATIONAL_ID_RE, research } from './workflows.js';
 
 import type { Json, LexAPIClient, LexResponse } from './client.js';
@@ -458,6 +459,22 @@ export const tools: ToolDef[] = [
     },
     annotations: { ...READ, idempotentHint: false },
     handler: (a, client) => research(a, client),
+  },
+
+  {
+    name: 'lex_compliance_checklist',
+    scope: SCOPE_READ,
+    title: 'Sources for a compliance topic in one country',
+    description:
+      'The sources a review of one compliance topic in one live country reads, in one call: the EU acts the topic rests on (topic employment_contract, gdpr or nis2), the measures the country notified to the Commission for each (a notification is not a finding of transposition), the amending, repealing and correcting acts recorded for each, and the country\'s legislation provisions matching the topic, with article text and attribution (keep it with republished content, Terms). The acts and searches are a fixed selection per topic, not exhaustive; it assesses nothing. sources names every call as ok, failed or not_run with its reason. Cost: per EU act 5 credits for its notified measures and 1 credit for its recorded changes, + 5 per national search: employment_contract 60, gdpr 42, nis2 42, +5 with focus. National searches count against the national-law allowance; notified-measure ids are shown on BUSINESS+.',
+    inputSchema: {
+      topic: z.enum(TOPIC_NAMES).describe('employment_contract: employment contracts and working conditions; gdpr: personal-data protection; nis2: cybersecurity obligations.'),
+      jurisdiction: z.string().regex(/^[A-Za-z]{2}$/).describe('Two-letter code of a live country, e.g. "si" (lex_national_coverage lists them).'),
+      focus: z.string().trim().min(3).max(500).optional().describe('An extra national search for a point the fixed searches may miss, e.g. "work from home allowance" (5 credits).'),
+      amendments: z.number().int().min(0).max(20).default(5).describe('Recorded amending acts shown per EU act, newest first.'),
+    },
+    annotations: { ...READ, idempotentHint: false },
+    handler: (a, client) => complianceChecklist(a, client),
   },
 
   // ── Search ──────────────────────────────────────────────────────────

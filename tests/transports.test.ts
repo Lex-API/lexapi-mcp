@@ -117,7 +117,8 @@ describe('MCP protocol (in-memory)', () => {
     // read-only tools (24 characters each): measured 68.60k; limit 69.1k.
     // lex_test_webhook says its request cannot be recalled and the secret
     // argument of lex_create_webhook says to leave it out: measured 68.74k.
-    expect(listJson.length).toBeLessThan(69_100);
+    // lex_compliance_checklist (#412 prototype) adds ~2.0k: limit 71.1k.
+    expect(listJson.length).toBeLessThan(71_100);
     expect(listJson).not.toContain(String(Number.MAX_SAFE_INTEGER));
     // [tool, parameter, minimum], as a client receives them.
     const whole: Array<[string, string, number]> = [
@@ -146,7 +147,7 @@ describe('MCP protocol (in-memory)', () => {
     await roServer.connect(ra);
     const roClient = new Client({ name: 'test', version: '1.0.0' });
     await roClient.connect(rb);
-    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(61_800);
+    expect(JSON.stringify((await roClient.listTools()).tools).length).toBeLessThan(63_800); // +lex_compliance_checklist (#412)
     expect(listJson).not.toContain('"ga","hr","hu"'); // the 24-language enum is not repeated
     // N11: instructions cover reading a known article on a past date.
     expect(client.getInstructions()).toMatch(/consolidated version for a date/);

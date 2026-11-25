@@ -80,6 +80,7 @@ Five tools write (`lex_extract_citations`, which adds to LexAPI's shared citatio
 |---|---|---|
 | `lex_check_citation` | Look a citation up: whether the document exists, its title and link, an article, and whether the act is in force today. | 0–6 (+ a second read, 1–5, when an article is not matched; at most 11) |
 | `lex_act_history` | The acts that amend, correct or repeal an EU act, with its in-force status today. | 2–6 (+ 1–5 per date read, up to 10 dates) |
+| `lex_compliance_checklist` | The sources for a compliance topic (employment contracts, GDPR, NIS2) in one live country: EU acts, notified national measures, recorded amendments, matching national provisions. | 6 per EU act + 5 per national search: 42–60 by topic |
 | `lex_research` | One query over EU legislation, EU case law and the national law of chosen live countries. | 5 per search: 10 by default, at most 80 |
 | `lex_semantic_legislation` | Find legislation articles by meaning; `asOf` gives each hit the version listed for a date. | 5 (+ up to 5 per version fetch with `asOf`) |
 | `lex_semantic_case_law` | Find judgments, orders and AG opinions by meaning. | 5 (15 with `hyde`) |
